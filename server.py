@@ -104,17 +104,25 @@ class HsxHandler(BaseHTTPRequestHandler):
 
     def _serve_frontend(self) -> None:
         request_path = self.path.split("?", 1)[0]
-        relative_path = request_path.removeprefix("/web/")
-        if request_path.strip("/") == "":
-            relative_path = "index.html"
-        asset = (ROOT / "web" / relative_path).resolve()
+        cleaned_path = request_path.removeprefix("/web/").removeprefix("/web").lstrip("/")
+        if not cleaned_path:
+            cleaned_path = "index.html"
+        asset = (ROOT / "web" / cleaned_path).resolve()
         if ROOT / "web" not in asset.parents or not asset.is_file():
             self._json({"error": "Not found."}, 404)
             return
         page = asset.read_bytes()
-        content_type = {".css": "text/css", ".js": "text/javascript", ".html": "text/html"}.get(asset.suffix, "application/octet-stream")
+        content_type = {
+            ".css": "text/css",
+            ".js": "text/javascript",
+            ".html": "text/html",
+            ".svg": "image/svg+xml",
+            ".json": "application/json",
+            ".png": "image/png",
+            ".ico": "image/x-icon",
+        }.get(asset.suffix.lower(), "application/octet-stream")
         self.send_response(200)
-        self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+        self.send_header("Content-Type", f"{content_type}; charset=utf-8" if "text" in content_type or "javascript" in content_type else content_type)
         self.send_header("Content-Length", str(len(page)))
         self.end_headers()
         self.wfile.write(page)
