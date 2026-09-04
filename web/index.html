@@ -3,76 +3,122 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f7f6f2">
-  <title>DocAgent RAG</title>
-  <link rel="icon" type="image/svg+xml" href="/web/favicon.svg">
+  <meta name="theme-color" content="#f6f8fc">
+  <title>Hsx</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/web/styles.css">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <svg class="icon-sprite" aria-hidden="true">
-    <symbol id="icon-doc" viewBox="0 0 24 24"><path d="M6.5 3.5h8l3 3v14h-11z"/><path d="M14.5 3.5v4h3M9.5 11h5M9.5 14.5h5M9.5 18h3"/></symbol>
-    <symbol id="icon-spark" viewBox="0 0 24 24"><path d="m17 3 1.3 3.7L22 8l-3.7 1.3L17 13l-1.3-3.7L12 8l3.7-1.3zM7 11l.8 2.2L10 14l-2.2.8L7 17l-.8-2.2L4 14l2.2-.8z"/></symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="icon-moon" viewBox="0 0 24 24"><path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8.5 8.5 0 1 0 10 10z"/></symbol>
     <symbol id="icon-panel" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M10 4v16M14 10l-2 2 2 2"/></symbol>
-    <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="icon-mic" viewBox="0 0 24 24"><rect x="9" y="4" width="6" height="11" rx="3"/><path d="M6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v3M9 20h6"/></symbol>
     <symbol id="icon-send" viewBox="0 0 24 24"><path d="m4 5 16 7-16 7 3-7zM7 12h13"/></symbol>
   </svg>
-  <div class="app-shell">
-    <aside class="sidebar" aria-label="Workspace navigation">
-      <div class="brand"><span class="brand-mark"><svg><use href="#icon-doc"/></svg></span><span>DocAgent RAG</span></div>
-      <div class="rail-actions"><button class="rail-icon" id="theme-button" aria-label="Toggle theme"><svg><use href="#icon-moon"/></svg></button><button class="rail-icon" id="collapse-button" aria-label="Collapse sidebar"><svg><use href="#icon-panel"/></svg></button></div>
-      <button class="new-chat" id="new-chat"><span><svg><use href="#icon-plus"/></svg></span> New Chat</button>
+
+  <div class="app-shell" id="app-shell">
+    <!-- Left Navigation Sidebar -->
+    <aside class="sidebar" id="sidebar" aria-label="Workspace navigation">
+      <div class="brand">
+        <span class="brand-mark"><img src="favicon.svg" alt="Hsx" /></span>
+        <span>Hsx</span>
+      </div>
+
+      <div class="rail-actions">
+        <button class="rail-icon" id="theme-button" aria-label="Toggle theme" title="Toggle theme">
+          <svg><use href="#icon-moon"/></svg>
+        </button>
+        <button class="rail-icon" id="collapse-button" aria-label="Close sidebar" title="Close sidebar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="4" width="16" height="16" rx="3.5"/>
+            <line x1="9.5" y1="4" x2="9.5" y2="20"/>
+            <path d="M15.5 10l-2 2 2 2"/>
+          </svg>
+        </button>
+      </div>
+
+      <button class="new-chat" id="new-chat">
+        <span><svg><use href="#icon-plus"/></svg></span> New Chat
+      </button>
+
       <nav class="nav-list" aria-label="Primary">
         <div class="sidebar-label">CHAT HISTORY</div>
       </nav>
+
       <div class="recent-list">
         <button class="recent-item active" data-recent="New Chat">New Chat</button>
       </div>
+
       <div class="sidebar-bottom">
-        <div class="pipeline-status"><span class="pipeline-label">Backend Pipeline:</span><span class="offline"><span></span> Offline</span></div>
+        <div class="pipeline-status">
+          <span class="pipeline-label">Backend Pipeline:</span>
+          <span class="offline" id="pipeline-status"><span></span> Offline</span>
+        </div>
       </div>
     </aside>
 
+    <!-- Main Workspace Content -->
     <main class="main-content">
+      <!-- Full Sidebar Open/Toggle Button when collapsed -->
+      <button class="sidebar-toggle-btn" id="sidebar-toggle-btn" aria-label="Open sidebar" title="Open sidebar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="4" width="16" height="16" rx="3.5"/>
+          <line x1="9.5" y1="4" x2="9.5" y2="20"/>
+          <path d="M13.5 10l2 2-2 2"/>
+        </svg>
+      </button>
+
       <header class="topbar">
         <button class="mobile-menu" id="mobile-menu" aria-label="Open navigation">☰</button>
-        <div class="context-pill"></div>
-        <div class="top-actions"><button class="top-icon" id="memory-button" aria-label="Memory">♧</button><button class="top-icon" id="skills-button-top" aria-label="Skills">✧</button></div>
       </header>
 
       <section class="conversation" aria-live="polite">
         <div class="welcome-block" id="welcome-block">
-          <div class="welcome-mark" aria-hidden="true"><svg class="welcome-doc"><use href="#icon-doc"/></svg><svg class="welcome-spark"><use href="#icon-spark"/></svg></div>
-          <h1 id="greeting-headline">Good morning.</h1>
-          <p id="greeting-subtext">Add a document to get started, or ask me about something you&apos;ve already shared.</p>
+          <div class="welcome-mark" aria-hidden="true">
+            <img src="favicon.svg" alt="Hsx" />
+          </div>
+          <h1 id="greeting-headline">One more thing before you’re done for the day?</h1>
+          <p id="greeting-subtext">Hand it over and I'll get you the answer.</p>
         </div>
+
         <div class="messages" id="messages"></div>
+
         <div class="composer-wrap">
           <form class="composer" id="chat-form">
-            <input id="message-input" name="message" type="text" placeholder="Ask about text, tables, or diagrams..." aria-label="Ask about text, tables, or diagrams" autocomplete="off">
-            <div class="composer-footer"><div class="composer-tools"><button type="button" class="tool-button attach-button" id="attach-button" title="Attach a file"><svg><use href="#icon-plus"/></svg></button><input id="file-input" type="file" hidden><button type="button" class="tool-button" id="skills-button" title="Choose a skill"><svg><use href="#icon-spark"/></svg></button></div><div class="send-area"><button type="button" class="mic-button" aria-label="Voice input"><svg><use href="#icon-mic"/></svg></button><button class="send-button" type="submit" aria-label="Send message"><svg><use href="#icon-send"/></svg></button></div></div>
+            <button type="button" class="tool-button attach-button" id="attach-button" title="Attach a file">
+              <svg><use href="#icon-plus"/></svg>
+            </button>
+            <input id="file-input" type="file" hidden>
+
+            <div class="input-container">
+              <input
+                id="message-input"
+                name="message"
+                type="text"
+                placeholder="Ask about text, tables, or diagrams..."
+                aria-label="Ask about text, tables, or diagrams"
+                autocomplete="off"
+              >
+              <button type="button" class="mic-button" id="mic-button" aria-label="Voice input" title="Voice input">
+                <svg><use href="#icon-mic"/></svg>
+              </button>
+            </div>
+
+            <button class="send-button" type="submit" aria-label="Send message">
+              <svg><use href="#icon-send"/></svg>
+            </button>
           </form>
+
           <div class="composer-note">Made by HS</div>
         </div>
       </section>
-      <section class="projects-view" id="projects-view" hidden>
-        <div class="view-heading"><span class="panel-kicker">YOUR WORK</span><h1>Projects</h1><p>Keep related conversations and artifacts together.</p></div>
-        <div class="project-grid"><button class="project-card" data-project="Writing studio"><span class="project-symbol">W</span><strong>Writing studio</strong><small>Ideas, drafts, and notes</small><span class="project-meta">3 conversations</span></button><button class="project-card" data-project="Launch planning"><span class="project-symbol sage">L</span><strong>Launch planning</strong><small>Q3 narrative and assets</small><span class="project-meta">2 conversations</span></button><button class="project-card project-new"><span class="project-symbol plus">+</span><strong>New project</strong><small>Start with a clean workspace</small></button></div>
-      </section>
     </main>
-
-    <aside class="artifact-panel" id="artifacts" aria-label="Workspace artifacts">
-      <div class="panel-heading"><div><span class="panel-kicker">WORKSPACE</span><h2>Artifacts</h2></div><button class="close-panel" aria-label="Close artifacts panel">×</button></div>
-      <div class="panel-rule"></div>
-      <div id="artifact-list" class="artifact-list"><div class="empty-artifacts"><div class="empty-icon">◇</div><strong>Your work, in one place.</strong><p>Generated files will appear here as you make them.</p></div></div>
-      <div class="zone-note"><span class="zone-icon">◌</span><span><strong>Private workspace</strong><small>Files stay on this device.</small></span></div>
-    </aside>
   </div>
-  <dialog id="memory-dialog" class="memory-dialog"><form method="dialog"><div class="dialog-heading"><div><span class="panel-kicker">PERSONAL CONTEXT</span><h2>Memory</h2></div><button class="close-dialog" value="cancel" aria-label="Close memory">×</button></div><p class="dialog-copy">Small facts Hsx can carry between conversations.</p><ul id="memory-list" class="memory-list"></ul><div class="memory-add"><input id="memory-input" name="fact" placeholder="Add a preference or project fact"><button type="button" id="save-memory">Save</button></div></form></dialog>
-  <script src="/web/app.js"></script>
+
+  <script src="script.js"></script>
 </body>
 </html>
