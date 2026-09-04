@@ -4,7 +4,7 @@ from pathlib import Path
 
 from agent.orchestrator import run_agent
 from agent.skill_loader import load_skills
-from config import MEMORY_DIR, OUTPUTS_DIR
+from config import MEMORY_DIR, OUTPUTS_DIR, UPLOADS_DIR
 
 ROOT = Path(__file__).resolve().parent
 TOOLS, SKILL_MAP = load_skills(str(ROOT / "skills"))
@@ -47,6 +47,26 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif self.path == "/api/outputs":
             files = [{"name": p.name, "path": str(p), "type": p.suffix[1:]} for p in OUTPUTS_DIR.iterdir() if p.is_file()]
             self._json({"files": files})
+        elif self.path == "/api/state":
+            self._json({
+                "skills": [tool["name"] for tool in TOOLS],
+                "memory": read_memory(),
+                "outputs": self._recent_outputs(),
+                "uploads": [{"name": p.name, "type": p.suffix[1:]} for p in UPLOADS_DIR.iterdir() if p.is_file()],
+            })
+        elif self.path.startswith("/api/outputs/"):
+            filename = Path(self.path.removeprefix("/api/outputs/")).name
+            output = (OUTPUTS_DIR / filename).resolve()
+            if OUTPUTS_DIR.resolve() not in output.parents or not output.is_file():
+                self._json({"error": "Artifact not found."}, 404)
+                return
+            data = output.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", f'attachment; filename="{output.name}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
         else:
             self._serve_frontend()
 
@@ -66,6 +86,16 @@ class HsxHandler(BaseHTTPRequestHandler):
                 facts.append(fact)
                 write_memory(facts)
             self._json({"facts": facts})
+        elif self.path == "/api/upload":
+            payload = self._body()
+            filename = Path(str(payload.get("filename", "upload.txt"))).name
+            content = str(payload.get("content", ""))
+            if not content or not filename:
+                self._json({"error": "A file is required."}, 400)
+                return
+            destination = UPLOADS_DIR / filename
+            destination.write_text(content, encoding="utf-8")
+            self._json({"success": True, "name": destination.name, "type": destination.suffix[1:]})
         else:
             self._json({"error": "Not found."}, 404)
 
@@ -73,7 +103,10 @@ class HsxHandler(BaseHTTPRequestHandler):
         return [{"name": p.name, "path": str(p), "type": p.suffix[1:]} for p in OUTPUTS_DIR.iterdir() if p.is_file()]
 
     def _serve_frontend(self) -> None:
-        relative_path = self.path.removeprefix("/web/") or "index.html"
+        request_path = self.path.split("?", 1)[0]
+        relative_path = request_path.removeprefix("/web/")
+        if request_path.strip("/") == "":
+            relative_path = "index.html"
         asset = (ROOT / "web" / relative_path).resolve()
         if ROOT / "web" not in asset.parents or not asset.is_file():
             self._json({"error": "Not found."}, 404)
