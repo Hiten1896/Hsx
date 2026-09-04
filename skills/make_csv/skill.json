@@ -1,0 +1,1 @@
+{"name":"make_csv","description":"Creates a CSV file from headers and rows of data.","input_schema":{"type":"object","properties":{"filename":{"type":"string"},"headers":{"type":"array"},"rows":{"type":"array"}},"required":["filename","headers","rows"]}}

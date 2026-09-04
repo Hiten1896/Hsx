@@ -1,0 +1,8 @@
+anthropic
+python-dotenv
+python-docx
+openpyxl
+matplotlib
+pdfplumber
+reportlab
+python-pptx

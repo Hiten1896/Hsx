@@ -1,0 +1,1 @@
+{"name":"run_code","description":"Executes Python code in a local sandbox and returns stdout, stderr, and errors. Use for calculations, data processing, or testing code.","input_schema":{"type":"object","properties":{"code":{"type":"string"}},"required":["code"]}}

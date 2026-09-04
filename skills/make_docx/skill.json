@@ -1,0 +1,1 @@
+{"name":"make_docx","description":"Creates a Word document from a title and sections with headings and body text.","input_schema":{"type":"object","properties":{"filename":{"type":"string"},"title":{"type":"string"},"sections":{"type":"array"}},"required":["filename","title","sections"]}}

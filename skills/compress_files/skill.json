@@ -1,0 +1,1 @@
+{"name":"compress_files","description":"Bundles finished output files into a ZIP archive.","input_schema":{"type":"object","properties":{"filenames":{"type":"array"},"zip_name":{"type":"string"}},"required":["filenames","zip_name"]}}

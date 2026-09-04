@@ -1,0 +1,1 @@
+{"name":"make_markdown","description":"Creates a polished Markdown file from a title and sections. Use for READMEs, notes, and lightweight docs.","input_schema":{"type":"object","properties":{"filename":{"type":"string"},"title":{"type":"string"},"sections":{"type":"array"}},"required":["filename","title","sections"]}}

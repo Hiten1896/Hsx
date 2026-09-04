@@ -1,0 +1,7 @@
+.env
+outputs/
+scratch/
+uploads/
+memory/*.json
+__pycache__/
+*.pyc
