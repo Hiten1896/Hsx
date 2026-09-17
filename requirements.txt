@@ -6,3 +6,5 @@ matplotlib
 pdfplumber
 reportlab
 python-pptx
+moviepy
+openai-whisper

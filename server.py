@@ -5,6 +5,7 @@ from pathlib import Path
 from agent.orchestrator import run_agent
 from agent.skill_loader import load_skills
 from config import MEMORY_DIR, OUTPUTS_DIR, UPLOADS_DIR
+from video_tools.pipeline import create_video_job, get_video_job, list_video_jobs
 
 ROOT = Path(__file__).resolve().parent
 TOOLS, SKILL_MAP = load_skills(str(ROOT / "skills"))
@@ -47,12 +48,22 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif self.path == "/api/outputs":
             files = [{"name": p.name, "path": str(p), "type": p.suffix[1:]} for p in OUTPUTS_DIR.iterdir() if p.is_file()]
             self._json({"files": files})
+        elif self.path == "/api/video/jobs":
+            self._json({"jobs": list_video_jobs()})
+        elif self.path.startswith("/api/video/jobs/"):
+            job_id = self.path.removeprefix("/api/video/jobs/")
+            job = get_video_job(job_id)
+            if job is None:
+                self._json({"error": "Job not found."}, 404)
+                return
+            self._json({"job": job})
         elif self.path == "/api/state":
             self._json({
                 "skills": [tool["name"] for tool in TOOLS],
                 "memory": read_memory(),
                 "outputs": self._recent_outputs(),
                 "uploads": [{"name": p.name, "type": p.suffix[1:]} for p in UPLOADS_DIR.iterdir() if p.is_file()],
+                "video_jobs": list_video_jobs(),
             })
         elif self.path.startswith("/api/outputs/"):
             filename = Path(self.path.removeprefix("/api/outputs/")).name
@@ -96,6 +107,21 @@ class HsxHandler(BaseHTTPRequestHandler):
             destination = UPLOADS_DIR / filename
             destination.write_text(content, encoding="utf-8")
             self._json({"success": True, "name": destination.name, "type": destination.suffix[1:]})
+        elif self.path == "/api/video/jobs":
+            payload = self._body()
+            project_id = str(payload.get("project_id", "project_video")).strip() or "project_video"
+            prompt = str(payload.get("prompt", "")).strip()
+            source_files = payload.get("source_files", [])
+            if not prompt:
+                self._json({"error": "A prompt is required for a video job."}, 400)
+                return
+            job = create_video_job(
+                project_id=project_id,
+                prompt=prompt,
+                source_files=source_files if isinstance(source_files, list) else [source_files],
+                output_filename=str(payload.get("output_filename", "edited_video.mp4")).strip() or "edited_video.mp4",
+            )
+            self._json({"job": job})
         else:
             self._json({"error": "Not found."}, 404)
 

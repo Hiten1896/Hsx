@@ -1,9 +1,774 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#fcf9f5"><title>Hsx</title><link rel="icon" href="favicon.svg"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@600&display=swap" rel="stylesheet"><link rel="stylesheet" href="styles.css">
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Local AI Media Workspace</title>
+<!-- Fonts: Inter & JetBrains Mono -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<!-- Material Symbols Outlined -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Tailwind Theme Configuration -->
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          "colors": {
+            "surface-container-highest": "#353438",
+            "surface-container-lowest": "#0e0e11",
+            "on-surface-variant": "#c7c4d7",
+            "primary-container": "#8083ff",
+            "primary-fixed": "#e1e0ff",
+            "tertiary-fixed": "#6ffbbe",
+            "inverse-surface": "#e4e1e6",
+            "on-secondary-container": "#00344e",
+            "on-secondary-fixed-variant": "#004c6e",
+            "background": "#131316",
+            "secondary-container": "#00a2e6",
+            "on-surface": "#e4e1e6",
+            "surface-bright": "#39393c",
+            "inverse-on-surface": "#303033",
+            "on-primary-fixed": "#07006c",
+            "surface-dim": "#131316",
+            "on-tertiary": "#003824",
+            "secondary-fixed-dim": "#89ceff",
+            "outline-variant": "#464554",
+            "surface-container": "#1f1f22",
+            "outline": "#908fa0",
+            "surface-tint": "#c0c1ff",
+            "on-tertiary-fixed-variant": "#005236",
+            "error-container": "#93000a",
+            "on-tertiary-container": "#000703",
+            "surface-container-low": "#1b1b1e",
+            "surface": "#131316",
+            "on-secondary-fixed": "#001e2f",
+            "on-error": "#690005",
+            "on-error-container": "#ffdad6",
+            "error": "#ffb4ab",
+            "surface-container-high": "#2a2a2d",
+            "secondary-fixed": "#c9e6ff",
+            "primary": "#c0c1ff",
+            "on-background": "#e4e1e6",
+            "on-secondary": "#00344d",
+            "secondary": "#89ceff",
+            "on-primary": "#1000a9",
+            "inverse-primary": "#494bd6",
+            "on-tertiary-fixed": "#002113",
+            "primary-fixed-dim": "#c0c1ff",
+            "on-primary-container": "#0d0096",
+            "tertiary-fixed-dim": "#4edea3",
+            "surface-variant": "#353438",
+            "tertiary": "#4edea3",
+            "tertiary-container": "#00885d",
+            "on-primary-fixed-variant": "#2f2ebe"
+          },
+          "borderRadius": {
+            "DEFAULT": "0.125rem",
+            "lg": "0.25rem",
+            "xl": "0.5rem",
+            "full": "0.75rem"
+          },
+          "spacing": {
+            "space-sm": "0.25rem",
+            "space-xs": "0.125rem",
+            "space-xl": "1rem",
+            "margin": "0px",
+            "space-md": "0.5rem",
+            "gutter": "1px",
+            "space-lg": "0.75rem"
+          },
+          "fontFamily": {
+            "headline-md": ["Inter"],
+            "code-md": ["JetBrains Mono"],
+            "telemetry-xs": ["JetBrains Mono"],
+            "body-lg": ["Inter"],
+            "body-md": ["Inter"],
+            "timecode": ["JetBrains Mono"],
+            "label-caps": ["Inter"],
+            "code-sm": ["JetBrains Mono"],
+            "body-sm": ["Inter"],
+            "headline-sm": ["Inter"],
+            "headline-lg": ["Inter"]
+          },
+          "fontSize": {
+            "headline-md": ["18px", { "lineHeight": "24px", "letterSpacing": "-0.015em", "fontWeight": "600" }],
+            "code-md": ["13px", { "lineHeight": "18px", "fontWeight": "400" }],
+            "telemetry-xs": ["11px", { "lineHeight": "14px", "letterSpacing": "0.02em", "fontWeight": "500" }],
+            "body-lg": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+            "body-md": ["13px", { "lineHeight": "18px", "fontWeight": "400" }],
+            "timecode": ["12px", { "lineHeight": "16px", "letterSpacing": "0.04em", "fontWeight": "500" }],
+            "label-caps": ["10px", { "lineHeight": "12px", "letterSpacing": "0.08em", "fontWeight": "600" }],
+            "code-sm": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+            "body-sm": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+            "headline-sm": ["15px", { "lineHeight": "20px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+            "headline-lg": ["24px", { "lineHeight": "32px", "letterSpacing": "-0.02em", "fontWeight": "600" }]
+          }
+        }
+      }
+    }
+  </script>
+<style>
+    /* Custom utility overrides & micro-styling */
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #464554;
+      border-radius: 2px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: #908fa0;
+    }
+  </style>
 </head>
-<body><main class="workspace" id="workspace">
-<aside class="sidebar" id="sidebar"><div class="brand"><img src="favicon.svg" alt="Hsx"><strong>Hsx</strong><button id="sidebar-close" aria-label="Close sidebar">‹</button></div><button class="new-chat" id="new-chat">＋ New Chat <kbd>Ctrl K</kbd></button><nav><button class="active">◌ Chats</button><button id="skills-button">✦ Skills</button><button id="memory-button">▦ Memory</button></nav><section class="threads"><label>RECENT CHATS</label><div id="chat-list"></div></section></aside>
-<section class="main"><header><div class="title"><button id="sidebar-open" aria-label="Open sidebar">☰</button><div><label>HSX WORKSPACE</label><h1 id="chat-title">New Chat</h1></div><button id="title-menu" aria-label="Chat actions">⋯</button></div><button id="artifact-open" aria-label="Open artifacts">▣</button></header><section class="conversation" id="conversation"><div class="welcome" id="welcome"><div class="logo"><img src="favicon.svg" alt="Hsx"></div><h2>Start a new chat</h2><p>Ask the local agent to work with your files, create an artifact, or save project context.</p></div></section><footer><form id="chat-form"><button type="button" id="attach" aria-label="Attach file">＋</button><input id="file" type="file" hidden><input id="message" placeholder="Ask the local agent anything..." autocomplete="off"><button type="submit" aria-label="Send">➤</button></form></footer></section>
-<aside class="artifacts" id="artifacts"><div class="artifacts-head"><div><label>ARTIFACTS</label><h2 id="artifact-count">No artifacts</h2></div><button id="artifact-expand" aria-label="Expand artifacts">⤢</button><button id="artifact-close" aria-label="Close artifacts">›</button></div><div class="artifact-body"><div class="empty-artifact" id="empty-artifact">◇<strong>Your work will appear here.</strong><small>Generated files will be listed after the agent creates them.</small></div><label>GENERATED FILES</label><div id="files"><small>No generated files yet.</small></div><label class="memory-label">AGENT MEMORY</label><button class="memory" id="memory">▦ <span>Project memory<small>Click to add context</small></span></button><div id="facts"></div></div><div class="resize" id="resize" role="separator" tabindex="0" aria-label="Resize artifacts"></div></aside></main><div id="modal-root"></div><script src="build/script.js"></script></body></html>
+<body class="bg-[#09090b] text-on-surface font-body-md select-none overflow-hidden h-screen w-screen flex flex-col antialiased">
+<!-- ========================================================================= -->
+<!-- 1. SHARED COMPONENT: TopNavBar (Web Header Execution) -->
+<!-- ========================================================================= -->
+<header class="bg-surface-container-low dark:bg-surface-container-low border-b border-outline-variant dark:border-outline-variant flex justify-between items-center w-full px-3 h-10 shrink-0 z-30">
+<!-- Left Section: Identity & Local Telemetry -->
+<div class="flex items-center gap-3">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]" data-icon="auto_videocam" data-weight="fill">auto_videocam</span>
+<span class="text-headline-sm font-headline-sm font-semibold tracking-tight text-on-surface dark:text-on-surface">Local AI Media Workspace</span>
+<span class="text-telemetry-xs font-telemetry-xs bg-surface-container-high text-on-surface-variant px-1.5 py-0.5 rounded border border-outline-variant">v2.4.1 Local</span>
+</div>
+<div class="h-4 w-[1px] bg-outline-variant"></div>
+<!-- Sync Status Pill -->
+<div class="flex items-center gap-1.5 px-2 py-0.5 bg-surface-container-lowest rounded border border-outline-variant">
+<span class="w-1.5 h-1.5 rounded-full bg-tertiary animate-pulse"></span>
+<span class="text-telemetry-xs font-telemetry-xs text-tertiary">Local Memory: Synced</span>
+</div>
+<!-- GPU Telemetry Readout -->
+<div class="hidden xl:flex items-center gap-1.5 text-telemetry-xs font-telemetry-xs text-on-surface-variant bg-surface-container-lowest px-2 py-0.5 rounded border border-outline-variant">
+<span class="material-symbols-outlined text-[14px] text-secondary" data-icon="memory">memory</span>
+<span>GPU: RTX 4090 · 14.2 GB / 24 GB VRAM</span>
+</div>
+</div>
+<!-- Center Section: Project Switcher -->
+<div class="flex items-center gap-2 px-2.5 py-1 bg-surface-container-lowest rounded border border-outline-variant hover:border-outline transition-colors cursor-pointer">
+<span class="material-symbols-outlined text-on-surface-variant text-[16px]" data-icon="folder_special">folder_special</span>
+<span class="text-code-sm font-code-sm text-on-surface">podcasts/ep42_ai_revolution.prproj</span>
+<span class="w-1.5 h-1.5 rounded-full bg-secondary-container" title="Unsaved changes"></span>
+<span class="material-symbols-outlined text-on-surface-variant text-[14px]" data-icon="unfold_more">unfold_more</span>
+</div>
+<!-- Right Section: Backend Status & Actions -->
+<div class="flex items-center gap-2">
+<!-- Status Badge -->
+<div class="hidden lg:flex items-center gap-1.5 text-telemetry-xs font-telemetry-xs text-on-surface-variant mr-1">
+<span class="text-outline">API:</span>
+<span class="text-tertiary">/api/video/jobs [Connected]</span>
+<span class="px-1.5 py-0.2 bg-surface-container-high rounded text-primary text-[10px] border border-outline-variant">1 Active Task</span>
+</div>
+<!-- Icon Actions -->
+<div class="flex items-center gap-1 text-on-surface-variant">
+<button class="p-1 hover:bg-surface-container-high dark:hover:bg-surface-container-high hover:text-on-surface rounded transition-colors" title="Audio Waveform Telemetry">
+<span class="material-symbols-outlined text-[18px]" data-icon="graphic_eq">graphic_eq</span>
+</button>
+<button class="p-1 hover:bg-surface-container-high dark:hover:bg-surface-container-high hover:text-on-surface rounded transition-colors" title="Workspace Preferences">
+<span class="material-symbols-outlined text-[18px]" data-icon="settings">settings</span>
+</button>
+</div>
+<div class="h-4 w-[1px] bg-outline-variant"></div>
+<!-- Secondary Actions -->
+<button class="px-2.5 py-1 text-label-caps font-label-caps uppercase bg-surface-container hover:bg-surface-container-high text-on-surface rounded border border-outline-variant transition-colors">
+        Export EDL
+      </button>
+<button class="px-2.5 py-1 text-label-caps font-label-caps uppercase bg-surface-container hover:bg-surface-container-high text-on-surface rounded border border-outline-variant transition-colors">
+        Export
+      </button>
+<!-- Primary Action -->
+<button id="render-video-btn" class="flex items-center gap-1.5 px-3 py-1 bg-inverse-primary hover:bg-primary-container text-surface-container-lowest font-semibold rounded text-label-caps font-label-caps uppercase transition-colors shadow-sm active:scale-[0.98]">
+<span class="material-symbols-outlined text-[15px]" data-icon="auto_awesome" data-weight="fill">auto_awesome</span>
+        Render Video
+      </button>
+</div>
+</header>
+<!-- ========================================================================= -->
+<!-- MAIN WORKSTATION CANVAS (Tri-panel layout) -->
+<!-- ========================================================================= -->
+<div class="flex-1 flex overflow-hidden">
+<!-- ======================================================================= -->
+<!-- 2. SHARED COMPONENT: SideNavBar (Left Rail - Assets & Navigation) -->
+<!-- ======================================================================= -->
+<aside class="flex flex-col justify-between h-[calc(100vh-2.5rem)] w-72 border-r border-outline-variant shrink-0 bg-surface dark:bg-surface select-none">
+<!-- Top Section: Header & Tabs -->
+<div class="flex flex-col h-full overflow-hidden">
+<!-- Project Repo Header -->
+<div class="p-3 border-b border-outline-variant flex items-center justify-between">
+<div class="flex items-center gap-2">
+<div class="w-6 h-6 rounded bg-surface-container-highest flex items-center justify-center text-primary text-body-sm font-semibold">
+<span class="material-symbols-outlined text-[16px]" data-icon="dataset">dataset</span>
+</div>
+<div>
+<div class="text-body-sm font-body-sm font-semibold text-on-surface dark:text-on-surface">Project Workspace</div>
+<div class="text-telemetry-xs font-telemetry-xs text-on-surface-variant">Local Runtime v2.4</div>
+</div>
+</div>
+<button class="text-on-surface-variant hover:text-on-surface p-1">
+<span class="material-symbols-outlined text-[16px]" data-icon="tune">tune</span>
+</button>
+</div>
+<!-- Tab Selector Cluster (Assets Active) -->
+<div class="flex items-center border-b border-outline-variant bg-surface-container-low px-1">
+<!-- Assets (Active) -->
+<button class="flex items-center gap-1.5 px-2.5 py-2 border-b-2 border-primary text-on-surface font-label-caps text-label-caps tracking-wider transition-colors">
+<span class="material-symbols-outlined text-[15px] text-primary" data-icon="folder_open">folder_open</span>
+            Assets (8)
+          </button>
+<!-- Outputs -->
+<button class="flex items-center gap-1.5 px-2.5 py-2 border-b-2 border-transparent text-on-surface-variant hover:text-on-surface font-label-caps text-label-caps tracking-wider transition-colors">
+<span class="material-symbols-outlined text-[15px]" data-icon="video_file">video_file</span>
+            Outputs (3)
+          </button>
+<!-- Memory Context -->
+<button class="flex items-center gap-1.5 px-2 py-2 border-b-2 border-transparent text-on-surface-variant hover:text-on-surface font-label-caps text-label-caps tracking-wider transition-colors">
+<span class="material-symbols-outlined text-[15px]" data-icon="dataset">dataset</span>
+            Memory
+          </button>
+<!-- Skills -->
+<button class="flex items-center gap-1.5 px-2 py-2 border-b-2 border-transparent text-on-surface-variant hover:text-on-surface font-label-caps text-label-caps tracking-wider transition-colors">
+<span class="material-symbols-outlined text-[15px]" data-icon="auto_awesome">auto_awesome</span>
+            Skills
+          </button>
+</div>
+<!-- Ingest Media CTA -->
+<div class="p-2 border-b border-outline-variant">
+<button id="ingest-media-btn" class="w-full flex items-center justify-center gap-2 py-1.5 px-3 bg-surface-container hover:bg-surface-container-high border border-outline-variant rounded text-on-surface font-body-sm text-body-sm transition-colors active:bg-surface-container-highest">
+<span class="material-symbols-outlined text-[16px] text-primary" data-icon="add_circle">add_circle</span>
+            Ingest Media
+          </button>
+<input id="media-input" type="file" multiple hidden />
+</div>
+<!-- Asset Search & Filter Filter -->
+<div class="px-2 pt-2 pb-1">
+<div class="relative flex items-center">
+<span class="material-symbols-outlined absolute left-2 text-[14px] text-outline" data-icon="search">search</span>
+<input class="w-full bg-surface-container-lowest text-on-surface text-code-sm font-code-sm pl-7 pr-2 py-1 rounded border border-outline-variant focus:outline-none focus:border-primary" placeholder="Filter bin items..." type="text"/>
+</div>
+</div>
+<!-- Scrollable Asset Tree & Bins -->
+<div id="asset-list" class="flex-1 overflow-y-auto custom-scrollbar px-2 py-1 space-y-1">
+<div class="text-label-caps font-label-caps text-outline uppercase px-1 pt-1">Footage Staging</div>
+<!-- Asset Item 1 (Selected) -->
+<div class="group flex items-center gap-2 p-1.5 rounded bg-surface-container border-l-2 border-primary border-t border-r border-b border-outline-variant cursor-pointer hover:bg-surface-container-high transition-colors">
+<span class="material-symbols-outlined text-[14px] text-outline group-hover:text-on-surface cursor-grab" data-icon="drag_indicator">drag_indicator</span>
+<div class="w-10 h-7 rounded bg-surface-container-highest overflow-hidden relative shrink-0">
+<img class="w-full h-full object-cover" data-alt="Close up high contrast studio frame of a tech podcast host with soft teal and violet key lighting against a matte black background, high-end cinema camera proxy." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBAQa5mVIsv6o8InKw2fXG5ldd6aQEjTMeeGXAWQ5JXCzqBIfL4d2EaXJVRpVEn1UYUIlVQYL5XuspY8pDXe6vSpgWuIcJ015k9ivw-VYFTu-gtoo-bngh8gkRYhcCIbmFGA-aJaK15iOWFOilEQ6IK2IOk9l6FCLU1-a7rSI0ohivmOIWNfPxX2fdvqdv1_pcRIh-ss877sdhNRglA_nUpCXolXdeX3ZFqIbPfymxEQFnDYzJhS-aS_w"/>
+<span class="absolute bottom-0.5 right-0.5 text-[8px] font-mono bg-black/80 text-white px-0.5 rounded">4K</span>
+</div>
+<div class="flex-1 min-w-0">
+<div class="text-body-sm font-body-sm font-medium text-on-surface truncate">raw_interview_cam_a.mp4</div>
+<div class="text-telemetry-xs font-telemetry-xs text-outline flex items-center gap-2">
+<span>00:04:12</span>
+<span>59.94 fps</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-[14px] text-tertiary" data-icon="check_circle" data-weight="fill">check_circle</span>
+</div>
+<!-- Asset Item 2 -->
+<div class="group flex items-center gap-2 p-1.5 rounded bg-surface-container-low hover:bg-surface-container border border-transparent hover:border-outline-variant cursor-pointer transition-colors">
+<span class="material-symbols-outlined text-[14px] text-outline group-hover:text-on-surface cursor-grab" data-icon="drag_indicator">drag_indicator</span>
+<div class="w-10 h-7 rounded bg-surface-container-highest overflow-hidden relative shrink-0">
+<img class="w-full h-full object-cover" data-alt="Cinematic aerial drone footage over neon illuminated night city highways with streaks of light, moody midnight palette, ultra high resolution video asset." src="https://lh3.googleusercontent.com/aida-public/AB6AXuApQFuEAkUta_QELeWyJ7E2gk32TUTpIuDkvysz8DQINAe9FuqRL74R0FiUlth1S96J4u6IH3rYvHWl0TkHMo2Mc6iXd6eC8dWoCQ5_fbqrI-wGOF5ax7Jq3Qi-Jai5zodOgq4MdmreiiGyq9P-zYJ9LLNlnpKmP_63ImPdZhzDZid7h8auLu0rJJtpZOpxtBAwMNxrbDX0zXFbbX6LreH7Y8az2FE4S7jutB2X2IdPcq81NiVHcOba-A"/>
+<span class="absolute bottom-0.5 right-0.5 text-[8px] font-mono bg-black/80 text-white px-0.5 rounded">4K</span>
+</div>
+<div class="flex-1 min-w-0">
+<div class="text-body-sm font-body-sm text-on-surface-variant truncate">broll_tokyo_drone.mov</div>
+<div class="text-telemetry-xs font-telemetry-xs text-outline flex items-center gap-2">
+<span>00:01:28</span>
+<span>29.97 fps</span>
+</div>
+</div>
+</div>
+<!-- Asset Item 3: Audio -->
+<div class="group flex items-center gap-2 p-1.5 rounded bg-surface-container-low hover:bg-surface-container border border-transparent hover:border-outline-variant cursor-pointer transition-colors">
+<span class="material-symbols-outlined text-[14px] text-outline group-hover:text-on-surface cursor-grab" data-icon="drag_indicator">drag_indicator</span>
+<div class="w-10 h-7 rounded bg-surface-container-highest flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-[16px] text-secondary" data-icon="audio_file">audio_file</span>
+</div>
+<div class="flex-1 min-w-0">
+<div class="text-body-sm font-body-sm text-on-surface-variant truncate">ambient_audio_bed.wav</div>
+<div class="text-telemetry-xs font-telemetry-xs text-outline flex items-center gap-2">
+<span>00:03:00</span>
+<span>48 kHz</span>
+</div>
+</div>
+</div>
+<!-- Quick Drop-Zone / Ingestion -->
+<div class="mt-3 p-3 border border-dashed border-outline-variant hover:border-primary rounded text-center cursor-pointer transition-colors bg-surface-container-lowest/40">
+<span class="material-symbols-outlined text-[20px] text-outline" data-icon="cloud_upload">cloud_upload</span>
+<div class="text-body-sm font-body-sm text-on-surface-variant mt-1">Drop video/audio files or browse</div>
+<div class="text-telemetry-xs font-telemetry-xs text-outline">POST /api/upload · Max 4GB</div>
+</div>
+<!-- Saved Edit Plans (EDL History) -->
+<div class="pt-3">
+<div class="text-label-caps font-label-caps text-outline uppercase px-1 mb-1.5 flex items-center justify-between">
+<span>EDL Plans</span>
+<span class="text-primary font-mono text-[9px]">3 SAVED</span>
+</div>
+<div id="memory-list" class="space-y-1"></div>
+</div>
+</div>
+</div>
+<!-- Left Rail Bottom Footer: Secondary Links -->
+<div class="border-t border-outline-variant bg-surface-container-lowest p-2 space-y-1">
+<button class="w-full flex items-center gap-2 px-2 py-1 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded text-body-sm font-body-sm transition-colors">
+<span class="material-symbols-outlined text-[16px]" data-icon="history">history</span>
+          EDL History
+        </button>
+<button class="w-full flex items-center gap-2 px-2 py-1 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded text-body-sm font-body-sm transition-colors">
+<span class="material-symbols-outlined text-[16px]" data-icon="tune">tune</span>
+          Settings
+        </button>
+</div>
+</aside>
+<!-- ======================================================================= -->
+<!-- 3. CENTER CANVAS (Media Player & Multi-Track Timeline) -->
+<!-- ======================================================================= -->
+<main class="flex-1 flex flex-col bg-[#09090b] overflow-hidden min-w-0">
+<!-- Upper Canvas: Viewport Player Screen -->
+<section class="flex-1 flex flex-col border-b border-outline-variant relative bg-black">
+<!-- Player Top Bar HUD -->
+<div class="h-8 bg-surface-container-lowest border-b border-outline-variant flex items-center justify-between px-3 text-telemetry-xs font-telemetry-xs">
+<div class="flex items-center gap-3">
+<span class="text-on-surface font-semibold flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-error"></span>
+              RECORD MONITOR
+            </span>
+<span class="text-outline">|</span>
+<span class="text-on-surface-variant font-timecode text-timecode">00:01:24:18 / 00:03:00:00</span>
+</div>
+<div class="flex items-center gap-4 text-outline">
+<span>59.94 FPS</span>
+<span>COLOR: Rec.709-A</span>
+<span class="text-primary font-mono">ProRes 422 Proxy - 1080p</span>
+<div class="flex items-center gap-1 text-on-surface">
+<span class="material-symbols-outlined text-[14px]" data-icon="aspect_ratio">aspect_ratio</span>
+<span>16:9 [Fit: 64%]</span>
+</div>
+</div>
+</div>
+<!-- Main Video Screen Display -->
+<div class="flex-1 relative flex items-center justify-center bg-[#050507] overflow-hidden">
+<!-- Simulated Video Frame / Media Canvas -->
+<div class="relative w-[720px] h-[405px] bg-surface-container-lowest shadow-2xl border border-outline-variant overflow-hidden group">
+<img class="w-full h-full object-cover" data-alt="A modern cinematic interview setup showing a subject illuminated by subtle indigo rim lighting in an architectural studio setting, crisp high-end film still format with deep shadow details." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDAkgaWmRLK8fuopkGlqBlIPXjqOnvY0S2V8v3rK0feKGGDvmnpOch5_u-SK4hYGcq6TbFJk3YKVM4EHB4_d09djiRE2NAfhbO6u4VUt6zltktyRs9JT5dJ4LytyopHs_J1OjmCwJkoM67Dd46YLvQl3QarClmJeqoBC4VgKRL3ykS0o8hhSp3HIpjCEB632D1u7cydZKc1XCeGWykCcnputL2PpqKPsH11x_TIweKasExgpphaL2LlNQ"/>
+<!-- Safe Title Overlay Guides -->
+<div class="absolute inset-8 border border-white/10 pointer-events-none"></div>
+<div class="absolute inset-16 border border-white/5 pointer-events-none"></div>
+<!-- Active Burn-In AI Caption (Interactive preview) -->
+<div class="absolute bottom-6 inset-x-0 flex justify-center">
+<div class="bg-black/85 backdrop-blur-md px-4 py-1.5 rounded border border-white/15 text-center shadow-lg">
+<span class="text-headline-sm font-headline-sm text-yellow-300 font-bold">local inference</span>
+<span class="text-headline-sm font-headline-sm text-white ml-1.5">speeds up creative workflow editing</span>
+</div>
+</div>
+<!-- Frame Center Reticle -->
+<div class="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20">
+<div class="w-6 h-[1px] bg-white"></div>
+<div class="h-6 w-[1px] bg-white absolute"></div>
+</div>
+<!-- Live Watermark Overlay -->
+<div class="absolute top-3 right-3 px-2 py-0.5 bg-black/60 rounded text-[9px] font-mono text-outline border border-white/10">
+              LOCAL_AI_PREVIEW · PROXY
+            </div>
+</div>
+</div>
+<!-- Player Transport Controls Bar -->
+<div class="h-10 bg-surface-container-low border-t border-outline-variant flex items-center justify-between px-3">
+<!-- Markers and In/Out -->
+<div class="flex items-center gap-1">
+<button class="px-2 py-1 bg-surface-container hover:bg-surface-container-high rounded text-on-surface-variant hover:text-on-surface text-code-sm font-code-sm" title="Mark In Point [I]">
+              Mark In
+            </button>
+<button class="px-2 py-1 bg-surface-container hover:bg-surface-container-high rounded text-on-surface-variant hover:text-on-surface text-code-sm font-code-sm" title="Mark Out Point [O]">
+              Mark Out
+            </button>
+<button class="p-1 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded" title="Add Marker [M]">
+<span class="material-symbols-outlined text-[16px]" data-icon="bookmark_add">bookmark_add</span>
+</button>
+</div>
+<!-- Transport Center Buttons -->
+<div class="flex items-center gap-2">
+<button class="p-1.5 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded" title="Jump to Start">
+<span class="material-symbols-outlined text-[18px]" data-icon="first_page">first_page</span>
+</button>
+<button class="p-1.5 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded" title="Step 1 Frame Back [J / Left Arrow]">
+<span class="material-symbols-outlined text-[18px]" data-icon="skip_previous">skip_previous</span>
+</button>
+<!-- Big Play/Pause -->
+<button class="w-8 h-8 rounded bg-primary text-surface-container-lowest flex items-center justify-center hover:bg-surface-tint active:scale-95 transition-all shadow-md" title="Play/Pause [Space]">
+<span class="material-symbols-outlined text-[20px]" data-icon="play_arrow" data-weight="fill">play_arrow</span>
+</button>
+<button class="p-1.5 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded" title="Step 1 Frame Forward [L / Right Arrow]">
+<span class="material-symbols-outlined text-[18px]" data-icon="skip_next">skip_next</span>
+</button>
+<button class="p-1.5 text-on-surface-variant hover:text-on-surface hover:bg-surface-container rounded" title="Jump to End">
+<span class="material-symbols-outlined text-[18px]" data-icon="last_page">last_page</span>
+</button>
+<button class="p-1.5 text-primary hover:bg-surface-container rounded" title="Loop Playback Active">
+<span class="material-symbols-outlined text-[18px]" data-icon="repeat">repeat</span>
+</button>
+</div>
+<!-- Audio Scrubber & View Modes -->
+<div class="flex items-center gap-3">
+<div class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[16px] text-outline" data-icon="volume_up">volume_up</span>
+<div class="w-20 h-1 bg-surface-container-highest rounded overflow-hidden cursor-pointer">
+<div class="w-3/4 h-full bg-secondary"></div>
+</div>
+<span class="text-telemetry-xs font-telemetry-xs text-outline">-4.2 dB</span>
+</div>
+<div class="h-4 w-[1px] bg-outline-variant"></div>
+<button class="text-on-surface-variant hover:text-on-surface p-1">
+<span class="material-symbols-outlined text-[18px]" data-icon="fullscreen">fullscreen</span>
+</button>
+</div>
+</div>
+</section>
+<!-- Lower Canvas: Multi-Track Timeline & Clip Strip -->
+<section class="h-[280px] bg-surface-container-lowest flex flex-col select-none relative">
+<!-- Timeline Header Toolbar & Tools -->
+<div class="h-8 bg-surface-container border-b border-outline-variant flex items-center justify-between px-3 text-code-sm font-code-sm">
+<div class="flex items-center gap-2">
+<!-- Timeline Tools Selection -->
+<div class="flex items-center bg-surface-container-low rounded border border-outline-variant p-0.5">
+<button class="px-2 py-0.5 bg-surface-container-highest text-on-surface rounded text-telemetry-xs" title="Select Tool (V)">
+<span class="material-symbols-outlined text-[14px]" data-icon="near_me">near_me</span>
+</button>
+<button class="px-2 py-0.5 text-on-surface-variant hover:text-on-surface rounded text-telemetry-xs" title="Razor Cut Tool (C)">
+<span class="material-symbols-outlined text-[14px]" data-icon="content_cut">content_cut</span>
+</button>
+<button class="px-2 py-0.5 text-on-surface-variant hover:text-on-surface rounded text-telemetry-xs" title="Ripple Edit (B)">
+<span class="material-symbols-outlined text-[14px]" data-icon="width">width</span>
+</button>
+<button class="px-2 py-0.5 text-on-surface-variant hover:text-on-surface rounded text-telemetry-xs" title="Slip Tool (Y)">
+<span class="material-symbols-outlined text-[14px]" data-icon="sync_alt">sync_alt</span>
+</button>
+</div>
+<!-- Snapping & Magnetic Modes -->
+<button class="flex items-center gap-1 px-2 py-0.5 text-primary bg-primary/10 rounded border border-primary/30 text-telemetry-xs">
+<span class="material-symbols-outlined text-[13px]" data-icon="magnet">qr_code_2</span>
+              Snap ON
+            </button>
+<span class="text-outline">|</span>
+<!-- Zoom controls -->
+<div class="flex items-center gap-1.5 text-telemetry-xs text-outline">
+<span class="material-symbols-outlined text-[14px]" data-icon="zoom_out">zoom_out</span>
+<div class="w-16 h-1 bg-surface-container-highest rounded">
+<div class="w-1/2 h-full bg-outline"></div>
+</div>
+<span class="material-symbols-outlined text-[14px]" data-icon="zoom_in">zoom_in</span>
+</div>
+</div>
+<!-- Current Playhead Scrubber Value -->
+<div class="flex items-center gap-3">
+<span class="text-outline text-telemetry-xs font-telemetry-xs">PLAYHEAD:</span>
+<span class="font-mono text-tertiary font-bold text-code-sm bg-surface-container-lowest px-2 py-0.5 rounded border border-outline-variant">
+              00:01:24:18
+            </span>
+</div>
+</div>
+<!-- Tracks Container (Scrollable Horizontally and Vertically) -->
+<div class="flex-1 flex overflow-hidden">
+<!-- Track Headers (Left sidebar of timeline) -->
+<div class="w-28 bg-surface-container-low border-r border-outline-variant shrink-0 flex flex-col text-telemetry-xs font-telemetry-xs">
+<!-- Ruler offset space -->
+<div class="h-6 border-b border-outline-variant bg-surface-container-low px-2 flex items-center text-outline">
+              TRACK
+            </div>
+<!-- Video Track V1 Header -->
+<div class="h-16 border-b border-outline-variant p-2 flex flex-col justify-between bg-surface-container-low">
+<div class="flex items-center justify-between">
+<span class="font-bold text-on-surface">V1 Video</span>
+<span class="material-symbols-outlined text-[13px] text-outline cursor-pointer hover:text-on-surface" data-icon="visibility">visibility</span>
+</div>
+<div class="flex items-center gap-1 text-[10px] text-outline">
+<span class="px-1 bg-surface-container-highest rounded cursor-pointer">L</span>
+<span class="px-1 bg-surface-container-highest rounded cursor-pointer">M</span>
+</div>
+</div>
+<!-- Audio Track A1 Header -->
+<div class="h-16 border-b border-outline-variant p-2 flex flex-col justify-between bg-surface-container-low">
+<div class="flex items-center justify-between">
+<span class="font-bold text-secondary">A1 Audio</span>
+<span class="material-symbols-outlined text-[13px] text-outline cursor-pointer hover:text-on-surface" data-icon="volume_up">volume_up</span>
+</div>
+<div class="flex items-center gap-1 text-[10px] text-outline">
+<span class="px-1 bg-surface-container-highest rounded cursor-pointer">M</span>
+<span class="px-1 bg-surface-container-highest rounded cursor-pointer">S</span>
+</div>
+</div>
+<!-- Subtitle Track Header -->
+<div class="h-12 border-b border-outline-variant p-2 flex items-center justify-between bg-surface-container-low">
+<div class="flex items-center gap-1 text-primary">
+<span class="material-symbols-outlined text-[13px]" data-icon="subtitles">subtitles</span>
+<span class="font-bold">Sub AI</span>
+</div>
+<span class="text-[9px] bg-primary/20 text-primary px-1 rounded">AUTO</span>
+</div>
+</div>
+<!-- Interactive Timeline Work Area -->
+<div class="flex-1 overflow-x-auto custom-scrollbar relative bg-[#09090b]">
+<!-- Red Playhead Needle Overlay (Absolute across the tracks) -->
+<div class="absolute top-0 bottom-0 left-[340px] w-[1px] bg-red-500 z-20 pointer-events-none flex flex-col items-center">
+<div class="w-3 h-3 bg-red-500 clip-trapezoid transform -translate-y-1 shadow-md"></div>
+<div class="w-[1px] flex-1 bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]"></div>
+</div>
+<div class="w-[1200px] h-full flex flex-col">
+<!-- Timeline Ruler (00:00 to 03:00) -->
+<div class="h-6 bg-[#09090b] border-b border-outline-variant flex items-end text-[10px] font-mono text-outline select-none">
+<div class="w-[200px] border-r border-outline-variant/60 pl-1 pb-0.5">00:00:00</div>
+<div class="w-[200px] border-r border-outline-variant/60 pl-1 pb-0.5">00:00:30</div>
+<div class="w-[200px] border-r border-outline-variant/60 pl-1 pb-0.5">00:01:00</div>
+<div class="w-[200px] border-r border-outline-variant/60 pl-1 pb-0.5 text-on-surface font-semibold">00:01:30</div>
+<div class="w-[200px] border-r border-outline-variant/60 pl-1 pb-0.5">00:02:00</div>
+<div class="w-[200px] border-r border-outline-variant/60 pl-1 pb-0.5">00:02:30</div>
+<div class="w-[200px] pl-1 pb-0.5">00:03:00</div>
+</div>
+<!-- TRACK 1: Video Clips (V1) -->
+<div class="h-16 border-b border-outline-variant relative bg-surface-container-lowest/30 p-1 flex items-center">
+<!-- Clip 1 -->
+<div class="w-[180px] h-14 bg-indigo-950/70 border border-indigo-500/50 rounded-sm p-1.5 flex flex-col justify-between overflow-hidden shadow-sm relative group cursor-pointer hover:border-indigo-400">
+<div class="text-telemetry-xs font-telemetry-xs text-indigo-200 font-semibold truncate flex items-center justify-between">
+<span>Cam A_Main</span>
+<span class="text-[9px] opacity-75">45s</span>
+</div>
+<div class="text-[9px] text-indigo-300/60 font-mono truncate">00:00:00 - 00:00:45</div>
+</div>
+<!-- Clip 2: B-Roll -->
+<div class="w-[120px] h-14 ml-0.5 bg-emerald-950/70 border border-emerald-500/50 rounded-sm p-1.5 flex flex-col justify-between overflow-hidden relative group cursor-pointer hover:border-emerald-400">
+<div class="text-telemetry-xs font-telemetry-xs text-emerald-200 font-semibold truncate flex items-center justify-between">
+<span>B-Roll Drone</span>
+<span class="text-[9px] opacity-75">25s</span>
+</div>
+<div class="text-[9px] text-emerald-300/60 font-mono truncate">00:00:45 - 00:01:10</div>
+</div>
+<!-- Clip 3: SELECTED CLIP with active Trim Handles -->
+<div class="w-[280px] h-14 ml-0.5 bg-indigo-900/90 border-2 border-primary rounded-sm p-1.5 flex flex-col justify-between overflow-hidden shadow-lg relative cursor-pointer ring-1 ring-primary/40">
+<!-- Left Trim Handle -->
+<div class="absolute left-0 inset-y-0 w-1.5 bg-primary cursor-ew-resize"></div>
+<!-- Right Trim Handle -->
+<div class="absolute right-0 inset-y-0 w-1.5 bg-primary cursor-ew-resize"></div>
+<div class="text-telemetry-xs font-telemetry-xs text-white font-bold truncate flex items-center justify-between pl-1">
+<span class="flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-primary animate-ping"></span>
+                      Cam A_Close.mp4
+                    </span>
+<span class="text-[9px] text-primary-fixed bg-primary/40 px-1 rounded">ACTIVE</span>
+</div>
+<div class="text-[9px] text-primary-fixed-dim font-mono truncate pl-1">00:01:10 - 00:02:20</div>
+</div>
+<!-- Clip 4: End B-Roll -->
+<div class="w-[190px] h-14 ml-0.5 bg-indigo-950/70 border border-indigo-500/50 rounded-sm p-1.5 flex flex-col justify-between overflow-hidden cursor-pointer hover:border-indigo-400">
+<div class="text-telemetry-xs font-telemetry-xs text-indigo-200 font-semibold truncate">Cam A_Wide Outro</div>
+<div class="text-[9px] text-indigo-300/60 font-mono">00:02:20 - 00:03:00</div>
+</div>
+</div>
+<!-- TRACK 2: Rich Waveform Audio Track (A1) -->
+<div class="h-16 border-b border-outline-variant relative bg-surface-container-lowest/50 p-1 flex items-center">
+<div class="w-[771px] h-14 bg-sky-950/40 border border-sky-500/40 rounded-sm relative overflow-hidden flex items-center">
+<!-- Vector Waveform Visualization -->
+<svg class="w-full h-10 opacity-75 text-sky-400" preserveaspectratio="none" viewbox="0 0 800 40">
+<!-- Audio Peaks and Valleys -->
+<path d="M0,20 L10,5 L20,32 L30,8 L40,30 L50,15 L60,25 L70,10 L80,30 L90,18 L100,20 L110,20 L120,20 L130,5 L140,35 L150,8 L160,30 L170,12 L180,28 L190,15 L200,25 L210,18 L220,22 L230,20 L240,20 L250,5 L260,32 L270,8 L280,30 L290,15 L300,25 L310,10 L320,30 L330,18 L340,20 L350,5 L360,35 L370,12 L380,28 L390,15 L400,25 L410,18 L420,22 L430,20 L440,20 L450,20 L460,5 L470,32 L480,8 L490,30 L500,15 L510,25 L520,10 L530,30 L540,18 L550,20 L560,5 L570,35 L580,12 L590,28 L600,15 L610,25 L620,18 L630,22 L640,20 L650,20 L660,20 L670,5 L680,32 L690,8 L700,30 L710,15 L720,25 L730,10 L740,30 L750,18 L760,20 L770,20 L780,20 L790,20 L800,20" fill="currentColor"></path>
+</svg>
+<!-- AI Marked Dead Air Silence Cut Flag -->
+<div class="absolute left-[225px] top-1 bottom-1 w-[38px] bg-red-500/20 border-x border-red-500 flex flex-col items-center justify-center">
+<span class="text-[8px] font-mono text-red-300 font-bold bg-black/80 px-0.5 rounded leading-none">✂ 1.8s</span>
+<span class="text-[7px] text-red-400">Dead Air</span>
+</div>
+<!-- AI Marked Dead Air Silence Cut Flag 2 -->
+<div class="absolute left-[435px] top-1 bottom-1 w-[26px] bg-red-500/20 border-x border-red-500 flex flex-col items-center justify-center">
+<span class="text-[8px] font-mono text-red-300 font-bold bg-black/80 px-0.5 rounded leading-none">✂ 1.2s</span>
+</div>
+</div>
+</div>
+<!-- TRACK 3: Subtitles / Captions (Sub) -->
+<div class="h-12 border-b border-outline-variant relative bg-surface-container-lowest/30 p-1 flex items-center text-[10px]">
+<div class="w-[175px] h-8 bg-surface-container-high border border-outline-variant rounded px-2 flex items-center text-on-surface truncate">
+                  "Welcome back to episode forty-two..."
+                </div>
+<div class="w-[115px] h-8 ml-1 bg-surface-container-high border border-outline-variant rounded px-2 flex items-center text-on-surface truncate">
+                  "Today we cover local AI..."
+                </div>
+<div class="w-[280px] h-8 ml-1 bg-primary/20 border border-primary text-primary-fixed rounded px-2 flex items-center truncate font-medium">
+                  "AI will transform creative workflows with zero latency..."
+                </div>
+<div class="w-[190px] h-8 ml-1 bg-surface-container-high border border-outline-variant rounded px-2 flex items-center text-on-surface truncate">
+                  "Let's look at the benchmarks..."
+                </div>
+</div>
+</div>
+</div>
+</div>
+<!-- Selected Clip Metadata Bar (Footer of Timeline) -->
+<div class="h-7 bg-surface-container-low border-t border-outline-variant px-3 flex items-center justify-between text-telemetry-xs font-telemetry-xs">
+<div class="flex items-center gap-4">
+<span class="text-on-surface font-semibold flex items-center gap-1">
+<span class="material-symbols-outlined text-[13px] text-primary" data-icon="label">label</span>
+              Clip: Cam A_Close.mp4
+            </span>
+<span class="text-outline">In: <span class="text-on-surface font-mono">00:01:10:00</span></span>
+<span class="text-outline">Out: <span class="text-on-surface font-mono">00:02:20:12</span></span>
+<span class="text-outline">Duration: <span class="text-tertiary font-mono">01:10:12</span></span>
+<span class="text-outline">Speed: <span class="text-on-surface font-mono">1.0x</span></span>
+</div>
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-tertiary"></span>
+<span class="text-tertiary">Audio/Video Linked</span>
+<span class="text-outline">|</span>
+<span class="text-on-surface-variant">Codec: Apple ProRes 422</span>
+</div>
+</div>
+</section>
+</main>
+<!-- ======================================================================= -->
+<!-- 4. RIGHT PANEL: AI Assist & Operational Telemetry -->
+<!-- ======================================================================= -->
+<aside class="w-84 border-l border-outline-variant bg-[#0c0c0e] shrink-0 flex flex-col select-none overflow-hidden">
+<!-- Panel Tab Header -->
+<div class="h-10 border-b border-outline-variant bg-surface-container-low px-3 flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px] text-primary" data-icon="smart_toy" data-weight="fill">smart_toy</span>
+<span class="text-headline-sm font-headline-sm font-semibold text-on-surface">AI Skill Copilot</span>
+</div>
+<span class="text-telemetry-xs font-telemetry-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded border border-primary/30">
+          OLLAMA ACTIVE
+        </span>
+</div>
+<div class="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-4">
+<!-- Natural Language Skill Prompt Composer -->
+<div class="space-y-2">
+<label class="text-label-caps font-label-caps uppercase text-outline flex items-center justify-between">
+<span>Skill Prompt Engine</span>
+<span class="text-tertiary font-mono">POST /api/chat</span>
+</label>
+<div class="relative bg-surface-container-lowest border border-outline-variant rounded-md p-2 focus-within:border-primary transition-colors">
+<textarea id="ai-prompt" class="w-full bg-transparent text-body-sm font-body-sm text-on-surface placeholder:text-outline focus:outline-none resize-none" placeholder="E.g., Detect all filler words ('um', 'uh') and trim dead air longer than 800ms..." rows="3"></textarea>
+<div class="flex items-center justify-between pt-1 border-t border-outline-variant/40 mt-1">
+<div class="flex items-center gap-1 text-outline">
+<span class="material-symbols-outlined text-[15px] cursor-pointer hover:text-on-surface" data-icon="mic">mic</span>
+<span class="material-symbols-outlined text-[15px] cursor-pointer hover:text-on-surface" data-icon="attach_file">attach_file</span>
+<span class="text-[10px] font-mono">Whisper v3-Turbo</span>
+</div>
+<button id="run-prompt" class="flex items-center gap-1 px-2.5 py-1 bg-primary text-surface-container-lowest hover:bg-surface-tint rounded text-label-caps font-label-caps uppercase font-semibold transition-all">
+<span>Run</span>
+<span class="material-symbols-outlined text-[13px]" data-icon="send">send</span>
+</button>
+</div>
+</div>
+<!-- Quick Intent Action Chips -->
+<div class="flex flex-wrap gap-1.5 pt-1">
+<button class="px-2 py-1 bg-surface-container hover:bg-surface-container-high rounded text-[11px] font-mono text-on-surface border border-outline-variant transition-colors flex items-center gap-1">
+<span>✂</span> Trim Dead Air
+            </button>
+<button class="px-2 py-1 bg-surface-container hover:bg-surface-container-high rounded text-[11px] font-mono text-on-surface border border-outline-variant transition-colors flex items-center gap-1">
+<span>⚡</span> Highlight Reel
+            </button>
+<button class="px-2 py-1 bg-surface-container hover:bg-surface-container-high rounded text-[11px] font-mono text-on-surface border border-outline-variant transition-colors flex items-center gap-1">
+<span>💬</span> Add Captions
+            </button>
+<button class="px-2 py-1 bg-surface-container hover:bg-surface-container-high rounded text-[11px] font-mono text-on-surface border border-outline-variant transition-colors flex items-center gap-1">
+<span>📄</span> Export SRT
+            </button>
+<button class="px-2 py-1 bg-surface-container hover:bg-surface-container-high rounded text-[11px] font-mono text-on-surface border border-outline-variant transition-colors flex items-center gap-1">
+<span>🔊</span> Enhance Audio
+            </button>
+</div>
+</div>
+<!-- Live AI Reasoning Log (Collapsible Terminal) -->
+<div class="space-y-1.5">
+<div class="flex items-center justify-between text-label-caps font-label-caps uppercase text-outline">
+<span>Execution Chain Telemetry</span>
+<span class="material-symbols-outlined text-[14px] cursor-pointer" data-icon="expand_less">expand_less</span>
+</div>
+<div id="transcript-panel" class="bg-surface-container-low border border-outline-variant rounded p-2.5 font-mono text-[11px] space-y-1.5">
+<div class="flex items-start gap-1.5 text-tertiary">
+<span class="material-symbols-outlined text-[13px] shrink-0 mt-0.5" data-icon="check_circle">check_circle</span>
+<div>
+<span class="font-semibold">[Whisper.cpp]</span> Extracted speech timestamps (142 words found)
+                <span class="text-outline ml-1">0.4s</span>
+</div>
+</div>
+<div class="flex items-start gap-1.5 text-tertiary">
+<span class="material-symbols-outlined text-[13px] shrink-0 mt-0.5" data-icon="check_circle">check_circle</span>
+<div>
+<span class="font-semibold">[SilenceDetector]</span> Flagged 12 silent pauses &gt; 600ms
+                <span class="text-outline ml-1">0.1s</span>
+</div>
+</div>
+<div class="flex items-start gap-1.5 text-tertiary">
+<span class="material-symbols-outlined text-[13px] shrink-0 mt-0.5" data-icon="check_circle">check_circle</span>
+<div>
+<span class="font-semibold">[FFmpeg Skill]</span> Synthesized EDL cutlist JSON
+                <span class="text-outline ml-1">0.2s</span>
+</div>
+</div>
+<div class="flex items-start gap-1.5 text-secondary animate-pulse">
+<span class="material-symbols-outlined text-[13px] shrink-0 mt-0.5" data-icon="pending">pending</span>
+<div>
+<span class="font-semibold">[Rendering Engine]</span> Staging GPU pipeline buffer...
+              </div>
+</div>
+</div>
+</div>
+<!-- Interactive Transcript & Subtitle Sync Drawer -->
+<div class="space-y-2">
+<div class="flex items-center justify-between text-label-caps font-label-caps uppercase text-outline">
+<span>Interactive Transcript</span>
+<span class="text-[10px] text-secondary">Click word to seek</span>
+</div>
+<div class="bg-surface-container-low border border-outline-variant rounded p-2.5 text-body-sm font-body-sm leading-relaxed space-y-2">
+<p>
+<span class="text-outline text-[10px] font-mono cursor-pointer hover:text-primary">[00:01:21]</span>
+<span class="text-on-surface-variant hover:text-white cursor-pointer">So</span>
+<span class="text-on-surface-variant hover:text-white cursor-pointer">when</span>
+<span class="text-on-surface-variant hover:text-white cursor-pointer">you</span>
+<span class="text-on-surface-variant hover:text-white cursor-pointer">run</span>
+<span class="text-outline text-[10px] font-mono cursor-pointer hover:text-primary ml-1">[00:01:23]</span>
+<span class="text-on-surface-variant hover:text-white cursor-pointer">models</span>
+<span class="text-on-surface-variant hover:text-white cursor-pointer">locally,</span>
+<span class="text-primary font-mono text-[10px] cursor-pointer ml-1">[00:01:24]</span>
+<!-- CURRENT PLAYING ACTIVE WORD HIGHLIGHT -->
+<span class="bg-primary text-surface-container-lowest font-semibold px-1 rounded shadow-sm">latency</span>
+<span class="bg-primary text-surface-container-lowest font-semibold px-1 rounded shadow-sm">drops</span>
+<span class="text-outline text-[10px] font-mono cursor-pointer hover:text-primary ml-1">[00:01:26]</span>
+<span class="text-on-surface-variant hover:text-white cursor-pointer">to</span>
+<span class="text-on-surface-variant hover:text-white cursor-pointer">near</span>
+<span class="text-on-surface-variant hover:text-white cursor-pointer">zero.</span>
+</p>
+</div>
+</div>
+<!-- Render Queue Panel & Background Task Manager -->
+<div class="space-y-2 pt-1">
+<div class="flex items-center justify-between text-label-caps font-label-caps uppercase text-outline">
+<span>Local Render Queue</span>
+<span id="job-count" class="text-primary font-mono text-[10px]">0 ACTIVE</span>
+</div>
+<div id="job-list" class="space-y-2"></div>
+</div>
+</div>
+<!-- Right Panel Footer Status -->
+<div class="border-t border-outline-variant bg-surface-container-lowest p-2.5 flex items-center justify-between text-telemetry-xs font-telemetry-xs text-outline">
+<span>VRAM: 14.2 / 24.0 GB</span>
+<span class="flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-tertiary"></span>
+          Daemon v0.9.4
+        </span>
+</div>
+</aside>
+</div>
+<script src="app.js"></script>
+</body></html>

@@ -1,187 +1,228 @@
-const messages = document.querySelector('#messages');
-const welcome = document.querySelector('#welcome-block');
-const form = document.querySelector('#chat-form');
-const input = document.querySelector('#message-input');
-const artifactList = document.querySelector('#artifact-list');
-const shell = document.querySelector('.app-shell');
-const conversation = document.querySelector('.conversation');
-const projects = document.querySelector('#projects-view');
-
-const GREETINGS = {
-  morning: [
-    { headline: 'Good morning.', subtext: "Add a document to get started, or ask me about something you've already shared." },
-    { headline: 'Morning — coffee first, or straight to it?', subtext: "Either way, drop a file in whenever you're ready and I'll dig through it." },
-    { headline: 'Rise and shine.', subtext: "A report, a contract, a slide deck — bring it over and let's see what's in it." },
-    { headline: 'First thing on the list?', subtext: 'Upload something new, or pick up a thread from a document already here.' },
-    { headline: 'Fresh start.', subtext: 'I can pull specifics out of tables, pages, or slides — just point me at a file.' },
-  ],
-  afternoon: [
-    { headline: 'Good afternoon.', subtext: 'Send over a document and ask me anything about it — text, tables, or diagrams.' },
-    { headline: 'Midday check-in — what are we digging into?', subtext: 'Pick up an earlier document or bring a new one.' },
-    { headline: 'Afternoon.', subtext: "Ask me anything about a file you've shared, or hand me a new one to work through." },
-    { headline: 'Back at it?', subtext: "A document, a question — I'll go find the answer in there." },
-    { headline: "Let's make some progress.", subtext: "Drop in a file and tell me what you're trying to figure out." },
-  ],
-  evening: [
-    { headline: 'Good evening.', subtext: 'Something to review before the day wraps up? Send it over.' },
-    { headline: 'Evening.', subtext: 'Upload a document or keep going on one already here — whichever works.' },
-    { headline: 'Winding down, or just getting started?', subtext: "Either way, I'm ready when a file comes in." },
-    { headline: "One more thing before you're done for the day?", subtext: "Hand it over and I'll get you the answer." },
-    { headline: "Evening — what's on your desk?", subtext: 'Bring a document and ask away, tables and diagrams included.' },
-  ],
-  night: [
-    { headline: 'Still up?', subtext: 'No judgment — send over whatever you’re working through.' },
-    { headline: 'Burning the midnight oil.', subtext: "A document, a deadline, or both — I'm here either way." },
-    { headline: 'Late one, huh?', subtext: "Let's knock it out. Drop the file in and ask your question." },
-    { headline: 'Quiet hours, better focus.', subtext: "Share what you're looking at and I'll get straight to it." },
-    { headline: 'Working past midnight?', subtext: "Bring the document — I don't need sleep, so take your time." },
-  ],
+const state = {
+  files: [],
+  jobs: [],
+  facts: [],
 };
 
-function setGreeting() {
-  const hour = new Date().getHours();
-  const period = hour < 4 || hour >= 20 ? 'night' : hour < 12 ? 'morning' : hour < 16 ? 'afternoon' : 'evening';
-  const pool = GREETINGS[period];
-  const storageKey = `docagent_greeting_idx_${period}`;
-  let nextIndex = 0;
-  try {
-    const stored = window.localStorage.getItem(storageKey);
-    const parsed = stored === null ? -1 : parseInt(stored, 10);
-    nextIndex = Number.isFinite(parsed) ? (parsed + 1) % pool.length : 0;
-    window.localStorage.setItem(storageKey, String(nextIndex));
-  } catch { nextIndex = 0; }
-  const pick = pool[nextIndex];
-  document.querySelector('#greeting-headline').textContent = pick.headline;
-  document.querySelector('#greeting-subtext').textContent = pick.subtext;
+const assetList = document.getElementById('asset-list');
+const jobList = document.getElementById('job-list');
+const jobCount = document.getElementById('job-count');
+const transcriptPanel = document.getElementById('transcript-panel');
+const memoryList = document.getElementById('memory-list');
+const mediaInput = document.getElementById('media-input');
+const aiPrompt = document.getElementById('ai-prompt');
+const runPromptBtn = document.getElementById('run-prompt');
+const renderBtn = document.getElementById('render-video-btn');
+const ingestBtn = document.getElementById('ingest-media-btn');
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
-function addMessage(role, text) {
-  welcome.style.display = 'none';
-  const item = document.createElement('div');
-  item.className = `message ${role}`;
-  item.innerHTML = `<div class="message-avatar">${role === 'user' ? 'A' : 'h'}</div><div class="message-body"></div>`;
-  item.querySelector('.message-body').textContent = text;
-  messages.appendChild(item);
-  messages.scrollTop = messages.scrollHeight;
+function setJobStatusText() {
+  const active = state.jobs.filter((job) => job.status && ['queued', 'running'].includes(job.status)).length;
+  if (jobCount) {
+    jobCount.textContent = `${active} ACTIVE`;
+  }
 }
 
-function showArtifacts(files = []) {
-  if (!files.length) {
-    artifactList.innerHTML = '<div class="empty-artifacts"><div class="empty-icon">◇</div><strong>Your work, in one place.</strong><p>Generated files will appear here as you make them.</p></div>';
+function renderAssets() {
+  if (!assetList) return;
+
+  if (!state.files.length) {
+    assetList.innerHTML = `
+      <div class="text-label-caps font-label-caps text-outline uppercase px-1 pt-1">Footage Staging</div>
+      <div class="mt-3 p-3 border border-dashed border-outline-variant rounded text-center bg-surface-container-lowest/40">
+        <span class="material-symbols-outlined text-[20px] text-outline" data-icon="cloud_upload">cloud_upload</span>
+        <div class="text-body-sm font-body-sm text-on-surface-variant mt-1">No media yet</div>
+      </div>
+    `;
     return;
   }
-  artifactList.innerHTML = files.map(file => `<a class="artifact" href="/api/outputs/${encodeURIComponent(file.name)}"><div class="artifact-icon">${file.type.toUpperCase().slice(0, 4)}</div><div><strong>${file.name}</strong><small>Download artifact</small></div><span class="download-icon">↓</span></a>`).join('');
+
+  assetList.innerHTML = `
+    <div class="text-label-caps font-label-caps text-outline uppercase px-1 pt-1">Footage Staging</div>
+    ${state.files.map((file, index) => `
+      <div class="group flex items-center gap-2 p-1.5 rounded ${index === 0 ? 'bg-surface-container border-l-2 border-primary border-t border-r border-b border-outline-variant' : 'bg-surface-container-low hover:bg-surface-container border border-transparent hover:border-outline-variant'} cursor-pointer transition-colors">
+        <span class="material-symbols-outlined text-[14px] text-outline group-hover:text-on-surface cursor-grab" data-icon="drag_indicator">drag_indicator</span>
+        <div class="w-10 h-7 rounded bg-surface-container-highest overflow-hidden relative shrink-0">
+          <span class="material-symbols-outlined text-[16px] text-secondary flex items-center justify-center w-full h-full" data-icon="video_file">video_file</span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="text-body-sm font-body-sm ${index === 0 ? 'text-on-surface' : 'text-on-surface-variant'} truncate">${escapeHtml(file.name)}</div>
+          <div class="text-telemetry-xs font-telemetry-xs text-outline flex items-center gap-2">
+            <span>${escapeHtml(file.type || 'media')}</span>
+          </div>
+        </div>
+      </div>
+    `).join('')}
+  `;
 }
 
-async function loadArtifacts() {
-  const result = await fetch('/api/outputs');
-  const data = await result.json();
-  showArtifacts(data.files);
-}
+function renderJobs() {
+  if (!jobList) return;
 
-async function loadMemory() {
-  const result = await fetch('/api/memory');
-  const data = await result.json();
-  document.querySelector('#memory-list').innerHTML = data.facts.length
-    ? data.facts.map(fact => `<li>${fact}</li>`).join('')
-    : '<li class="memory-empty">No saved context yet.</li>';
-}
-
-function switchView(view) {
-  document.querySelectorAll('.nav-item').forEach(button => button.classList.toggle('active', button.dataset.view === view));
-  if (view === 'projects') {
-    conversation.hidden = true;
-    projects.hidden = false;
-    shell.classList.remove('show-artifacts');
-  } else if (view === 'artifacts') {
-    conversation.hidden = false;
-    projects.hidden = true;
-    shell.classList.add('show-artifacts');
-  } else {
-    conversation.hidden = false;
-    projects.hidden = true;
-    shell.classList.remove('show-artifacts');
-    input.focus();
+  if (!state.jobs.length) {
+    jobList.innerHTML = `
+      <div class="p-2 rounded bg-surface-container-lowest border border-outline-variant flex items-center justify-between text-telemetry-xs font-telemetry-xs">
+        <div class="flex items-center gap-1.5 text-on-surface-variant">
+          <span class="material-symbols-outlined text-[15px] text-outline" data-icon="task_alt">task_alt</span>
+          <span>No render jobs yet</span>
+        </div>
+      </div>
+    `;
+    setJobStatusText();
+    return;
   }
+
+  jobList.innerHTML = state.jobs.map((job) => `
+    <div class="bg-surface-container-low border border-outline-variant rounded p-2.5 space-y-2">
+      <div class="flex items-center justify-between">
+        <div class="text-code-sm font-code-sm font-semibold text-on-surface truncate">${escapeHtml(job.project_id || 'video-job')}</div>
+        <span class="text-[10px] font-mono ${job.status === 'completed' ? 'text-tertiary bg-tertiary/10 border border-tertiary/30' : job.status === 'failed' ? 'text-error bg-error/10 border border-error/30' : 'text-secondary bg-secondary/10 border border-secondary/30'} px-1.5 py-0.5 rounded">
+          ${escapeHtml((job.status || 'queued').toUpperCase())}
+        </span>
+      </div>
+      <div class="flex justify-between text-telemetry-xs font-telemetry-xs text-outline font-mono">
+        <span>${escapeHtml(job.job_id ? `Job ${job.job_id.slice(0, 6)}` : 'Job')}</span>
+        <span>${escapeHtml(job.updated_at ? new Date(job.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'just now')}</span>
+      </div>
+      ${job.result && job.result.output_path ? `<a href="/api/outputs/${encodeURIComponent(job.result.output_path.split('/').pop())}" class="text-secondary hover:underline font-mono text-[10px]">Download output</a>` : ''}
+    </div>
+  `).join('');
+
+  setJobStatusText();
 }
 
-async function sendMessage(event) {
-  event.preventDefault();
-  const text = input.value.trim();
-  if (!text) return;
-  addMessage('user', text);
-  input.value = '';
-  input.style.height = 'auto';
-  const pending = document.createElement('div');
-  pending.className = 'message assistant';
-  pending.innerHTML = '<div class="message-avatar">h</div><div class="message-body">Thinking...</div>';
-  messages.appendChild(pending);
+function renderMemory() {
+  if (!memoryList) return;
+
+  if (!state.facts.length) {
+    memoryList.innerHTML = '<div class="p-2 rounded bg-surface-container-low border border-outline-variant text-on-surface-variant text-telemetry-xs">No saved facts yet.</div>';
+    return;
+  }
+
+  memoryList.innerHTML = state.facts.slice(-3).reverse().map((fact) => `
+    <div class="p-2 rounded bg-surface-container-low border border-outline-variant text-on-surface-variant text-telemetry-xs">${escapeHtml(typeof fact === 'string' ? fact : (fact.summary || JSON.stringify(fact)))}</div>
+  `).join('');
+}
+
+function renderTranscript() {
+  if (!transcriptPanel) return;
+
+  const transcriptJob = state.jobs.find((job) => job.result && job.result.transcript);
+  if (!transcriptJob) {
+    transcriptPanel.innerHTML = `
+      <div class="flex items-start gap-1.5 text-tertiary">
+        <span class="material-symbols-outlined text-[13px] shrink-0 mt-0.5" data-icon="check_circle">check_circle</span>
+        <div><span class="font-semibold">[Local AI]</span> Transcript will appear here once a session is processed.</div>
+      </div>
+    `;
+    return;
+  }
+
+  transcriptPanel.innerHTML = `
+    <div class="flex items-start gap-1.5 text-tertiary">
+      <span class="material-symbols-outlined text-[13px] shrink-0 mt-0.5" data-icon="check_circle">check_circle</span>
+      <div><span class="font-semibold">[Whisper]</span> ${escapeHtml(transcriptJob.result.transcript.slice(0, 180) || 'Transcript generated')}</div>
+    </div>
+  `;
+}
+
+async function refreshState() {
   try {
-    const result = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text }) });
-    const data = await result.json();
-    pending.remove();
-    addMessage('assistant', data.response || data.error || 'Something went wrong.');
-    showArtifacts(data.outputs);
+    const [filesRes, memoryRes, jobsRes] = await Promise.all([
+      fetch('/api/outputs'),
+      fetch('/api/memory'),
+      fetch('/api/video/jobs'),
+    ]);
+
+    const filesData = await filesRes.json();
+    const memoryData = await memoryRes.json();
+    const jobsData = await jobsRes.json();
+
+    state.files = Array.isArray(filesData.files) ? filesData.files : [];
+    state.facts = Array.isArray(memoryData.facts) ? memoryData.facts : [];
+    state.jobs = Array.isArray(jobsData.jobs) ? jobsData.jobs : [];
+
+    renderAssets();
+    renderMemory();
+    renderJobs();
+    renderTranscript();
   } catch (error) {
-    pending.remove();
-    addMessage('assistant', 'I could not reach the local workspace server. Is it running on port 8000?');
+    console.error('Failed to refresh dashboard state', error);
   }
 }
 
-input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); form.requestSubmit(); } });
-form.addEventListener('submit', sendMessage);
-document.querySelector('#new-chat').addEventListener('click', () => { messages.innerHTML = ''; welcome.style.display = ''; input.focus(); });
-document.querySelector('#mobile-menu').addEventListener('click', () => document.querySelector('.sidebar').classList.toggle('open'));
-document.querySelector('#attach-button').addEventListener('click', () => document.querySelector('#file-input').click());
-document.querySelector('#file-input').addEventListener('change', event => {
-  const file = event.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = async () => {
-    const result = await fetch('/api/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: file.name, content: reader.result }) });
-    const data = await result.json();
-    addMessage('assistant', data.success ? `Uploaded ${data.name} to the read-only uploads zone.` : (data.error || 'Upload failed.'));
-  };
-  reader.readAsText(file);
-});
-document.querySelector('#skills-button').addEventListener('click', async () => {
-  const result = await fetch('/api/skills');
-  const data = await result.json();
-  addMessage('assistant', `Available skills: ${data.skills.join(', ')}`);
-});
-document.querySelector('#skills-button-top').addEventListener('click', async () => {
-  const result = await fetch('/api/skills');
-  const data = await result.json();
-  addMessage('assistant', `Available skills: ${data.skills.join(', ')}`);
-});
-document.querySelector('.mic-button').addEventListener('click', () => {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    addMessage('assistant', 'Voice input is not supported in this browser.');
-    return;
+async function uploadMedia(event) {
+  const selected = [...(event.target.files || [])];
+  if (!selected.length) return;
+
+  for (const file of selected) {
+    try {
+      const content = await file.text();
+      await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: file.name, content }),
+      });
+    } catch (err) {
+      console.error('Upload failed', err);
+    }
   }
-  const recognition = new SpeechRecognition();
-  recognition.lang = 'en-US';
-  recognition.onresult = event => { input.value = event.results[0][0].transcript; input.focus(); };
-  recognition.start();
-});
-document.querySelector('#theme-button').addEventListener('click', () => document.body.classList.toggle('dark-mode'));
-document.querySelector('#collapse-button').addEventListener('click', () => document.querySelector('.app-shell').classList.toggle('rail-collapsed'));
-document.querySelector('#memory-button').addEventListener('click', async () => {
-  const dialog = document.querySelector('#memory-dialog');
-  await loadMemory();
-  dialog.showModal();
-});
-document.querySelector('#save-memory').addEventListener('click', async () => {
-  const memoryInput = document.querySelector('#memory-input');
-  if (!memoryInput.value.trim()) return;
-  await fetch('/api/memory', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fact: memoryInput.value.trim() }) });
-  memoryInput.value = '';
-  await loadMemory();
-});
-document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => switchView(button.dataset.view)));
-document.querySelectorAll('[data-recent]').forEach(button => button.addEventListener('click', () => { switchView('chat'); addMessage('assistant', `Opening “${button.dataset.recent}”. Continue the conversation in the composer below.`); }));
-document.querySelectorAll('[data-project]').forEach(button => button.addEventListener('click', () => { switchView('chat'); addMessage('assistant', `Project “${button.dataset.project}” is ready. What should we work on?`); }));
-document.querySelector('.close-panel').addEventListener('click', () => switchView('chat'));
-loadArtifacts();
-setGreeting();
+
+  if (mediaInput) {
+    mediaInput.value = '';
+  }
+  await refreshState();
+}
+
+async function submitPrompt() {
+  if (!aiPrompt || !aiPrompt.value.trim()) return;
+
+  const payload = {
+    project_id: 'project_video',
+    prompt: aiPrompt.value.trim(),
+    source_files: state.files.map((file) => file.name),
+    output_filename: 'edited_video.mp4',
+  };
+
+  try {
+    const response = await fetch('/api/video/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+    if (data && data.job) {
+      aiPrompt.value = '';
+      await refreshState();
+    }
+  } catch (error) {
+    console.error('Could not create a video job', error);
+  }
+}
+
+if (runPromptBtn) {
+  runPromptBtn.addEventListener('click', submitPrompt);
+}
+
+if (renderBtn) {
+  renderBtn.addEventListener('click', submitPrompt);
+}
+
+if (ingestBtn && mediaInput) {
+  ingestBtn.addEventListener('click', () => mediaInput.click());
+}
+
+if (mediaInput) {
+  mediaInput.addEventListener('change', uploadMedia);
+}
+
+refreshState();
