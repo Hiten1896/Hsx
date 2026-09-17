@@ -1,0 +1,15 @@
+{
+  "name": "video_edit",
+  "description": "Applies prompt-driven local video operations like trimming, concatenation, and transcription using FFmpeg, MoviePy, and Whisper when available.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "prompt": { "type": "string" },
+      "source_files": { "type": "array", "items": { "type": "string" } },
+      "output_filename": { "type": "string" },
+      "trim_start": { "type": "number" },
+      "trim_end": { "type": "number" }
+    },
+    "required": ["prompt"]
+  }
+}
