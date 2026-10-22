@@ -3,10 +3,11 @@ from pathlib import Path
 from docx import Document
 
 from config import OUTPUTS_DIR
+from agent.security import safe_path
 
 
 def run(filename: str, title: str, sections: list) -> dict:
-    path = OUTPUTS_DIR / f"{Path(filename).stem}.docx"
+    path = safe_path(OUTPUTS_DIR, f"{Path(filename).stem}.docx")
     document = Document()
     document.add_heading(title, 0)
     for section in sections:

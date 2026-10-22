@@ -1,4 +1,5 @@
 import os
+import ipaddress
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -12,6 +13,32 @@ UPLOADS_DIR = BASE_DIR / "uploads"
 MEMORY_DIR = BASE_DIR / "memory"
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 MODEL = os.getenv("HSX_MODEL", "claude-sonnet-4-6")
+HOST = os.getenv("HSX_HOST", "127.0.0.1").strip() or "127.0.0.1"
+PORT = int(os.getenv("HSX_PORT", "8000"))
+AUTH_TOKEN = os.getenv("HSX_AUTH_TOKEN", "")
+ALLOWED_ORIGINS = tuple(
+    origin.strip()
+    for origin in os.getenv(
+        "HSX_ALLOWED_ORIGINS",
+        "http://127.0.0.1:8000,http://localhost:8000",
+    ).split(",")
+    if origin.strip()
+)
+SANDBOX = os.getenv("HSX_SANDBOX", "auto").strip().lower()
+
+
+def is_loopback_host(host: str) -> bool:
+    """Return whether a configured host is a loopback address or name."""
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+if not is_loopback_host(HOST) and not AUTH_TOKEN:
+    raise RuntimeError("HSX_AUTH_TOKEN is required when HSX_HOST is not loopback.")
 
 for directory in (OUTPUTS_DIR, SCRATCH_DIR, UPLOADS_DIR, MEMORY_DIR):
     directory.mkdir(exist_ok=True)

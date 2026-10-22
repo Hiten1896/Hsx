@@ -1,0 +1,4 @@
+# Test runner.
+pytest
+# Fast Python linting.
+ruff
