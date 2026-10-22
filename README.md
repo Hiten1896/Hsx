@@ -20,6 +20,7 @@ Name: **[Hiten Sharma]**
 - Phase 9: deployment artifacts complete
 - Phase 10: CI and quality automation complete
 - Phase 11: guarded self-improvement proposal pipeline complete
+- Phase 12: free-tier provider configuration in progress
 
 ## Setup
 
@@ -43,7 +44,24 @@ cp .env.example .env
 python main.py
 ```
 
-Open `http://127.0.0.1:8000`. Add `ANTHROPIC_API_KEY` to `.env` for the full LLM loop. Without a key, the workspace still runs with a small local fallback and the skills remain available for testing.
+Open `http://127.0.0.1:8000`. You do not need Anthropic: configure any available provider key in `.env` and order providers with `HSX_PROVIDER` and `HSX_FALLBACKS`. Gemini, Groq, OpenRouter free models, OpenAI-compatible endpoints, and local Ollama are supported. Without a configured provider, the workspace remains usable for local testing.
+
+### Free-tier provider setup
+
+Copy the key slots from `.env.example` into `.env` and fill only the providers you use:
+
+```dotenv
+HSX_PROVIDER=gemini
+HSX_FALLBACKS=groq,openrouter,ollama
+GEMINI_API_KEY=your_gemini_key
+GEMINI_MODEL=gemini-2.0-flash
+GROQ_API_KEY=your_groq_key
+GROQ_MODEL=llama-3.1-8b-instant
+OPENROUTER_API_KEY=your_openrouter_key
+OPENROUTER_MODEL=google/gemini-2.0-flash-exp:free
+```
+
+Keys are read only from `.env` and are never committed. Free-tier quotas, model names, and availability are controlled by each provider and can change; fallback order lets Hsx continue with the next configured provider.
 
 ## Security model
 

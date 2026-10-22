@@ -92,3 +92,32 @@ class OllamaProvider(JSONHTTPProvider):
         message = data.get("message", {})
         yield LLMEvent(type="text_delta", text=message.get("content", ""))
         yield LLMEvent(type="stop", stop_reason="stop")
+
+
+class OpenAICompatibleProvider(JSONHTTPProvider):
+    """Adapter for Groq, OpenRouter, and other chat-completions-compatible APIs."""
+
+    def __init__(self, name: str, api_key: str, model: str, endpoint: str):
+        super().__init__(model, endpoint, api_key)
+        self.name = name
+
+    def generate(self, request: LLMRequest) -> EventStream:
+        messages = ([{"role": "system", "content": request.system}] if request.system else []) + request.messages
+        data = self._post({"model": self.model, "messages": messages, "tools": request.tools})
+        choice = data.get("choices", [{}])[0]
+        message = choice.get("message", {})
+        content = message.get("content") or ""
+        if content:
+            yield LLMEvent(type="text_delta", text=content)
+        for tool_call in message.get("tool_calls", []):
+            function = tool_call.get("function", {})
+            try:
+                tool_input = json.loads(function.get("arguments", "{}"))
+            except json.JSONDecodeError as error:
+                raise ProviderError(f"{self.name} returned invalid tool arguments: {error}") from error
+            yield LLMEvent(
+                type="tool_call",
+                tool_name=function.get("name", ""),
+                tool_input=tool_input,
+            )
+        yield LLMEvent(type="stop", stop_reason=choice.get("finish_reason", "stop"))
