@@ -1,8 +1,7 @@
-import os
-
-from server import HsxHandler, TOOLS
 from http.server import ThreadingHTTPServer
+
 from config import HOST, PORT
+from server import TOOLS, HsxHandler
 
 
 if __name__ == "__main__":
