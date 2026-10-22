@@ -1,5 +1,5 @@
-import os
 import ipaddress
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -24,6 +24,7 @@ FALLBACKS = tuple(
 )
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+MODE = os.getenv("HSX_MODE", "jarvis").strip().lower()
 HOST = os.getenv("HSX_HOST", "127.0.0.1").strip() or "127.0.0.1"
 PORT = int(os.getenv("HSX_PORT", "8000"))
 AUTH_TOKEN = os.getenv("HSX_AUTH_TOKEN", "")

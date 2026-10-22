@@ -14,6 +14,7 @@ const aiPrompt = document.getElementById('ai-prompt');
 const runPromptBtn = document.getElementById('run-prompt');
 const renderBtn = document.getElementById('render-video-btn');
 const ingestBtn = document.getElementById('ingest-media-btn');
+let speechMuted = false;
 
 function escapeHtml(value) {
   return String(value)
@@ -204,6 +205,27 @@ async function submitPrompt() {
       aiPrompt.value = '';
       await refreshState();
     }
+
+    function addVoiceControls() {
+      if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) return;
+      const controls = document.createElement('div');
+      controls.className = 'fixed bottom-3 right-3 z-40 flex gap-2';
+      controls.innerHTML = '<button id="voice-talk" class="px-3 py-2 rounded bg-primary text-on-primary text-xs">Push to talk</button><button id="voice-mute" class="px-3 py-2 rounded bg-surface-container text-xs">Mute</button>';
+      document.body.appendChild(controls);
+      const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const recognition = new Recognition();
+      recognition.lang = 'en-US';
+      recognition.onresult = (event) => {
+        const text = event.results[0][0].transcript;
+        if (aiPrompt) aiPrompt.value = text;
+        submitPrompt();
+      };
+      document.getElementById('voice-talk').addEventListener('click', () => recognition.start());
+      document.getElementById('voice-mute').addEventListener('click', (event) => {
+        speechMuted = !speechMuted;
+        event.currentTarget.textContent = speechMuted ? 'Unmute' : 'Mute';
+      });
+    }
   } catch (error) {
     console.error('Could not create a video job', error);
   }
@@ -226,3 +248,4 @@ if (mediaInput) {
 }
 
 refreshState();
+addVoiceControls();

@@ -14,6 +14,7 @@ from config import (
     AUTH_TOKEN,
     JOBS_DB,
     MEMORY_DB,
+    MODE,
     OUTPUTS_DIR,
     UPLOADS_DIR,
 )
@@ -71,6 +72,8 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"skills": [tool["name"] for tool in TOOLS]})
         elif path == "/api/policy/status":
             self._json({"stopped": POLICY.is_stopped()})
+        elif path == "/api/mode":
+            self._json({"mode": MODE})
         elif path == "/api/jobs":
             self._json({"jobs": JOBS.list()})
         elif path.startswith("/api/jobs/"):
@@ -136,6 +139,14 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif path == "/api/resume":
             POLICY.reset_stop()
             self._json({"success": True, "stopped": False})
+        elif path == "/api/mode":
+            global MODE
+            selected = str(self._body().get("mode", "")).strip().lower()
+            if selected not in {"jarvis", "friday", "autopilot"}:
+                self._json({"error": "Mode must be jarvis, friday, or autopilot."}, 400)
+                return
+            MODE = selected
+            self._json({"mode": MODE})
         elif path == "/api/jobs":
             payload = self._body()
             try:

@@ -15,6 +15,7 @@ Name: **[Full name to be added]**
 - Phase 4: policy engine and advisory consent flow complete
 - Phase 5: persistent resumable job queue complete
 - Phase 6: safe local skill expansion in progress
+- Phase 7: persona modes, browser voice, and Telegram allowlist complete
 
 ## Setup
 
