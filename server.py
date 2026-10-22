@@ -109,6 +109,23 @@ class HsxHandler(BaseHTTPRequestHandler):
                 return
             response, _ = run_agent(message, HISTORY, TOOLS, SKILL_MAP)
             self._json({"response": response, "outputs": self._recent_outputs()})
+        elif path == "/api/chat/stream":
+            payload = self._body()
+            message = str(payload.get("message", "")).strip()
+            if not message:
+                self._json({"error": "Message is required."}, 400)
+                return
+            response, _ = run_agent(message, HISTORY, TOOLS, SKILL_MAP)
+            events = (
+                f"event: text_delta\ndata: {json.dumps({'text': response})}\n\n"
+                "event: done\ndata: {}\n\n"
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", str(len(events)))
+            self.end_headers()
+            self.wfile.write(events)
         elif path == "/api/memory":
             payload = self._body()
             try:
