@@ -2,7 +2,18 @@
 
 Hsx is a local-first creative workspace for an AI agent. It combines an auto-discovered skill architecture with a Claude-inspired chat interface, clear file zones, persistent memory, and an explicit artifact handoff.
 
-## Run it
+## Author
+
+GitHub: [@Hiten1896](https://github.com/Hiten1896)
+Name: **[Full name to be added]**
+
+## Status
+
+- Phase 1: security and hygiene complete
+
+## Setup
+
+### Windows
 
 ```powershell
 python -m venv .venv
@@ -12,7 +23,24 @@ Copy-Item .env.example .env
 python main.py
 ```
 
+### Linux
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+python main.py
+```
+
 Open `http://127.0.0.1:8000`. Add `ANTHROPIC_API_KEY` to `.env` for the full LLM loop. Without a key, the workspace still runs with a small local fallback and the skills remain available for testing.
+
+## Security model
+
+- API responses use a CORS allowlist, defaulting to the local web UI origins.
+- A bearer token is required whenever the server binds to a non-loopback host.
+- `run_code` uses Docker first with no network, resource limits, a read-only root, and a temporary writable area. If Docker is unavailable, it uses a weaker subprocess fallback with a scrubbed environment and time/resource limits.
+- File-writing skills use a path jail so resolved paths remain inside their declared workspace directories; traversal and symlink escapes are rejected.
 
 ## Architecture
 

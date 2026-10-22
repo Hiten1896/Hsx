@@ -1,0 +1,11 @@
+# Anthropic client for the default LLM provider.
+anthropic
+# Environment configuration.
+python-dotenv
+# Document and spreadsheet skills.
+python-docx
+openpyxl
+# PDF and presentation skills.
+pdfplumber
+reportlab
+python-pptx

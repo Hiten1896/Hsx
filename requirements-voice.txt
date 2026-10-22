@@ -1,0 +1,2 @@
+# Optional local speech-to-text support; installs PyTorch transitively.
+openai-whisper

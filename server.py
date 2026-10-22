@@ -1,10 +1,12 @@
 import json
+import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from agent.orchestrator import run_agent
 from agent.skill_loader import load_skills
-from config import MEMORY_DIR, OUTPUTS_DIR, UPLOADS_DIR
+from config import ALLOWED_ORIGINS, AUTH_TOKEN, MEMORY_DIR, OUTPUTS_DIR, UPLOADS_DIR
 from video_tools.pipeline import create_video_job, get_video_job, list_video_jobs
 
 ROOT = Path(__file__).resolve().parent
@@ -27,12 +29,33 @@ def write_memory(facts: list) -> None:
 
 
 class HsxHandler(BaseHTTPRequestHandler):
+    def _request_path(self) -> str:
+        return urlsplit(self.path).path
+
+    def _api_access_allowed(self) -> bool:
+        origin = self.headers.get("Origin")
+        if origin and origin not in ALLOWED_ORIGINS:
+            self._json({"error": "Origin is not allowed."}, 403)
+            return False
+        if AUTH_TOKEN:
+            supplied = self.headers.get("Authorization", "")
+            expected = f"Bearer {AUTH_TOKEN}"
+            if not hmac.compare_digest(supplied, expected):
+                self._json({"error": "Authentication required."}, 401)
+                return False
+        return True
+
     def _json(self, payload: dict, status: int = 200) -> None:
         data = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin")
+        if origin in ALLOWED_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
         self.wfile.write(data)
 
@@ -41,7 +64,12 @@ class HsxHandler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(length) or b"{}")
 
     def do_GET(self) -> None:
-        if self.path == "/api/skills":
+        path = self._request_path()
+        if path.startswith("/api/") and not self._api_access_allowed():
+            return
+        if path == "/health":
+            self._json({"status": "ok"})
+        elif path == "/api/skills":
             self._json({"skills": [tool["name"] for tool in TOOLS]})
         elif self.path == "/api/memory":
             self._json({"facts": read_memory()})
@@ -50,8 +78,8 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"files": files})
         elif self.path == "/api/video/jobs":
             self._json({"jobs": list_video_jobs()})
-        elif self.path.startswith("/api/video/jobs/"):
-            job_id = self.path.removeprefix("/api/video/jobs/")
+        elif path.startswith("/api/video/jobs/"):
+            job_id = path.removeprefix("/api/video/jobs/")
             job = get_video_job(job_id)
             if job is None:
                 self._json({"error": "Job not found."}, 404)
@@ -65,8 +93,8 @@ class HsxHandler(BaseHTTPRequestHandler):
                 "uploads": [{"name": p.name, "type": p.suffix[1:]} for p in UPLOADS_DIR.iterdir() if p.is_file()],
                 "video_jobs": list_video_jobs(),
             })
-        elif self.path.startswith("/api/outputs/"):
-            filename = Path(self.path.removeprefix("/api/outputs/")).name
+        elif path.startswith("/api/outputs/"):
+            filename = Path(path.removeprefix("/api/outputs/")).name
             output = (OUTPUTS_DIR / filename).resolve()
             if OUTPUTS_DIR.resolve() not in output.parents or not output.is_file():
                 self._json({"error": "Artifact not found."}, 404)
@@ -82,7 +110,10 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._serve_frontend()
 
     def do_POST(self) -> None:
-        if self.path == "/api/chat":
+        path = self._request_path()
+        if path.startswith("/api/") and not self._api_access_allowed():
+            return
+        if path == "/api/chat":
             payload = self._body()
             message = str(payload.get("message", "")).strip()
             if not message:
@@ -90,14 +121,14 @@ class HsxHandler(BaseHTTPRequestHandler):
                 return
             response, _ = run_agent(message, HISTORY, TOOLS, SKILL_MAP)
             self._json({"response": response, "outputs": self._recent_outputs()})
-        elif self.path == "/api/memory":
+        elif path == "/api/memory":
             fact = str(self._body().get("fact", "")).strip()
             facts = read_memory()
             if fact:
                 facts.append(fact)
                 write_memory(facts)
             self._json({"facts": facts})
-        elif self.path == "/api/upload":
+        elif path == "/api/upload":
             payload = self._body()
             filename = Path(str(payload.get("filename", "upload.txt"))).name
             content = str(payload.get("content", ""))
@@ -107,7 +138,7 @@ class HsxHandler(BaseHTTPRequestHandler):
             destination = UPLOADS_DIR / filename
             destination.write_text(content, encoding="utf-8")
             self._json({"success": True, "name": destination.name, "type": destination.suffix[1:]})
-        elif self.path == "/api/video/jobs":
+        elif path == "/api/video/jobs":
             payload = self._body()
             project_id = str(payload.get("project_id", "project_video")).strip() or "project_video"
             prompt = str(payload.get("prompt", "")).strip()
@@ -124,6 +155,21 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"job": job})
         else:
             self._json({"error": "Not found."}, 404)
+
+    def do_OPTIONS(self) -> None:
+        if self._request_path().startswith("/api/"):
+            origin = self.headers.get("Origin")
+            if origin and origin not in ALLOWED_ORIGINS:
+                self._json({"error": "Origin is not allowed."}, 403)
+                return
+        self.send_response(204)
+        origin = self.headers.get("Origin")
+        if origin in ALLOWED_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.end_headers()
 
     def _recent_outputs(self) -> list:
         return [{"name": p.name, "path": str(p), "type": p.suffix[1:]} for p in OUTPUTS_DIR.iterdir() if p.is_file()]
