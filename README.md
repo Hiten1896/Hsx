@@ -5,7 +5,7 @@ Hsx is a local-first creative workspace for an AI agent. It combines an auto-dis
 ## Author
 
 GitHub: [@Hiten1896](https://github.com/Hiten1896)
-Name: **[Full name to be added]**
+Name: **[Hiten Sharma]**
 
 ## Status
 
@@ -19,6 +19,7 @@ Name: **[Full name to be added]**
 - Phase 8: bounded specialist sub-agent delegation complete
 - Phase 9: deployment artifacts complete
 - Phase 10: CI and quality automation complete
+- Phase 11: guarded self-improvement proposals complete
 
 ## Setup
 
@@ -58,6 +59,10 @@ Open `http://127.0.0.1:8000`. Add `ANTHROPIC_API_KEY` to `.env` for the full LLM
 ### Phase 4b: Advisory + informed-consent flow
 
 Skills may declare an optional plain-language `advisory` (under 300 characters) and `requires_acknowledgement`. When present, the policy engine will pause and request explicit “I understand, proceed” or “Cancel” consent with the tool, arguments, and advisory. Consent is shown once per session per skill unless arguments materially change; dangerous skills always ask. Decisions are appended to `logs/audit.jsonl`. The planned `download_media` background skill will use `yt-dlp`, save only under `outputs/`, and enforce file-size and duration limits.
+
+### Phase 11: Guarded self-improvement
+
+Hsx may research ideas and draft a bounded improvement proposal through the consent-gated `propose_improvement` skill, but it cannot edit its own production source, install dependencies, alter policy, or activate code autonomously. Proposals are restricted to isolated skills, tests, or prompts in a scratch workspace, must include tests, run with a timeout and scrubbed environment, and produce a validation report. Even when tests pass, activation requires explicit human review and approval.
 
 ## Architecture
 
