@@ -14,6 +14,7 @@ MEMORY_DIR = BASE_DIR / "memory"
 DATA_DIR = BASE_DIR / "data"
 MEMORY_DB = DATA_DIR / "memory.db"
 JOBS_DB = DATA_DIR / "jobs.db"
+IMPROVEMENTS_DB = DATA_DIR / "improvements.db"
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 MODEL = os.getenv("HSX_MODEL", "claude-sonnet-4-6")
 PROVIDER = os.getenv("HSX_PROVIDER", "anthropic").strip().lower()
