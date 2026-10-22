@@ -1,0 +1,2 @@
+# Optional persistent vector retrieval backend for semantic memory.
+chromadb

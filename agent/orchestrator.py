@@ -1,6 +1,10 @@
 import json
 
 from agent.llm_client import call_llm
+from agent.memory import MemoryManager
+from config import MEMORY_DB
+
+MEMORY = MemoryManager(MEMORY_DB)
 
 
 def _text_from_response(response) -> str:
@@ -10,16 +14,19 @@ def _text_from_response(response) -> str:
 
 
 def run_agent(user_input: str, conversation_history: list, tools: list, skill_map: dict, max_iterations: int = 10):
+    MEMORY.record_message("default", "user", user_input)
     conversation_history.append({"role": "user", "content": user_input})
     for _ in range(max_iterations):
-        response = call_llm(conversation_history, tools)
+        response = call_llm(conversation_history, tools, MEMORY.prompt_context(user_input))
         if response is None:
             return _local_response(user_input, conversation_history), conversation_history
         blocks = getattr(response, "content", [])
         tool_calls = [block for block in blocks if getattr(block, "type", "") == "tool_use"]
         if not tool_calls:
             conversation_history.append({"role": "assistant", "content": blocks})
-            return _text_from_response(response), conversation_history
+            answer = _text_from_response(response)
+            MEMORY.record_message("default", "assistant", answer)
+            return answer, conversation_history
         conversation_history.append({"role": "assistant", "content": blocks})
         results = []
         for call in tool_calls:

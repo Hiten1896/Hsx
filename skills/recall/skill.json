@@ -1,0 +1,1 @@
+{"name":"recall","description":"Search durable user memory for relevant facts.","input_schema":{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"]}}

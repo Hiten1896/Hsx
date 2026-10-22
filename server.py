@@ -1,31 +1,19 @@
-import json
 import hmac
+import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from agent.memory import MemoryManager
 from agent.orchestrator import run_agent
 from agent.skill_loader import load_skills
-from config import ALLOWED_ORIGINS, AUTH_TOKEN, MEMORY_DIR, OUTPUTS_DIR, UPLOADS_DIR
+from config import ALLOWED_ORIGINS, AUTH_TOKEN, MEMORY_DB, OUTPUTS_DIR, UPLOADS_DIR
 from video_tools.pipeline import create_video_job, get_video_job, list_video_jobs
 
 ROOT = Path(__file__).resolve().parent
 TOOLS, SKILL_MAP = load_skills(str(ROOT / "skills"))
 HISTORY = []
-
-
-def read_memory() -> list:
-    path = MEMORY_DIR / "facts.json"
-    if not path.exists():
-        return []
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return []
-
-
-def write_memory(facts: list) -> None:
-    (MEMORY_DIR / "facts.json").write_text(json.dumps(facts[-40:], indent=2), encoding="utf-8")
+MEMORY = MemoryManager(MEMORY_DB)
 
 
 class HsxHandler(BaseHTTPRequestHandler):
@@ -71,8 +59,8 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"status": "ok"})
         elif path == "/api/skills":
             self._json({"skills": [tool["name"] for tool in TOOLS]})
-        elif self.path == "/api/memory":
-            self._json({"facts": read_memory()})
+        elif path == "/api/memory":
+            self._json({"facts": MEMORY.list_facts()})
         elif self.path == "/api/outputs":
             files = [{"name": p.name, "path": str(p), "type": p.suffix[1:]} for p in OUTPUTS_DIR.iterdir() if p.is_file()]
             self._json({"files": files})
@@ -88,7 +76,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif self.path == "/api/state":
             self._json({
                 "skills": [tool["name"] for tool in TOOLS],
-                "memory": read_memory(),
+                "memory": MEMORY.list_facts(),
                 "outputs": self._recent_outputs(),
                 "uploads": [{"name": p.name, "type": p.suffix[1:]} for p in UPLOADS_DIR.iterdir() if p.is_file()],
                 "video_jobs": list_video_jobs(),
@@ -122,12 +110,31 @@ class HsxHandler(BaseHTTPRequestHandler):
             response, _ = run_agent(message, HISTORY, TOOLS, SKILL_MAP)
             self._json({"response": response, "outputs": self._recent_outputs()})
         elif path == "/api/memory":
-            fact = str(self._body().get("fact", "")).strip()
-            facts = read_memory()
-            if fact:
-                facts.append(fact)
-                write_memory(facts)
-            self._json({"facts": facts})
+            payload = self._body()
+            try:
+                fact = MEMORY.add_fact(
+                    str(payload.get("text", payload.get("fact", ""))),
+                    str(payload.get("category", "general")),
+                    pinned=bool(payload.get("pinned", False)),
+                )
+            except ValueError as error:
+                self._json({"error": str(error)}, 400)
+                return
+            self._json({"fact": fact, "facts": MEMORY.list_facts()})
+        elif path.startswith("/api/memory/"):
+            try:
+                fact_id = int(path.removeprefix("/api/memory/"))
+                payload = self._body()
+                fact = MEMORY.update_fact(
+                    fact_id,
+                    str(payload.get("text", "")),
+                    str(payload.get("category", "general")),
+                    bool(payload.get("pinned", False)),
+                )
+            except (ValueError, KeyError) as error:
+                self._json({"error": str(error)}, 400 if isinstance(error, ValueError) else 404)
+                return
+            self._json({"fact": fact})
         elif path == "/api/upload":
             payload = self._body()
             filename = Path(str(payload.get("filename", "upload.txt"))).name
@@ -170,6 +177,21 @@ class HsxHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
+
+    def do_DELETE(self) -> None:
+        path = self._request_path()
+        if path.startswith("/api/") and not self._api_access_allowed():
+            return
+        if not path.startswith("/api/memory/"):
+            self._json({"error": "Not found."}, 404)
+            return
+        try:
+            fact_id = int(path.removeprefix("/api/memory/"))
+            MEMORY.delete_fact(fact_id)
+        except ValueError:
+            self._json({"error": "Memory id must be an integer."}, 400)
+            return
+        self._json({"success": True, "facts": MEMORY.list_facts()})
 
     def _recent_outputs(self) -> list:
         return [{"name": p.name, "path": str(p), "type": p.suffix[1:]} for p in OUTPUTS_DIR.iterdir() if p.is_file()]

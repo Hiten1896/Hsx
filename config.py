@@ -11,6 +11,8 @@ OUTPUTS_DIR = BASE_DIR / "outputs"
 SCRATCH_DIR = BASE_DIR / "scratch"
 UPLOADS_DIR = BASE_DIR / "uploads"
 MEMORY_DIR = BASE_DIR / "memory"
+DATA_DIR = BASE_DIR / "data"
+MEMORY_DB = DATA_DIR / "memory.db"
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 MODEL = os.getenv("HSX_MODEL", "claude-sonnet-4-6")
 HOST = os.getenv("HSX_HOST", "127.0.0.1").strip() or "127.0.0.1"
@@ -40,5 +42,5 @@ def is_loopback_host(host: str) -> bool:
 if not is_loopback_host(HOST) and not AUTH_TOKEN:
     raise RuntimeError("HSX_AUTH_TOKEN is required when HSX_HOST is not loopback.")
 
-for directory in (OUTPUTS_DIR, SCRATCH_DIR, UPLOADS_DIR, MEMORY_DIR):
+for directory in (OUTPUTS_DIR, SCRATCH_DIR, UPLOADS_DIR, MEMORY_DIR, DATA_DIR):
     directory.mkdir(exist_ok=True)

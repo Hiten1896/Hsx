@@ -1,0 +1,1 @@
+{"name":"remember","description":"Save a durable user fact without storing secrets or credentials.","input_schema":{"type":"object","properties":{"text":{"type":"string"},"category":{"type":"string"},"pinned":{"type":"boolean"}},"required":["text"]}}
