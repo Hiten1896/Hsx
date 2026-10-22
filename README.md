@@ -13,6 +13,7 @@ Name: **[Full name to be added]**
 - Phase 2: persistent memory complete
 - Phase 3: provider-agnostic LLM layer complete
 - Phase 4: policy engine and advisory consent flow complete
+- Phase 5: persistent resumable job queue complete
 
 ## Setup
 

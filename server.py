@@ -4,17 +4,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from agent.jobs import JobQueue
 from agent.memory import MemoryManager
 from agent.orchestrator import run_agent
 from agent.policy import POLICY
 from agent.skill_loader import load_skills
-from config import ALLOWED_ORIGINS, AUTH_TOKEN, MEMORY_DB, OUTPUTS_DIR, UPLOADS_DIR
+from config import (
+    ALLOWED_ORIGINS,
+    AUTH_TOKEN,
+    JOBS_DB,
+    MEMORY_DB,
+    OUTPUTS_DIR,
+    UPLOADS_DIR,
+)
 from video_tools.pipeline import create_video_job, get_video_job, list_video_jobs
 
 ROOT = Path(__file__).resolve().parent
 TOOLS, SKILL_MAP = load_skills(str(ROOT / "skills"))
 HISTORY = []
 MEMORY = MemoryManager(MEMORY_DB)
+JOBS = JobQueue(JOBS_DB)
 
 
 class HsxHandler(BaseHTTPRequestHandler):
@@ -62,6 +71,11 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"skills": [tool["name"] for tool in TOOLS]})
         elif path == "/api/policy/status":
             self._json({"stopped": POLICY.is_stopped()})
+        elif path == "/api/jobs":
+            self._json({"jobs": JOBS.list()})
+        elif path.startswith("/api/jobs/"):
+            job = JOBS.get(path.removeprefix("/api/jobs/"))
+            self._json({"job": job} if job else {"error": "Job not found."}, 200 if job else 404)
         elif path == "/api/memory":
             self._json({"facts": MEMORY.list_facts()})
         elif self.path == "/api/outputs":
@@ -122,6 +136,18 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif path == "/api/resume":
             POLICY.reset_stop()
             self._json({"success": True, "stopped": False})
+        elif path == "/api/jobs":
+            payload = self._body()
+            try:
+                job = JOBS.create(payload.get("steps", []))
+            except ValueError as error:
+                self._json({"error": str(error)}, 400)
+                return
+            JOBS.run_async(job["id"], lambda step: {"step": step, "status": "checkpointed"})
+            self._json({"job": JOBS.get(job["id"])}, 201)
+        elif path.startswith("/api/jobs/") and path.endswith("/cancel"):
+            job_id = path.removeprefix("/api/jobs/").removesuffix("/cancel")
+            self._json({"success": JOBS.cancel(job_id)})
         elif path == "/api/chat/stream":
             payload = self._body()
             message = str(payload.get("message", "")).strip()
