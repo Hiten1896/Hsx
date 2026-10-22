@@ -31,8 +31,15 @@ def call_llm(messages: list, tools: list, memory_context: str = ""):
         + (f"\n\n{memory_context}" if memory_context else "")
     )
     request = LLMRequest(messages, tools, system=system)
+    router = default_router()
     try:
-        events = list(default_router().generate(request))
+        panel = None
+        if not tools:
+            from config import PANEL_MODE, PANEL_PROVIDERS
+
+            if PANEL_MODE in {"auto", "always"}:
+                panel = router.panel(list(PANEL_PROVIDERS))
+        events = list((panel or router).generate(request))
     except ProviderError:
         return None
     blocks = []

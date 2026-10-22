@@ -20,7 +20,8 @@ Name: **[Hiten Sharma]**
 - Phase 9: deployment artifacts complete
 - Phase 10: CI and quality automation complete
 - Phase 11: guarded self-improvement proposal pipeline complete
-- Phase 12: free-tier provider configuration in progress
+- Phase 12: free-tier provider configuration complete
+- Phase 13: multi-model debate and synthesis complete
 
 ## Setup
 
@@ -62,6 +63,10 @@ OPENROUTER_MODEL=google/gemini-2.0-flash-exp:free
 ```
 
 Keys are read only from `.env` and are never committed. Free-tier quotas, model names, and availability are controlled by each provider and can change; fallback order lets Hsx continue with the next configured provider.
+
+### Multi-model answer panel
+
+For text-only requests, `HSX_PANEL_MODE=auto` sends the request to two configured providers in parallel, then sends both drafts to a third configured judge for critique and synthesis. Configure `HSX_PANEL_PROVIDERS` with 2–3 provider names such as `gemini,groq,openrouter`. If fewer than two are available, Hsx safely falls back to the normal ordered router. Tool-executing turns stay single-provider so side effects are never duplicated.
 
 ## Security model
 

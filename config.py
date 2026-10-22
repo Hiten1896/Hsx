@@ -23,6 +23,12 @@ FALLBACKS = tuple(
     for item in os.getenv("HSX_FALLBACKS", "ollama").split(",")
     if item.strip()
 )
+PANEL_MODE = os.getenv("HSX_PANEL_MODE", "auto").strip().lower()
+PANEL_PROVIDERS = tuple(
+    item.strip().lower()
+    for item in os.getenv("HSX_PANEL_PROVIDERS", "gemini,groq,openrouter").split(",")
+    if item.strip()
+)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")

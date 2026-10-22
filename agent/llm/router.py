@@ -8,6 +8,7 @@ from .providers import (
     Provider,
     ProviderError,
 )
+from .panel import PanelRouter
 from .types import EventStream, LLMRequest
 
 
@@ -24,6 +25,14 @@ class LLMRouter:
             except (ProviderError, OSError, TimeoutError) as error:
                 errors.append(f"{provider.name}: {error}")
         raise ProviderError("No LLM provider succeeded: " + "; ".join(errors))
+
+    def panel(self, provider_names: list[str]) -> PanelRouter | None:
+        selected = [provider for provider in self.providers if provider.name in provider_names]
+        if len(selected) < 2:
+            return None
+        judge = selected[2] if len(selected) >= 3 else selected[1]
+        candidates = selected[:2]
+        return PanelRouter(candidates, judge)
 
 
 def default_router() -> LLMRouter:
