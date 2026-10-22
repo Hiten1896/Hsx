@@ -1,0 +1,16 @@
+[Unit]
+Description=Hsx local AI agent
+After=network.target
+
+[Service]
+Type=simple
+User=hsx
+WorkingDirectory=/opt/hsx
+EnvironmentFile=/opt/hsx/.env
+ExecStart=/opt/hsx/.venv/bin/python main.py
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

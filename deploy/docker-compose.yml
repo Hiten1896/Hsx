@@ -1,0 +1,14 @@
+services:
+  hsx:
+    build: ..
+    restart: unless-stopped
+    environment:
+      - HSX_HOST=0.0.0.0
+      - HSX_AUTH_TOKEN
+    volumes:
+      - ../outputs:/app/outputs
+      - ../uploads:/app/uploads
+      - ../data:/app/data
+      - ../logs:/app/logs
+    ports:
+      - "8000:8000"

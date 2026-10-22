@@ -17,6 +17,7 @@ Name: **[Full name to be added]**
 - Phase 6: safe local skill expansion in progress
 - Phase 7: persona modes, browser voice, and Telegram allowlist complete
 - Phase 8: bounded specialist sub-agent delegation complete
+- Phase 9: deployment artifacts complete
 
 ## Setup
 
