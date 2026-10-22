@@ -8,6 +8,7 @@ from agent.jobs import JobQueue
 from agent.memory import MemoryManager
 from agent.orchestrator import run_agent
 from agent.policy import POLICY
+from agent.self_improvement import SelfImprovement
 from agent.skill_loader import load_skills
 from config import (
     ALLOWED_ORIGINS,
@@ -18,6 +19,7 @@ from config import (
     OUTPUTS_DIR,
     UPLOADS_DIR,
 )
+from config import BASE_DIR, IMPROVEMENTS_DB
 from video_tools.pipeline import create_video_job, get_video_job, list_video_jobs
 
 ROOT = Path(__file__).resolve().parent
@@ -25,6 +27,7 @@ TOOLS, SKILL_MAP = load_skills(str(ROOT / "skills"))
 HISTORY = []
 MEMORY = MemoryManager(MEMORY_DB)
 JOBS = JobQueue(JOBS_DB)
+IMPROVEMENTS = SelfImprovement(IMPROVEMENTS_DB)
 
 
 class HsxHandler(BaseHTTPRequestHandler):
@@ -79,6 +82,8 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/jobs/"):
             job = JOBS.get(path.removeprefix("/api/jobs/"))
             self._json({"job": job} if job else {"error": "Job not found."}, 200 if job else 404)
+        elif path == "/api/improvements":
+            self._json({"proposals": IMPROVEMENTS.list()})
         elif path == "/api/memory":
             self._json({"facts": MEMORY.list_facts()})
         elif self.path == "/api/outputs":
@@ -159,6 +164,54 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/jobs/") and path.endswith("/cancel"):
             job_id = path.removeprefix("/api/jobs/").removesuffix("/cancel")
             self._json({"success": JOBS.cancel(job_id)})
+        elif path == "/api/improvements":
+            payload = self._body()
+            try:
+                proposal = IMPROVEMENTS.create(str(payload.get("title", "")), str(payload.get("rationale", "")))
+            except ValueError as error:
+                self._json({"error": str(error)}, 400)
+                return
+            self._json({"proposal": proposal}, 201)
+        elif path.startswith("/api/improvements/") and path.endswith("/prototype"):
+            proposal_id = path.removeprefix("/api/improvements/").removesuffix("/prototype")
+            payload = self._body()
+            try:
+                proposal = IMPROVEMENTS.prototype(
+                    proposal_id, str(payload.get("path", "")), str(payload.get("content", ""))
+                )
+            except (KeyError, ValueError) as error:
+                self._json({"error": str(error)}, 400)
+                return
+            self._json({"proposal": proposal})
+        elif path.startswith("/api/improvements/") and path.endswith("/check"):
+            proposal_id = path.removeprefix("/api/improvements/").removesuffix("/check")
+            try:
+                proposal = IMPROVEMENTS.run_strict_checks(proposal_id)
+            except (KeyError, ValueError, OSError) as error:
+                self._json({"error": str(error)}, 400)
+                return
+            self._json({"proposal": proposal})
+        elif path.startswith("/api/improvements/") and path.endswith("/approve"):
+            proposal_id = path.removeprefix("/api/improvements/").removesuffix("/approve")
+            try:
+                proposal = IMPROVEMENTS.approve(proposal_id, str(self._body().get("owner", "")))
+            except (KeyError, ValueError, PermissionError) as error:
+                self._json({"error": str(error)}, 403)
+                return
+            self._json({"proposal": proposal})
+        elif path.startswith("/api/improvements/") and path.endswith("/promote"):
+            proposal_id = path.removeprefix("/api/improvements/").removesuffix("/promote")
+            payload = self._body()
+            target_name = Path(str(payload.get("target", "")))
+            if not target_name.parts or target_name.parts[0] not in {"agent", "skills", "interfaces", "prompts"}:
+                self._json({"error": "Promotion targets must be under agent, skills, interfaces, or prompts."}, 400)
+                return
+            try:
+                proposal = IMPROVEMENTS.promote(proposal_id, str(payload.get("path", "")), BASE_DIR / target_name)
+            except (KeyError, ValueError, PermissionError) as error:
+                self._json({"error": str(error)}, 403)
+                return
+            self._json({"proposal": proposal})
         elif path == "/api/chat/stream":
             payload = self._body()
             message = str(payload.get("message", "")).strip()

@@ -14,12 +14,12 @@ Name: **[Hiten Sharma]**
 - Phase 3: provider-agnostic LLM layer complete
 - Phase 4: policy engine and advisory consent flow complete
 - Phase 5: persistent resumable job queue complete
-- Phase 6: safe local skill expansion in progress
+- Phase 6: safe local skill expansion complete
 - Phase 7: persona modes, browser voice, and Telegram allowlist complete
 - Phase 8: bounded specialist sub-agent delegation complete
 - Phase 9: deployment artifacts complete
 - Phase 10: CI and quality automation complete
-- Phase 11: guarded self-improvement proposals complete
+- Phase 11: guarded self-improvement proposal pipeline complete
 
 ## Setup
 
@@ -53,16 +53,21 @@ Open `http://127.0.0.1:8000`. Add `ANTHROPIC_API_KEY` to `.env` for the full LLM
 - File-writing skills use a path jail so resolved paths remain inside their declared workspace directories; traversal and symlink escapes are rejected.
 - The LLM router supports Anthropic, Gemini, and Ollama with ordered fallbacks configured through `HSX_PROVIDER` and `HSX_FALLBACKS`; `/api/chat/stream` emits normalized SSE events.
 - Skills default to `confirm`, support `safe` and `dangerous` tiers, and are audited in append-only JSONL. Advisory skills request explicit consent, with session-level repeat suppression; `POST /api/stop` activates the global kill switch.
+- Phase 11 self-improvement is proposal-only: research and prototypes stay in `scratch/self_improvement/`, dependencies and production files are not changed automatically, strict tests must pass, and only explicit owner approval (`Hiten`) can authorize promotion.
+
+### Phase 11 workflow
+
+1. Create a proposal with a rationale and isolated scratch workspace.
+2. Prototype only reviewable text/source files; no automatic package installation or production edits.
+3. Run the fixed strict pytest check with a scrubbed environment.
+4. Present the passing proposal, test output, changed files, and risk summary to Hiten.
+5. Require explicit owner approval before promotion; promotion is limited to `agent/`, `skills/`, `interfaces/`, or `prompts/`.
 
 ## Roadmap additions
 
 ### Phase 4b: Advisory + informed-consent flow
 
 Skills may declare an optional plain-language `advisory` (under 300 characters) and `requires_acknowledgement`. When present, the policy engine will pause and request explicit “I understand, proceed” or “Cancel” consent with the tool, arguments, and advisory. Consent is shown once per session per skill unless arguments materially change; dangerous skills always ask. Decisions are appended to `logs/audit.jsonl`. The planned `download_media` background skill will use `yt-dlp`, save only under `outputs/`, and enforce file-size and duration limits.
-
-### Phase 11: Guarded self-improvement
-
-Hsx may research ideas and draft a bounded improvement proposal through the consent-gated `propose_improvement` skill, but it cannot edit its own production source, install dependencies, alter policy, or activate code autonomously. Proposals are restricted to isolated skills, tests, or prompts in a scratch workspace, must include tests, run with a timeout and scrubbed environment, and produce a validation report. Even when tests pass, activation requires explicit human review and approval.
 
 ## Architecture
 
