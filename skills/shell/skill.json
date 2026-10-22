@@ -1,0 +1,1 @@
+{"name":"shell","description":"Run a configured allowlisted command.","risk":"confirm","advisory":"This executes a local command. Review the command before proceeding.","requires_acknowledgement":true,"input_schema":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}
