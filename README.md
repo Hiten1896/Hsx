@@ -10,6 +10,7 @@ Name: **[Full name to be added]**
 ## Status
 
 - Phase 1: security and hygiene complete
+- Phase 2: persistent memory in progress
 
 ## Setup
 
@@ -41,6 +42,12 @@ Open `http://127.0.0.1:8000`. Add `ANTHROPIC_API_KEY` to `.env` for the full LLM
 - A bearer token is required whenever the server binds to a non-loopback host.
 - `run_code` uses Docker first with no network, resource limits, a read-only root, and a temporary writable area. If Docker is unavailable, it uses a weaker subprocess fallback with a scrubbed environment and time/resource limits.
 - File-writing skills use a path jail so resolved paths remain inside their declared workspace directories; traversal and symlink escapes are rejected.
+
+## Roadmap additions
+
+### Phase 4b: Advisory + informed-consent flow
+
+Skills may declare an optional plain-language `advisory` (under 300 characters) and `requires_acknowledgement`. When present, the policy engine will pause and request explicit “I understand, proceed” or “Cancel” consent with the tool, arguments, and advisory. Consent is shown once per session per skill unless arguments materially change; dangerous skills always ask. Decisions are appended to `logs/audit.jsonl`. The planned `download_media` background skill will use `yt-dlp`, save only under `outputs/`, and enforce file-size and duration limits.
 
 ## Architecture
 
