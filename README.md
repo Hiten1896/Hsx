@@ -10,7 +10,8 @@ Name: **[Full name to be added]**
 ## Status
 
 - Phase 1: security and hygiene complete
-- Phase 2: persistent memory in progress
+- Phase 2: persistent memory complete
+- Phase 3: provider-agnostic LLM layer complete
 
 ## Setup
 
@@ -42,6 +43,7 @@ Open `http://127.0.0.1:8000`. Add `ANTHROPIC_API_KEY` to `.env` for the full LLM
 - A bearer token is required whenever the server binds to a non-loopback host.
 - `run_code` uses Docker first with no network, resource limits, a read-only root, and a temporary writable area. If Docker is unavailable, it uses a weaker subprocess fallback with a scrubbed environment and time/resource limits.
 - File-writing skills use a path jail so resolved paths remain inside their declared workspace directories; traversal and symlink escapes are rejected.
+- The LLM router supports Anthropic, Gemini, and Ollama with ordered fallbacks configured through `HSX_PROVIDER` and `HSX_FALLBACKS`; `/api/chat/stream` emits normalized SSE events.
 
 ## Roadmap additions
 

@@ -15,6 +15,14 @@ DATA_DIR = BASE_DIR / "data"
 MEMORY_DB = DATA_DIR / "memory.db"
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 MODEL = os.getenv("HSX_MODEL", "claude-sonnet-4-6")
+PROVIDER = os.getenv("HSX_PROVIDER", "anthropic").strip().lower()
+FALLBACKS = tuple(
+    item.strip().lower()
+    for item in os.getenv("HSX_FALLBACKS", "ollama").split(",")
+    if item.strip()
+)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 HOST = os.getenv("HSX_HOST", "127.0.0.1").strip() or "127.0.0.1"
 PORT = int(os.getenv("HSX_PORT", "8000"))
 AUTH_TOKEN = os.getenv("HSX_AUTH_TOKEN", "")
