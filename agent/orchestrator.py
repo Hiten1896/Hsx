@@ -2,6 +2,7 @@ import json
 
 from agent.llm_client import call_llm
 from agent.memory import MemoryManager
+from agent.policy import POLICY
 from config import MEMORY_DB
 
 MEMORY = MemoryManager(MEMORY_DB)
@@ -13,10 +14,12 @@ def _text_from_response(response) -> str:
     return "\n".join(block.text for block in response.content if getattr(block, "type", "") == "text")
 
 
-def run_agent(user_input: str, conversation_history: list, tools: list, skill_map: dict, max_iterations: int = 10):
+def run_agent(user_input: str, conversation_history: list, tools: list, skill_map: dict, max_iterations: int = 10, session_id: str = "default", approvals: dict | None = None):
     MEMORY.record_message("default", "user", user_input)
     conversation_history.append({"role": "user", "content": user_input})
     for _ in range(max_iterations):
+        if POLICY.is_stopped():
+            return "This run was stopped by the kill switch.", conversation_history
         response = call_llm(conversation_history, tools, MEMORY.prompt_context(user_input))
         if response is None:
             return _local_response(user_input, conversation_history), conversation_history
@@ -30,9 +33,16 @@ def run_agent(user_input: str, conversation_history: list, tools: list, skill_ma
         conversation_history.append({"role": "assistant", "content": blocks})
         results = []
         for call in tool_calls:
+            skill = next((tool for tool in tools if tool["name"] == call.name), None)
+            if skill is None:
+                results.append({"type": "tool_result", "tool_use_id": call.id, "content": json.dumps({"success": False, "error": "Unknown skill."})})
+                continue
+            decision = POLICY.decide(skill, call.input, session_id, (approvals or {}).get(call.name))
+            if not decision["allowed"]:
+                return json.dumps(decision), conversation_history
             try:
                 result = skill_map[call.name](**call.input)
-            except Exception as error:  # A broken plugin must not break the session.
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
                 result = {"success": False, "error": str(error)}
             results.append({"type": "tool_result", "tool_use_id": call.id, "content": json.dumps(result)})
         conversation_history.append({"role": "user", "content": results})
