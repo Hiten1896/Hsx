@@ -1,0 +1,17 @@
+{
+  "name": "download_media",
+  "description": "Queue a media download from a URL into the outputs directory.",
+  "risk": "confirm",
+  "advisory": "Downloads may be subject to the site's terms of service and copyright law. Only download content you are authorized to use.",
+  "requires_acknowledgement": true,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "url": {"type": "string"},
+      "filename": {"type": "string"},
+      "max_duration_seconds": {"type": "integer"},
+      "max_size_mb": {"type": "integer"}
+    },
+    "required": ["url"]
+  }
+}

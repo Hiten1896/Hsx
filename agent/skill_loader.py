@@ -18,6 +18,12 @@ def load_skills(skills_dir: str = "skills") -> tuple[list, dict]:
             continue
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            risk = metadata.get("risk", "confirm")
+            if risk not in {"safe", "confirm", "dangerous"}:
+                raise ValueError("risk must be safe, confirm, or dangerous")
+            advisory = metadata.get("advisory", "")
+            if not isinstance(advisory, str) or len(advisory) >= 300:
+                raise ValueError("advisory must be a string under 300 characters")
             spec = importlib.util.spec_from_file_location(
                 f"hsx_skill_{folder.name}", module_path
             )
@@ -26,11 +32,14 @@ def load_skills(skills_dir: str = "skills") -> tuple[list, dict]:
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             if not callable(getattr(module, "run", None)):
-                raise AttributeError("skill.py must define run(**kwargs)")
+                raise TypeError("skill.py must define run(**kwargs)")
             tool = {
                 "name": metadata["name"],
                 "description": metadata["description"],
                 "input_schema": metadata["input_schema"],
+                "risk": risk,
+                "advisory": advisory,
+                "requires_acknowledgement": metadata.get("requires_acknowledgement", False),
             }
             tools.append(tool)
             skill_map[tool["name"]] = module.run

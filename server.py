@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 
 from agent.memory import MemoryManager
 from agent.orchestrator import run_agent
+from agent.policy import POLICY
 from agent.skill_loader import load_skills
 from config import ALLOWED_ORIGINS, AUTH_TOKEN, MEMORY_DB, OUTPUTS_DIR, UPLOADS_DIR
 from video_tools.pipeline import create_video_job, get_video_job, list_video_jobs
@@ -59,6 +60,8 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"status": "ok"})
         elif path == "/api/skills":
             self._json({"skills": [tool["name"] for tool in TOOLS]})
+        elif path == "/api/policy/status":
+            self._json({"stopped": POLICY.is_stopped()})
         elif path == "/api/memory":
             self._json({"facts": MEMORY.list_facts()})
         elif self.path == "/api/outputs":
@@ -107,8 +110,18 @@ class HsxHandler(BaseHTTPRequestHandler):
             if not message:
                 self._json({"error": "Message is required."}, 400)
                 return
-            response, _ = run_agent(message, HISTORY, TOOLS, SKILL_MAP)
+            response, _ = run_agent(
+                message, HISTORY, TOOLS, SKILL_MAP,
+                session_id=str(payload.get("session_id", "default")),
+                approvals=payload.get("approvals"),
+            )
             self._json({"response": response, "outputs": self._recent_outputs()})
+        elif path == "/api/stop":
+            POLICY.stop_all()
+            self._json({"success": True, "stopped": True})
+        elif path == "/api/resume":
+            POLICY.reset_stop()
+            self._json({"success": True, "stopped": False})
         elif path == "/api/chat/stream":
             payload = self._body()
             message = str(payload.get("message", "")).strip()

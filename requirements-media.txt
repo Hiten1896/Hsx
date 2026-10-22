@@ -1,3 +1,5 @@
 # Media processing skills; kept out of the core install because these are large.
 matplotlib
 moviepy
+# Optional downloader for the consent-gated download_media skill.
+yt-dlp
