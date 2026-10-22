@@ -1,0 +1,1 @@
+{"name":"notes","description":"Create or search personal notes stored as durable memory.","risk":"safe","input_schema":{"type":"object","properties":{"text":{"type":"string"},"query":{"type":"string"}},"required":[]}}

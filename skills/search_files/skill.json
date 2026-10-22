@@ -1,0 +1,1 @@
+{"name":"search_files","description":"Search text files in uploads or outputs.","risk":"safe","input_schema":{"type":"object","properties":{"query":{"type":"string"},"directory":{"type":"string"}},"required":["query"]}}

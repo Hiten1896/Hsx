@@ -14,6 +14,7 @@ Name: **[Full name to be added]**
 - Phase 3: provider-agnostic LLM layer complete
 - Phase 4: policy engine and advisory consent flow complete
 - Phase 5: persistent resumable job queue complete
+- Phase 6: safe local skill expansion in progress
 
 ## Setup
 

@@ -1,0 +1,1 @@
+{"name":"system_status","description":"Report local disk and queue status.","risk":"safe","input_schema":{"type":"object","properties":{},"required":[]}}

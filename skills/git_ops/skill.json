@@ -1,0 +1,1 @@
+{"name":"git_ops","description":"Inspect or create commits in the configured repository.","risk":"confirm","advisory":"This reads or changes repository history. Review the requested operation before proceeding.","requires_acknowledgement":true,"input_schema":{"type":"object","properties":{"operation":{"type":"string"},"message":{"type":"string"}},"required":["operation"]}}
