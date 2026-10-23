@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 from agent.jobs import JobQueue
 from agent.approval import ApprovalGuard
+from agent.devices import DeviceRegistry
 from agent.memory import MemoryManager
 from agent.orchestrator import run_agent
 from agent.policy import POLICY
@@ -38,6 +39,7 @@ IMPROVEMENTS = SelfImprovement(
     IMPROVEMENTS_DB,
     approval_guard=APPROVAL_GUARD,
 )
+DEVICES = DeviceRegistry(approval_guard=APPROVAL_GUARD)
 
 
 class HsxHandler(BaseHTTPRequestHandler):
@@ -94,6 +96,8 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"job": job} if job else {"error": "Job not found."}, 200 if job else 404)
         elif path == "/api/improvements":
             self._json({"proposals": IMPROVEMENTS.list()})
+        elif path == "/api/devices":
+            self._json({"devices": DEVICES.list()})
         elif path == "/api/memory":
             self._json({"facts": MEMORY.list_facts()})
         elif self.path == "/api/outputs":
@@ -183,6 +187,33 @@ class HsxHandler(BaseHTTPRequestHandler):
                 self._json({"error": str(error)}, 400)
                 return
             self._json({"proposal": proposal}, 201)
+        elif path == "/api/devices/pair":
+            payload = self._body()
+            try:
+                device = DEVICES.pair(
+                    str(payload.get("id", "")),
+                    str(payload.get("name", "")),
+                    str(payload.get("device_type", "")),
+                    payload.get("capabilities", []),
+                    self.headers.get("X-HSX-Owner-PIN", ""),
+                )
+            except (TypeError, ValueError, PermissionError) as error:
+                self._json({"error": str(error)}, 400 if isinstance(error, (TypeError, ValueError)) else 403)
+                return
+            self._json({"device": device}, 201)
+        elif path.startswith("/api/devices/") and path.endswith("/authorize"):
+            device_id = path.removeprefix("/api/devices/").removesuffix("/authorize")
+            payload = self._body()
+            try:
+                result = DEVICES.authorize(
+                    device_id,
+                    self.headers.get("X-HSX-Device-Token", ""),
+                    str(payload.get("capability", "")),
+                )
+            except PermissionError as error:
+                self._json({"error": str(error)}, 403)
+                return
+            self._json(result)
         elif path.startswith("/api/improvements/") and path.endswith("/prototype"):
             proposal_id = path.removeprefix("/api/improvements/").removesuffix("/prototype")
             payload = self._body()
@@ -319,6 +350,15 @@ class HsxHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         path = self._request_path()
         if path.startswith("/api/") and not self._api_access_allowed():
+            return
+        if path.startswith("/api/devices/"):
+            device_id = path.removeprefix("/api/devices/")
+            try:
+                DEVICES.revoke(device_id, self.headers.get("X-HSX-Owner-PIN", ""))
+            except (KeyError, PermissionError) as error:
+                self._json({"error": str(error)}, 404 if isinstance(error, KeyError) else 403)
+                return
+            self._json({"success": True, "devices": DEVICES.list()})
             return
         if not path.startswith("/api/memory/"):
             self._json({"error": "Not found."}, 404)

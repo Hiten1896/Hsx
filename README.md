@@ -22,6 +22,7 @@ Name: **[Hiten Sharma]**
 - Phase 11: guarded self-improvement proposal pipeline complete
 - Phase 12: free-tier provider configuration complete
 - Phase 13: multi-model debate and synthesis complete
+- Phase 17: capability-scoped device-control foundation complete
 
 ## Setup
 
@@ -78,6 +79,7 @@ For text-only requests, `HSX_PANEL_MODE=off` is the default. Set it to `auto` to
 - The LLM router supports Anthropic, Gemini, and Ollama with ordered fallbacks configured through `HSX_PROVIDER` and `HSX_FALLBACKS`; `/api/chat/stream` emits normalized SSE events.
 - Skills default to `confirm`, support `safe` and `dangerous` tiers, and are audited in append-only JSONL. Advisory skills request explicit consent, with session-level repeat suppression; `POST /api/stop` activates the global kill switch.
 - Phase 11 self-improvement is proposal-only: research and prototypes stay in `scratch/self_improvement/`, dependencies and production files are not changed automatically, strict tests must pass, and approval/promotion require the separate owner PIN.
+- Device control is capability-scoped: pairing requires the owner PIN, device tokens are stored only as hashes and returned once, capabilities are allowlisted, every authorization is audited, and revocation is immediate. The foundation does not expose unrestricted shell, browser, desktop, camera, microphone, or LAN control.
 
 ### Phase 11 workflow
 
