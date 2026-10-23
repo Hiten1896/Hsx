@@ -16,3 +16,4 @@ jobs:
       - run: pip install pytest ruff
       - run: ruff check .
       - run: pytest -q
+      - run: pytest -q tests/test_phase13b_security.py -k docker

@@ -1,6 +1,7 @@
 import threading
 import urllib.error
 import urllib.request
+import shutil
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -28,6 +29,22 @@ def test_run_code_cannot_call_approval_endpoint(monkeypatch):
     )
     assert not result["success"]
     assert "network disabled" in result["stderr"]
+
+
+def test_run_code_subprocess_is_deterministic(monkeypatch):
+    monkeypatch.setattr("skills.run_code.skill.SANDBOX", "subprocess")
+    result = run("print(1 + 1)")
+    assert result["success"]
+    assert result["stdout"].strip() == "2"
+    assert result["sandbox"] == "subprocess"
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="Docker is unavailable")
+def test_run_code_docker():
+    result = run("print(1 + 1)")
+    assert result["success"]
+    assert result["stdout"].strip() == "2"
+    assert result["sandbox"] == "docker"
 
 
 def test_api_rejects_missing_token():
