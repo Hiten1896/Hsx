@@ -1,3 +1,49 @@
+const nativeFetch = window.fetch.bind(window);
+let authToken = sessionStorage.getItem('hsx-auth-token') || '';
+
+function showLogin() {
+  if (document.getElementById('hsx-login')) return;
+  const panel = document.createElement('form');
+  panel.id = 'hsx-login';
+  panel.setAttribute('aria-label', 'Hsx login');
+  panel.style.cssText = 'position:fixed;inset:0;z-index:1000;display:grid;place-items:center;background:#090b12;color:#f8fafc;font:14px monospace';
+  panel.innerHTML = '<div style="width:min(420px,90vw);padding:24px;border:1px solid #38bdf8;background:#111827"><h1>Hsx access</h1><p>Enter the bearer token printed by the Hsx server.</p><input id="hsx-token" type="password" autocomplete="off" required style="width:100%;padding:8px;background:#020617;color:#f8fafc;border:1px solid #64748b"><button style="margin-top:12px;padding:8px 14px" type="submit">Connect</button><p id="hsx-login-error" role="alert"></p></div>';
+  panel.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const input = panel.querySelector('#hsx-token');
+    const candidate = input.value.trim();
+    const response = await nativeFetch('/health', { headers: { Authorization: `Bearer ${candidate}` } });
+    if (!response.ok) {
+      panel.querySelector('#hsx-login-error').textContent = 'Invalid token.';
+      return;
+    }
+    authToken = candidate;
+    sessionStorage.setItem('hsx-auth-token', candidate);
+    panel.remove();
+    refreshState();
+  });
+  document.body.appendChild(panel);
+  panel.querySelector('#hsx-token').focus();
+}
+
+window.fetch = async (input, init = {}) => {
+  if (!authToken && String(input).includes('/api/')) {
+    showLogin();
+    throw new Error('Hsx authentication required');
+  }
+  const headers = new Headers(init.headers || {});
+  if (authToken) headers.set('Authorization', `Bearer ${authToken}`);
+  const response = await nativeFetch(input, { ...init, headers });
+  if (response.status === 401) {
+    authToken = '';
+    sessionStorage.removeItem('hsx-auth-token');
+    showLogin();
+  }
+  return response;
+};
+
+if (!authToken) showLogin();
+
 const state = {
   files: [],
   jobs: [],
