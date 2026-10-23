@@ -66,17 +66,17 @@ Keys are read only from `.env` and are never committed. Free-tier quotas, model 
 
 ### Multi-model answer panel
 
-For text-only requests, `HSX_PANEL_MODE=auto` sends the request to two configured providers in parallel, then sends both drafts to a third configured judge for critique and synthesis. Configure `HSX_PANEL_PROVIDERS` with 2–3 provider names such as `gemini,groq,openrouter`. If fewer than two are available, Hsx safely falls back to the normal ordered router. Tool-executing turns stay single-provider so side effects are never duplicated.
+For text-only requests, `HSX_PANEL_MODE=off` is the default. Set it to `auto` to send the request to two configured providers in parallel, then send both drafts to a third configured judge for critique and synthesis. Configure `HSX_PANEL_PROVIDERS` with 2–3 provider names such as `gemini,groq,openrouter`. If fewer than two are available, Hsx safely falls back to the normal ordered router. Tool-executing turns stay single-provider so side effects are never duplicated.
 
 ## Security model
 
 - API responses use a CORS allowlist, defaulting to the local web UI origins.
-- A bearer token is required whenever the server binds to a non-loopback host.
+- A bearer token is required for every request. Set `HSX_AUTH_TOKEN` explicitly or let Hsx generate and persist one in `data/auth.token` on first start.
 - `run_code` uses Docker first with no network, resource limits, a read-only root, and a temporary writable area. If Docker is unavailable, it uses a weaker subprocess fallback with a scrubbed environment and time/resource limits.
 - File-writing skills use a path jail so resolved paths remain inside their declared workspace directories; traversal and symlink escapes are rejected.
 - The LLM router supports Anthropic, Gemini, and Ollama with ordered fallbacks configured through `HSX_PROVIDER` and `HSX_FALLBACKS`; `/api/chat/stream` emits normalized SSE events.
 - Skills default to `confirm`, support `safe` and `dangerous` tiers, and are audited in append-only JSONL. Advisory skills request explicit consent, with session-level repeat suppression; `POST /api/stop` activates the global kill switch.
-- Phase 11 self-improvement is proposal-only: research and prototypes stay in `scratch/self_improvement/`, dependencies and production files are not changed automatically, strict tests must pass, and only explicit owner approval (`Hiten`) can authorize promotion.
+- Phase 11 self-improvement is proposal-only: research and prototypes stay in `scratch/self_improvement/`, dependencies and production files are not changed automatically, strict tests must pass, and approval/promotion require the separate operator token printed once at startup.
 
 ### Phase 11 workflow
 

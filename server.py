@@ -1,5 +1,7 @@
 import hmac
+import hashlib
 import json
+import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -27,7 +29,11 @@ TOOLS, SKILL_MAP = load_skills(str(ROOT / "skills"))
 HISTORY = []
 MEMORY = MemoryManager(MEMORY_DB)
 JOBS = JobQueue(JOBS_DB)
-IMPROVEMENTS = SelfImprovement(IMPROVEMENTS_DB)
+APPROVAL_TOKEN = secrets.token_urlsafe(32)
+IMPROVEMENTS = SelfImprovement(
+    IMPROVEMENTS_DB,
+    approval_token_hash=hashlib.sha256(APPROVAL_TOKEN.encode("utf-8")).hexdigest(),
+)
 
 
 class HsxHandler(BaseHTTPRequestHandler):
@@ -67,7 +73,7 @@ class HsxHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self._request_path()
-        if path.startswith("/api/") and not self._api_access_allowed():
+        if not self._api_access_allowed():
             return
         if path == "/health":
             self._json({"status": "ok"})
@@ -124,7 +130,7 @@ class HsxHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self._request_path()
-        if path.startswith("/api/") and not self._api_access_allowed():
+        if not self._api_access_allowed():
             return
         if path == "/api/chat":
             payload = self._body()
@@ -194,7 +200,9 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/improvements/") and path.endswith("/approve"):
             proposal_id = path.removeprefix("/api/improvements/").removesuffix("/approve")
             try:
-                proposal = IMPROVEMENTS.approve(proposal_id, str(self._body().get("owner", "")))
+                proposal = IMPROVEMENTS.approve(
+                    proposal_id, self.headers.get("X-HSX-Approval-Token", "")
+                )
             except (KeyError, ValueError, PermissionError) as error:
                 self._json({"error": str(error)}, 403)
                 return
@@ -207,7 +215,12 @@ class HsxHandler(BaseHTTPRequestHandler):
                 self._json({"error": "Promotion targets must be under agent, skills, interfaces, or prompts."}, 400)
                 return
             try:
-                proposal = IMPROVEMENTS.promote(proposal_id, str(payload.get("path", "")), BASE_DIR / target_name)
+                proposal = IMPROVEMENTS.promote(
+                    proposal_id,
+                    str(payload.get("path", "")),
+                    BASE_DIR / target_name,
+                    self.headers.get("X-HSX-Approval-Token", ""),
+                )
             except (KeyError, ValueError, PermissionError) as error:
                 self._json({"error": str(error)}, 403)
                 return
