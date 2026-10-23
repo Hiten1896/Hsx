@@ -76,7 +76,8 @@ def test_health_requires_api_auth():
     assert payload == {"status": "ok"}
 
 
-def test_run_code_does_not_use_substring_blocklist():
+def test_run_code_does_not_use_substring_blocklist(monkeypatch):
+    monkeypatch.setattr("skills.run_code.skill.SANDBOX", "subprocess")
     from skills.run_code.skill import run
 
     result = run("print(__import__('math').sqrt(9))")

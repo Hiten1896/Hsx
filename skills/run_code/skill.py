@@ -35,10 +35,13 @@ def _docker_available() -> bool:
 def _run_docker(code: str, workdir: Path) -> subprocess.CompletedProcess[str]:
     script = workdir / "script.py"
     script.write_text(code, encoding="utf-8")
+    workdir.chmod(0o755)
+    script.chmod(0o644)
     command = [
         "docker", "run", "--rm", "--network", "none",
         "--memory", "256m", "--cpus", "1", "--pids-limit", "64",
         "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
+        "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "--user", "65534:65534", "--mount",
         f"type=bind,src={workdir.resolve()},dst=/work,readonly",
         "python:3.11-slim", "python", "/work/script.py",
