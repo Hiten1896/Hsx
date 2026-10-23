@@ -1,5 +1,6 @@
 import ipaddress
 import os
+import secrets
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,7 +24,7 @@ FALLBACKS = tuple(
     for item in os.getenv("HSX_FALLBACKS", "ollama").split(",")
     if item.strip()
 )
-PANEL_MODE = os.getenv("HSX_PANEL_MODE", "auto").strip().lower()
+PANEL_MODE = os.getenv("HSX_PANEL_MODE", "off").strip().lower()
 PANEL_PROVIDERS = tuple(
     item.strip().lower()
     for item in os.getenv("HSX_PANEL_PROVIDERS", "gemini,groq,openrouter").split(",")
@@ -42,7 +43,28 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 MODE = os.getenv("HSX_MODE", "jarvis").strip().lower()
 HOST = os.getenv("HSX_HOST", "127.0.0.1").strip() or "127.0.0.1"
 PORT = int(os.getenv("HSX_PORT", "8000"))
-AUTH_TOKEN = os.getenv("HSX_AUTH_TOKEN", "")
+AUTH_TOKEN_FILE = DATA_DIR / "auth.token"
+
+
+def _load_or_create_auth_token() -> str:
+    configured = os.getenv("HSX_AUTH_TOKEN", "").strip()
+    if configured:
+        return configured
+    if AUTH_TOKEN_FILE.is_file():
+        token = AUTH_TOKEN_FILE.read_text(encoding="utf-8").strip()
+        if token:
+            return token
+    token = secrets.token_urlsafe(32)
+    AUTH_TOKEN_FILE.parent.mkdir(exist_ok=True)
+    AUTH_TOKEN_FILE.write_text(token + "\n", encoding="utf-8")
+    try:
+        AUTH_TOKEN_FILE.chmod(0o600)
+    except OSError:
+        pass
+    return token
+
+
+AUTH_TOKEN = _load_or_create_auth_token()
 ALLOWED_ORIGINS = tuple(
     origin.strip()
     for origin in os.getenv(
@@ -63,9 +85,6 @@ def is_loopback_host(host: str) -> bool:
     except ValueError:
         return False
 
-
-if not is_loopback_host(HOST) and not AUTH_TOKEN:
-    raise RuntimeError("HSX_AUTH_TOKEN is required when HSX_HOST is not loopback.")
 
 for directory in (OUTPUTS_DIR, SCRATCH_DIR, UPLOADS_DIR, MEMORY_DIR, DATA_DIR):
     directory.mkdir(exist_ok=True)

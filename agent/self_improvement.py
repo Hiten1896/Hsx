@@ -1,4 +1,6 @@
 import json
+import hashlib
+import hmac
 import os
 import shutil
 import sqlite3
@@ -14,8 +16,9 @@ from config import DATA_DIR, SCRATCH_DIR
 class SelfImprovement:
     """Proposal-only self-improvement pipeline; production changes require owner approval."""
 
-    def __init__(self, database_path: Path | None = None):
+    def __init__(self, database_path: Path | None = None, approval_token_hash: str = ""):
         self.database_path = database_path or DATA_DIR / "improvements.db"
+        self.approval_token_hash = approval_token_hash
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.database_path) as connection:
             connection.execute(
@@ -101,12 +104,13 @@ class SelfImprovement:
             )
         return self._get(proposal_id)
 
-    def approve(self, proposal_id: str, owner: str) -> dict:
+    def approve(self, proposal_id: str, approval_token: str) -> dict:
         proposal = self._get(proposal_id)
         if proposal is None:
             raise KeyError("Proposal not found.")
-        if owner.strip() != "Hiten":
-            raise PermissionError("Only the configured owner can approve self-improvements.")
+        supplied_hash = hashlib.sha256(approval_token.encode("utf-8")).hexdigest()
+        if not self.approval_token_hash or not hmac.compare_digest(supplied_hash, self.approval_token_hash):
+            raise PermissionError("A valid approval token is required.")
         if proposal["status"] != "awaiting_approval" or not all(check["passed"] for check in proposal["checks"]):
             raise ValueError("Proposal must pass strict checks before approval.")
         with sqlite3.connect(self.database_path) as connection:
@@ -116,10 +120,13 @@ class SelfImprovement:
             )
         return self._get(proposal_id)
 
-    def promote(self, proposal_id: str, relative_file: str, target: Path) -> dict:
+    def promote(self, proposal_id: str, relative_file: str, target: Path, approval_token: str) -> dict:
         proposal = self._get(proposal_id)
         if proposal is None:
             raise KeyError("Proposal not found.")
+        supplied_hash = hashlib.sha256(approval_token.encode("utf-8")).hexdigest()
+        if not self.approval_token_hash or not hmac.compare_digest(supplied_hash, self.approval_token_hash):
+            raise PermissionError("A valid approval token is required.")
         if proposal["status"] != "approved":
             raise PermissionError("Only owner-approved proposals can be promoted.")
         source = safe_path(Path(proposal["sandbox"]), relative_file)

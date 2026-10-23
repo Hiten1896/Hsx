@@ -64,11 +64,13 @@ def test_api_requires_bearer_token(monkeypatch):
     assert "Authentication" in payload["error"]
 
 
-def test_health_is_available_without_api_auth():
+def test_health_requires_api_auth():
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.HsxHandler)
     thread = threading.Thread(target=httpd.handle_request)
     thread.start()
-    status, payload = request(f"http://127.0.0.1:{httpd.server_port}", "/health")
+    status, payload = request(
+        f"http://127.0.0.1:{httpd.server_port}", "/health", token=server.AUTH_TOKEN
+    )
     thread.join(timeout=2)
     assert status == 200
     assert payload == {"status": "ok"}
