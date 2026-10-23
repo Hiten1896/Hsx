@@ -1,16 +1,17 @@
 from pathlib import Path
-import hashlib
 
 import pytest
 
+from agent.approval import ApprovalGuard
 from agent.self_improvement import SelfImprovement
 
 
 def test_proposal_requires_tests_and_owner_approval(tmp_path: Path):
     approval_token = "test-approval-token"
+    guard = ApprovalGuard(tmp_path / "owner.pin", approval_token)
     manager = SelfImprovement(
         tmp_path / "improvements.db",
-        hashlib.sha256(approval_token.encode()).hexdigest(),
+        guard,
     )
     proposal = manager.create("Better parser", "Improve parsing safely.")
     manager.prototype(proposal["id"], "test_feature.py", "def test_feature():\n    assert 2 + 2 == 4\n")

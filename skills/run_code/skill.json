@@ -1,1 +1,1 @@
-{"name":"run_code","description":"Executes Python code in a local sandbox and returns stdout, stderr, and errors. Use for calculations, data processing, or testing code.","input_schema":{"type":"object","properties":{"code":{"type":"string"}},"required":["code"]}}
+{"name":"run_code","description":"Executes Python code in a local sandbox and returns stdout, stderr, and errors. Docker is the only strong isolation; the fallback is a restricted confirm-tier subprocess.","risk":"confirm","input_schema":{"type":"object","properties":{"code":{"type":"string"}},"required":["code"]}}

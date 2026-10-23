@@ -1,12 +1,12 @@
 import hmac
-import hashlib
 import json
-import secrets
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from agent.jobs import JobQueue
+from agent.approval import ApprovalGuard
 from agent.memory import MemoryManager
 from agent.orchestrator import run_agent
 from agent.policy import POLICY
@@ -29,10 +29,14 @@ TOOLS, SKILL_MAP = load_skills(str(ROOT / "skills"))
 HISTORY = []
 MEMORY = MemoryManager(MEMORY_DB)
 JOBS = JobQueue(JOBS_DB)
-APPROVAL_TOKEN = secrets.token_urlsafe(32)
+APPROVAL_GUARD = ApprovalGuard(
+    Path.home() / ".hsx" / "owner.pin",
+    os.getenv("HSX_OWNER_PIN"),
+)
+POLICY.approval_guard = APPROVAL_GUARD
 IMPROVEMENTS = SelfImprovement(
     IMPROVEMENTS_DB,
-    approval_token_hash=hashlib.sha256(APPROVAL_TOKEN.encode("utf-8")).hexdigest(),
+    approval_guard=APPROVAL_GUARD,
 )
 
 
@@ -142,6 +146,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                 message, HISTORY, TOOLS, SKILL_MAP,
                 session_id=str(payload.get("session_id", "default")),
                 approvals=payload.get("approvals"),
+                sensitive=bool(payload.get("sensitive", False)),
             )
             self._json({"response": response, "outputs": self._recent_outputs()})
         elif path == "/api/stop":
@@ -201,7 +206,7 @@ class HsxHandler(BaseHTTPRequestHandler):
             proposal_id = path.removeprefix("/api/improvements/").removesuffix("/approve")
             try:
                 proposal = IMPROVEMENTS.approve(
-                    proposal_id, self.headers.get("X-HSX-Approval-Token", "")
+                    proposal_id, self.headers.get("X-HSX-Owner-PIN", "")
                 )
             except (KeyError, ValueError, PermissionError) as error:
                 self._json({"error": str(error)}, 403)
@@ -219,7 +224,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                     proposal_id,
                     str(payload.get("path", "")),
                     BASE_DIR / target_name,
-                    self.headers.get("X-HSX-Approval-Token", ""),
+                    self.headers.get("X-HSX-Owner-PIN", ""),
                 )
             except (KeyError, ValueError, PermissionError) as error:
                 self._json({"error": str(error)}, 403)

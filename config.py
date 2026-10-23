@@ -13,6 +13,7 @@ SCRATCH_DIR = BASE_DIR / "scratch"
 UPLOADS_DIR = BASE_DIR / "uploads"
 MEMORY_DIR = BASE_DIR / "memory"
 DATA_DIR = BASE_DIR / "data"
+ENV_FILE = BASE_DIR / ".env"
 MEMORY_DB = DATA_DIR / "memory.db"
 JOBS_DB = DATA_DIR / "jobs.db"
 IMPROVEMENTS_DB = DATA_DIR / "improvements.db"
@@ -47,18 +48,18 @@ AUTH_TOKEN_FILE = DATA_DIR / "auth.token"
 
 
 def _load_or_create_auth_token() -> str:
+    global AUTH_TOKEN_GENERATED
     configured = os.getenv("HSX_AUTH_TOKEN", "").strip()
     if configured:
+        AUTH_TOKEN_GENERATED = False
         return configured
-    if AUTH_TOKEN_FILE.is_file():
-        token = AUTH_TOKEN_FILE.read_text(encoding="utf-8").strip()
-        if token:
-            return token
     token = secrets.token_urlsafe(32)
-    AUTH_TOKEN_FILE.parent.mkdir(exist_ok=True)
-    AUTH_TOKEN_FILE.write_text(token + "\n", encoding="utf-8")
+    AUTH_TOKEN_GENERATED = True
+    existing = ENV_FILE.read_text(encoding="utf-8") if ENV_FILE.exists() else ""
+    lines = [line for line in existing.splitlines() if not line.startswith("HSX_AUTH_TOKEN=")]
+    ENV_FILE.write_text("\n".join([*lines, f"HSX_AUTH_TOKEN={token}"]) + "\n", encoding="utf-8")
     try:
-        AUTH_TOKEN_FILE.chmod(0o600)
+        ENV_FILE.chmod(0o600)
     except OSError:
         pass
     return token

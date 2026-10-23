@@ -1,6 +1,4 @@
 import json
-import hashlib
-import hmac
 import os
 import shutil
 import sqlite3
@@ -9,6 +7,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from agent.approval import ApprovalGuard
 from agent.security import safe_path
 from config import DATA_DIR, SCRATCH_DIR
 
@@ -16,9 +15,9 @@ from config import DATA_DIR, SCRATCH_DIR
 class SelfImprovement:
     """Proposal-only self-improvement pipeline; production changes require owner approval."""
 
-    def __init__(self, database_path: Path | None = None, approval_token_hash: str = ""):
+    def __init__(self, database_path: Path | None = None, approval_guard: ApprovalGuard | None = None):
         self.database_path = database_path or DATA_DIR / "improvements.db"
-        self.approval_token_hash = approval_token_hash
+        self.approval_guard = approval_guard
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.database_path) as connection:
             connection.execute(
@@ -104,13 +103,12 @@ class SelfImprovement:
             )
         return self._get(proposal_id)
 
-    def approve(self, proposal_id: str, approval_token: str) -> dict:
+    def approve(self, proposal_id: str, pin: str) -> dict:
         proposal = self._get(proposal_id)
         if proposal is None:
             raise KeyError("Proposal not found.")
-        supplied_hash = hashlib.sha256(approval_token.encode("utf-8")).hexdigest()
-        if not self.approval_token_hash or not hmac.compare_digest(supplied_hash, self.approval_token_hash):
-            raise PermissionError("A valid approval token is required.")
+        if self.approval_guard is None or not self.approval_guard.verify(pin):
+            raise PermissionError("A valid owner PIN is required.")
         if proposal["status"] != "awaiting_approval" or not all(check["passed"] for check in proposal["checks"]):
             raise ValueError("Proposal must pass strict checks before approval.")
         with sqlite3.connect(self.database_path) as connection:
@@ -120,13 +118,12 @@ class SelfImprovement:
             )
         return self._get(proposal_id)
 
-    def promote(self, proposal_id: str, relative_file: str, target: Path, approval_token: str) -> dict:
+    def promote(self, proposal_id: str, relative_file: str, target: Path, pin: str) -> dict:
         proposal = self._get(proposal_id)
         if proposal is None:
             raise KeyError("Proposal not found.")
-        supplied_hash = hashlib.sha256(approval_token.encode("utf-8")).hexdigest()
-        if not self.approval_token_hash or not hmac.compare_digest(supplied_hash, self.approval_token_hash):
-            raise PermissionError("A valid approval token is required.")
+        if self.approval_guard is None or not self.approval_guard.verify(pin):
+            raise PermissionError("A valid owner PIN is required.")
         if proposal["status"] != "approved":
             raise PermissionError("Only owner-approved proposals can be promoted.")
         source = safe_path(Path(proposal["sandbox"]), relative_file)
