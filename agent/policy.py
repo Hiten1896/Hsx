@@ -7,15 +7,17 @@ from pathlib import Path
 from typing import Any
 
 from config import BASE_DIR
+from agent.approval import ApprovalGuard
 
 
 class PolicyEngine:
-    def __init__(self, audit_path: Path | None = None):
+    def __init__(self, audit_path: Path | None = None, approval_guard: ApprovalGuard | None = None):
         self.audit_path = audit_path or (BASE_DIR / "logs" / "audit.jsonl")
         self.audit_path.parent.mkdir(parents=True, exist_ok=True)
         self._acknowledged: dict[tuple[str, str], str] = {}
         self._lock = threading.Lock()
         self._stopped = threading.Event()
+        self.approval_guard = approval_guard
 
     def stop_all(self) -> None:
         self._stopped.set()
@@ -45,7 +47,7 @@ class PolicyEngine:
         with self._lock, self.audit_path.open("a", encoding="utf-8") as log:
             log.write(json.dumps(entry, sort_keys=True) + "\n")
 
-    def decide(self, skill: dict, arguments: dict, session: str, approved: bool | None = None) -> dict:
+    def decide(self, skill: dict, arguments: dict, session: str, approved: bool | str | None = None) -> dict:
         risk = skill.get("risk", "confirm")
         advisory = str(skill.get("advisory", "")).strip()
         if len(advisory) >= 300:
@@ -59,6 +61,8 @@ class PolicyEngine:
             self._audit(session, skill["name"], arguments, risk, "cancel", "denied", advisory)
             return {"allowed": False, "status": "cancelled"}
         if approved is True:
+            approved = None
+        if isinstance(approved, str) and self.approval_guard is not None and self.approval_guard.verify(approved):
             if risk == "dangerous" and os.getenv("HSX_ALLOW_DANGEROUS") != "1":
                 self._audit(session, skill["name"], arguments, risk, "deny", "dangerous_disabled", advisory)
                 return {"allowed": False, "status": "dangerous_disabled"}

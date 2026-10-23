@@ -5,7 +5,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from config import SCRATCH_DIR, SANDBOX
+from config import SANDBOX
 
 try:
     import resource
@@ -51,7 +51,15 @@ def _run_docker(code: str, workdir: Path) -> subprocess.CompletedProcess[str]:
 
 def _run_subprocess(code: str, workdir: Path) -> subprocess.CompletedProcess[str]:
     script = workdir / "script.py"
-    script.write_text(code, encoding="utf-8")
+    guarded_code = (
+        "import socket\n"
+        "class _NoNetwork:\n"
+        "    def __init__(self, *args, **kwargs): raise OSError('network disabled in subprocess fallback')\n"
+        "socket.socket = _NoNetwork\n"
+        "socket.create_connection = lambda *args, **kwargs: (_ for _ in ()).throw(OSError('network disabled in subprocess fallback'))\n"
+        + code
+    )
+    script.write_text(guarded_code, encoding="utf-8")
     preexec_fn = None
     if resource is not None:
         def limit_resources() -> None:
@@ -71,7 +79,7 @@ def run(code: str) -> dict:
     if not isinstance(code, str):
         return {"success": False, "error": "Code must be a string."}
     try:
-        with tempfile.TemporaryDirectory(prefix="hsx-run-", dir=SCRATCH_DIR) as directory:
+        with tempfile.TemporaryDirectory(prefix="hsx-run-") as directory:
             workdir = Path(directory)
             use_docker = SANDBOX == "docker" or (SANDBOX == "auto" and _docker_available())
             if SANDBOX == "docker" and not _docker_available():

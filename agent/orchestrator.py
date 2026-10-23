@@ -14,13 +14,18 @@ def _text_from_response(response) -> str:
     return "\n".join(block.text for block in response.content if getattr(block, "type", "") == "text")
 
 
-def run_agent(user_input: str, conversation_history: list, tools: list, skill_map: dict, max_iterations: int = 10, session_id: str = "default", approvals: dict | None = None):
+def run_agent(user_input: str, conversation_history: list, tools: list, skill_map: dict, max_iterations: int = 10, session_id: str = "default", approvals: dict | None = None, sensitive: bool = False):
     MEMORY.record_message("default", "user", user_input)
     conversation_history.append({"role": "user", "content": user_input})
     for _ in range(max_iterations):
         if POLICY.is_stopped():
             return "This run was stopped by the kill switch.", conversation_history
-        response = call_llm(conversation_history, tools, MEMORY.prompt_context(user_input))
+        response = call_llm(
+            conversation_history,
+            tools,
+            MEMORY.prompt_context(user_input),
+            sensitive=sensitive,
+        )
         if response is None:
             return _local_response(user_input, conversation_history), conversation_history
         blocks = getattr(response, "content", [])

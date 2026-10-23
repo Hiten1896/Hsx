@@ -20,7 +20,7 @@ class NormalizedResponse:
     stop_reason: str = "stop"
 
 
-def call_llm(messages: list, tools: list, memory_context: str = ""):
+def call_llm(messages: list, tools: list, memory_context: str = "", sensitive: bool = False):
     system = (
         "You are Hsx, a concise and capable local workspace agent. "
         "Only call a tool when the request requires file generation, file reading, "
@@ -37,7 +37,7 @@ def call_llm(messages: list, tools: list, memory_context: str = ""):
         if not tools:
             from config import PANEL_MODE, PANEL_PROVIDERS
 
-            if PANEL_MODE in {"auto", "always"}:
+            if not sensitive and PANEL_MODE in {"auto", "always"}:
                 panel = router.panel(list(PANEL_PROVIDERS))
         events = list((panel or router).generate(request))
     except ProviderError:

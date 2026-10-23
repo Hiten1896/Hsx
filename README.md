@@ -71,12 +71,13 @@ For text-only requests, `HSX_PANEL_MODE=off` is the default. Set it to `auto` to
 ## Security model
 
 - API responses use a CORS allowlist, defaulting to the local web UI origins.
-- A bearer token is required for every request. Set `HSX_AUTH_TOKEN` explicitly or let Hsx generate and persist one in `data/auth.token` on first start.
-- `run_code` uses Docker first with no network, resource limits, a read-only root, and a temporary writable area. If Docker is unavailable, it uses a weaker subprocess fallback with a scrubbed environment and time/resource limits.
+- A bearer token is required for every request. Set `HSX_AUTH_TOKEN` explicitly or let Hsx generate a 32-byte token, save it to `.env`, and print it once on first start.
+- Owner approval uses a separate salted scrypt PIN hash stored outside the workspace, with rate limiting and lockout. The PIN is never put in the agent environment or memory.
+- `run_code` uses Docker first with no network, resource limits, a read-only root, and a temporary writable area. If Docker is unavailable, it uses a weaker confirm-tier subprocess fallback with a scrubbed environment, temporary working directory, and best-effort network blocking; Docker is the only strong isolation.
 - File-writing skills use a path jail so resolved paths remain inside their declared workspace directories; traversal and symlink escapes are rejected.
 - The LLM router supports Anthropic, Gemini, and Ollama with ordered fallbacks configured through `HSX_PROVIDER` and `HSX_FALLBACKS`; `/api/chat/stream` emits normalized SSE events.
 - Skills default to `confirm`, support `safe` and `dangerous` tiers, and are audited in append-only JSONL. Advisory skills request explicit consent, with session-level repeat suppression; `POST /api/stop` activates the global kill switch.
-- Phase 11 self-improvement is proposal-only: research and prototypes stay in `scratch/self_improvement/`, dependencies and production files are not changed automatically, strict tests must pass, and approval/promotion require the separate operator token printed once at startup.
+- Phase 11 self-improvement is proposal-only: research and prototypes stay in `scratch/self_improvement/`, dependencies and production files are not changed automatically, strict tests must pass, and approval/promotion require the separate owner PIN.
 
 ### Phase 11 workflow
 
