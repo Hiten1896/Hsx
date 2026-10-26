@@ -1,0 +1,22 @@
+[Unit]
+Description=Hsx policy broker
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/hsx
+ExecStart=/opt/hsx/.venv/bin/python -m broker
+Restart=always
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/opt/hsx /etc/hsx
+ReadWritePaths=/run/hsx /var/log/hsx
+RuntimeDirectory=hsx
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

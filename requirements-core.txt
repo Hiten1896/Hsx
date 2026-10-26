@@ -2,6 +2,7 @@
 anthropic
 # Environment configuration.
 python-dotenv
+PyYAML
 # Document and spreadsheet skills.
 python-docx
 openpyxl
