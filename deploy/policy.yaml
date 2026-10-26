@@ -1,0 +1,52 @@
+autonomy: shadow
+actions:
+  service:
+    tier: auto
+    constraints:
+      allowed_units: ["hsx-*"]
+  apt_install:
+    tier: approve
+    constraints:
+      allowed_packages: ["[A-Za-z0-9][A-Za-z0-9+_.-]*"]
+  apt_remove:
+    tier: approve
+    constraints:
+      allowed_packages: ["[A-Za-z0-9][A-Za-z0-9+_.-]*"]
+  pip_install:
+    tier: auto
+    constraints:
+      allowed_packages: ["[A-Za-z0-9][A-Za-z0-9+_.-]*"]
+  disk_cleanup:
+    tier: auto
+    constraints:
+      allowed_targets: ["apt-cache", "old-logs", "outputs"]
+  journal_read:
+    tier: auto
+    constraints:
+      allowed_units: ["hsx-*"]
+  system_stats:
+    tier: auto
+  network_status:
+    tier: auto
+  tailscale_status:
+    tier: auto
+  schedule_timer:
+    tier: auto
+    constraints:
+      allowed_names: ["hsx-*"]
+  reboot:
+    tier: approve
+  wifi_reconnect:
+    tier: auto
+  firewall_change:
+    tier: deny
+  ssh_change:
+    tier: deny
+  user_change:
+    tier: deny
+  sudoers_change:
+    tier: deny
+  tailscale_change:
+    tier: deny
+  policy_change:
+    tier: deny
