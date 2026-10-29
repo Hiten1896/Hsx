@@ -1,0 +1,15 @@
+{
+  "name": "ask_user",
+  "description": "Pause a task and ask Hiten a short, specific question when required details are ambiguous or a guess could waste time.",
+  "risk": "safe",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "question": {"type": "string"},
+      "options": {"type": "array", "items": {"type": "string"}},
+      "allow_free_text": {"type": "boolean"},
+      "timeout_hours": {"type": "integer"}
+    },
+    "required": ["question"]
+  }
+}

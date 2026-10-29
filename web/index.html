@@ -3,7 +3,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Local AI Media Workspace</title>
+<meta name="theme-color" content="#131316"/>
+<link rel="manifest" href="/web/manifest.webmanifest"/>
+<link rel="icon" href="/web/icon.svg" type="image/svg+xml"/>
+<title>Hsx Shared Workspace</title>
 <!-- Fonts: Inter & JetBrains Mono -->
 <link href="https://fonts.googleapis.com" rel="preconnect"/>
 <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
@@ -140,7 +143,7 @@
 <div class="flex items-center gap-3">
 <div class="flex items-center gap-2">
 <span class="material-symbols-outlined text-primary text-[20px]" data-icon="auto_videocam" data-weight="fill">auto_videocam</span>
-<span class="text-headline-sm font-headline-sm font-semibold tracking-tight text-on-surface dark:text-on-surface">Local AI Media Workspace</span>
+<span class="text-headline-sm font-headline-sm font-semibold tracking-tight text-on-surface dark:text-on-surface">Hsx Shared Workspace</span>
 <span class="text-telemetry-xs font-telemetry-xs bg-surface-container-high text-on-surface-variant px-1.5 py-0.5 rounded border border-outline-variant">v2.4.1 Local</span>
 </div>
 <div class="h-4 w-[1px] bg-outline-variant"></div>
@@ -688,6 +691,46 @@
             </button>
 </div>
 </div>
+<section class="space-y-2" aria-label="Conversation">
+  <div class="text-label-caps uppercase text-outline">Hsx conversation</div>
+  <div id="chat-history" class="space-y-2 max-h-48 overflow-y-auto custom-scrollbar" role="log" aria-live="polite"></div>
+  <div id="question-card" class="hidden rounded border border-primary/50 bg-surface-container p-3 space-y-2" aria-live="polite">
+    <div id="question-text" class="text-body-sm text-on-surface"></div>
+    <div id="question-options" class="flex flex-wrap gap-2"></div>
+    <form id="question-form" class="flex gap-2">
+      <input id="question-answer" class="min-w-0 flex-1 rounded bg-surface-container-lowest border border-outline-variant px-2 py-1 text-body-sm" aria-label="Your answer"/>
+      <button class="px-3 py-1 rounded bg-primary text-surface-container-lowest text-label-caps uppercase" type="submit">Reply</button>
+    </form>
+    <div id="question-status" class="text-telemetry-xs text-outline"></div>
+  </div>
+</section>
+<section class="space-y-2" aria-label="Workspace files">
+  <div class="flex items-center justify-between">
+    <span class="text-label-caps uppercase text-outline">Shared workspace files</span>
+    <button id="files-refresh" class="text-telemetry-xs text-secondary hover:underline" type="button">Refresh</button>
+  </div>
+  <div class="flex gap-2">
+    <input id="files-search" class="min-w-0 flex-1 rounded bg-surface-container-lowest border border-outline-variant px-2 py-1 text-body-sm" placeholder="Search files (typos OK)" aria-label="Search workspace files"/>
+    <select id="files-type" class="rounded bg-surface-container-lowest border border-outline-variant px-1 text-body-sm" aria-label="Filter by file type">
+      <option value="">All types</option><option>pdf</option><option>docx</option><option>xlsx</option><option>csv</option><option>txt</option><option>md</option><option>png</option><option>jpg</option>
+    </select>
+  </div>
+  <div id="files-list" class="space-y-1 max-h-48 overflow-y-auto custom-scrollbar"></div>
+  <div id="files-preview" class="hidden rounded border border-outline-variant bg-surface-container-low p-2 max-h-64 overflow-auto"></div>
+</section>
+<section class="space-y-2" aria-label="Notifications">
+  <div class="flex items-center justify-between">
+    <span class="text-label-caps uppercase text-outline">Notifications <span id="notification-unread" class="text-secondary">0</span></span>
+    <button id="notifications-read-all" class="text-telemetry-xs text-secondary hover:underline" type="button">Mark all read</button>
+  </div>
+  <div id="notification-list" class="space-y-1 max-h-36 overflow-y-auto custom-scrollbar"></div>
+  <div class="flex flex-wrap gap-2">
+    <button id="push-enable" class="px-2 py-1 rounded border border-outline-variant text-telemetry-xs" type="button">Enable push</button>
+    <button id="push-disable" class="px-2 py-1 rounded border border-outline-variant text-telemetry-xs" type="button">Disable push</button>
+    <button id="push-test" class="px-2 py-1 rounded border border-outline-variant text-telemetry-xs" type="button">Test push</button>
+  </div>
+  <div id="push-status" class="text-telemetry-xs text-outline" role="status"></div>
+</section>
 <!-- Live AI Reasoning Log (Collapsible Terminal) -->
 <div class="space-y-1.5">
 <div class="flex items-center justify-between text-label-caps font-label-caps uppercase text-outline">

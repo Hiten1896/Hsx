@@ -21,6 +21,9 @@ function showLogin() {
     sessionStorage.setItem('hsx-auth-token', candidate);
     panel.remove();
     refreshState();
+    openJobFromUrl();
+    startNotificationStream();
+    touchPushActivity();
   });
   document.body.appendChild(panel);
   panel.querySelector('#hsx-token').focus();
@@ -46,8 +49,12 @@ if (!authToken) showLogin();
 
 const state = {
   files: [],
+  workspaceFiles: [],
   jobs: [],
   facts: [],
+  notifications: [],
+  unread: 0,
+  activeQuestion: null,
 };
 
 const assetList = document.getElementById('asset-list');
@@ -60,6 +67,11 @@ const aiPrompt = document.getElementById('ai-prompt');
 const runPromptBtn = document.getElementById('run-prompt');
 const renderBtn = document.getElementById('render-video-btn');
 const ingestBtn = document.getElementById('ingest-media-btn');
+const chatHistory = document.getElementById('chat-history');
+const questionCard = document.getElementById('question-card');
+const filesList = document.getElementById('files-list');
+const filesPreview = document.getElementById('files-preview');
+const notificationList = document.getElementById('notification-list');
 let speechMuted = false;
 
 function escapeHtml(value) {
@@ -127,7 +139,15 @@ function renderJobs() {
     return;
   }
 
-  jobList.innerHTML = state.jobs.map((job) => `
+  jobList.innerHTML = state.jobs.map((job) => {
+    const outputName = job.result && job.result.output_path
+      ? String(job.result.output_path).split(/[\\/]/).pop()
+      : '';
+    const outputFile = state.workspaceFiles.find((file) => file.name === outputName);
+    const outputLink = outputFile
+      ? `<button type="button" data-download-path="${escapeHtml(outputFile.path)}" class="text-secondary hover:underline font-mono text-[10px]">Download output</button>`
+      : '';
+    return `
     <div class="bg-surface-container-low border border-outline-variant rounded p-2.5 space-y-2">
       <div class="flex items-center justify-between">
         <div class="text-code-sm font-code-sm font-semibold text-on-surface truncate">${escapeHtml(job.project_id || 'video-job')}</div>
@@ -139,9 +159,17 @@ function renderJobs() {
         <span>${escapeHtml(job.job_id ? `Job ${job.job_id.slice(0, 6)}` : 'Job')}</span>
         <span>${escapeHtml(job.updated_at ? new Date(job.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'just now')}</span>
       </div>
-      ${job.result && job.result.output_path ? `<a href="/api/outputs/${encodeURIComponent(job.result.output_path.split('/').pop())}" class="text-secondary hover:underline font-mono text-[10px]">Download output</a>` : ''}
+      ${outputLink}
     </div>
-  `).join('');
+  `;
+  }).join('');
+  jobList.querySelectorAll('[data-download-path]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const path = button.getAttribute('data-download-path');
+      const file = state.workspaceFiles.find((candidate) => candidate.path === path);
+      if (file) downloadFile(file);
+    });
+  });
 
   setJobStatusText();
 }
@@ -183,24 +211,44 @@ function renderTranscript() {
 
 async function refreshState() {
   try {
-    const [filesRes, memoryRes, jobsRes] = await Promise.all([
+    const [filesRes, workspaceRes, memoryRes, jobsRes, notificationsRes, askJobsRes] = await Promise.all([
       fetch('/api/outputs'),
+      fetch('/api/files?limit=100'),
       fetch('/api/memory'),
       fetch('/api/video/jobs'),
+      fetch('/api/notifications'),
+      fetch('/api/ask-jobs'),
     ]);
 
     const filesData = await filesRes.json();
+    const workspaceData = await workspaceRes.json();
     const memoryData = await memoryRes.json();
     const jobsData = await jobsRes.json();
+    const notificationsData = await notificationsRes.json();
+    const askJobsData = await askJobsRes.json();
 
     state.files = Array.isArray(filesData.files) ? filesData.files : [];
+    state.workspaceFiles = Array.isArray(workspaceData.files) ? workspaceData.files : [];
     state.facts = Array.isArray(memoryData.facts) ? memoryData.facts : [];
     state.jobs = Array.isArray(jobsData.jobs) ? jobsData.jobs : [];
+    state.notifications = Array.isArray(notificationsData.notifications) ? notificationsData.notifications : [];
+    state.unread = Number(notificationsData.unread || 0);
 
     renderAssets();
     renderMemory();
     renderJobs();
     renderTranscript();
+    renderWorkspaceFiles();
+    renderNotifications();
+    if (!state.activeQuestion) {
+      const active = (Array.isArray(askJobsData.jobs) ? askJobsData.jobs : [])
+        .find((job) => ['running', 'waiting_for_user'].includes(job.state));
+      if (active) {
+        state.activeQuestion = active;
+        if (active.state === 'waiting_for_user') showQuestion(active);
+        pollAskJob(active.id);
+      }
+    }
   } catch (error) {
     console.error('Failed to refresh dashboard state', error);
   }
@@ -229,52 +277,383 @@ async function uploadMedia(event) {
   await refreshState();
 }
 
+function appendChatMessage(role, text) {
+  if (!chatHistory) return;
+  const entry = document.createElement('div');
+  entry.className = 'rounded border border-outline-variant bg-surface-container-low p-2 text-body-sm';
+  const label = document.createElement('strong');
+  label.className = 'mr-2 text-secondary';
+  label.textContent = role === 'user' ? 'You' : 'Hsx';
+  const message = document.createElement('span');
+  message.textContent = text;
+  entry.append(label, message);
+  chatHistory.appendChild(entry);
+  chatHistory.scrollTop = chatHistory.scrollHeight;
+}
+
 async function submitPrompt() {
   if (!aiPrompt || !aiPrompt.value.trim()) return;
+  const message = aiPrompt.value.trim();
+  aiPrompt.value = '';
+  appendChatMessage('user', message);
+  appendChatMessage('assistant', `Understood: I’ll work on: ${message}`);
+  try {
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, session_id: 'web' }),
+    });
+    const data = await response.json();
+    if (!response.ok && response.status !== 202) throw new Error(data.error || 'The request could not be completed.');
+    if (data.job) {
+      state.activeQuestion = data.job;
+      if (data.job.state === 'waiting_for_user') showQuestion(data.job);
+      pollAskJob(data.job.id);
+    } else if (data.response) {
+      appendChatMessage('assistant', data.response);
+    }
+    await refreshState();
+  } catch (error) {
+    appendChatMessage('assistant', `I could not start that request: ${error.message}`);
+  }
+}
 
+async function submitVideoPrompt() {
+  if (!aiPrompt || !aiPrompt.value.trim()) return;
   const payload = {
     project_id: 'project_video',
     prompt: aiPrompt.value.trim(),
-    source_files: state.files.map((file) => file.name),
+    source_files: state.files.map((file) => file.path),
     output_filename: 'edited_video.mp4',
   };
-
   try {
     const response = await fetch('/api/video/jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-
     const data = await response.json();
-    if (data && data.job) {
+    if (!response.ok) throw new Error(data.error || 'Could not create the video job.');
+    if (data.job) {
       aiPrompt.value = '';
       await refreshState();
     }
+  } catch (error) {
+    appendChatMessage('assistant', `I could not create the video job: ${error.message}`);
+  }
+}
 
-    function addVoiceControls() {
-      if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) return;
-      const controls = document.createElement('div');
-      controls.className = 'fixed bottom-3 right-3 z-40 flex gap-2';
-      controls.innerHTML = '<button id="voice-talk" class="px-3 py-2 rounded bg-primary text-on-primary text-xs">Push to talk</button><button id="voice-mute" class="px-3 py-2 rounded bg-surface-container text-xs">Mute</button>';
-      document.body.appendChild(controls);
-      const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      const recognition = new Recognition();
-      recognition.lang = 'en-US';
-      recognition.onresult = (event) => {
-        const text = event.results[0][0].transcript;
-        if (aiPrompt) aiPrompt.value = text;
-        submitPrompt();
-      };
-      document.getElementById('voice-talk').addEventListener('click', () => recognition.start());
-      document.getElementById('voice-mute').addEventListener('click', (event) => {
-        speechMuted = !speechMuted;
-        event.currentTarget.textContent = speechMuted ? 'Unmute' : 'Mute';
-      });
+function showQuestion(job) {
+  if (!questionCard || !job) return;
+  state.activeQuestion = job;
+  questionCard.classList.remove('hidden');
+  document.getElementById('question-text').textContent = job.question || 'Hsx needs more information.';
+  document.getElementById('question-status').textContent = `Question ${job.question_count || 1} of 3`;
+  const options = document.getElementById('question-options');
+  options.replaceChildren();
+  (job.options || []).forEach((choice) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'rounded border border-outline-variant px-2 py-1 text-body-sm hover:border-primary';
+    button.textContent = choice;
+    button.addEventListener('click', () => {
+      const input = document.getElementById('question-answer');
+      input.value = choice;
+      if (!job.allow_free_text) document.getElementById('question-form').requestSubmit();
+    });
+    options.appendChild(button);
+  });
+  const answer = document.getElementById('question-answer');
+  answer.hidden = !job.allow_free_text && !(job.options || []).length;
+}
+
+async function pollAskJob(jobId) {
+  while (state.activeQuestion && state.activeQuestion.id === jobId) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    try {
+      const response = await fetch(`/api/ask-jobs/${encodeURIComponent(jobId)}`);
+      const data = await response.json();
+      const job = data.job;
+      if (!job) return;
+      if (job.state === 'waiting_for_user') {
+        showQuestion(job);
+      } else if (['done', 'failed', 'cancelled'].includes(job.state)) {
+        state.activeQuestion = null;
+        questionCard.classList.add('hidden');
+        appendChatMessage('assistant', job.result || job.error || 'The task was cancelled.');
+        await refreshState();
+        return;
+      }
+    } catch (error) {
+      console.error('Could not refresh the pending question', error);
+    }
+  }
+}
+
+function renderWorkspaceFiles() {
+  if (!filesList) return;
+  filesList.replaceChildren();
+  for (const file of state.workspaceFiles) {
+    const row = document.createElement('div');
+    row.className = 'flex items-center justify-between gap-2 rounded bg-surface-container-low px-2 py-1 text-body-sm';
+    const label = document.createElement('span');
+    label.className = 'min-w-0 flex-1 truncate';
+    label.textContent = `${file.path} · ${file.type || 'file'} · ${formatBytes(file.size)}`;
+    const preview = document.createElement('button');
+    preview.type = 'button';
+    preview.className = 'text-secondary hover:underline';
+    preview.textContent = 'Preview';
+    preview.addEventListener('click', () => previewFile(file));
+    const download = document.createElement('button');
+    download.type = 'button';
+    download.className = 'text-secondary hover:underline';
+    download.textContent = 'Download';
+    download.addEventListener('click', () => downloadFile(file));
+    row.append(label, preview, download);
+    filesList.appendChild(row);
+  }
+}
+
+function formatBytes(size) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function previewFile(file) {
+  if (!filesPreview) return;
+  filesPreview.replaceChildren();
+  filesPreview.classList.remove('hidden');
+  const query = new URLSearchParams({ path: file.path });
+  const extension = (file.type || '').toLowerCase();
+  if (['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp'].includes(extension)) {
+    const response = await fetch(`/api/files/content?${query}`);
+    if (!response.ok) throw new Error('Could not preview this file.');
+    const objectUrl = URL.createObjectURL(await response.blob());
+    const element = extension === 'pdf' ? document.createElement('iframe') : document.createElement('img');
+    element.src = objectUrl;
+    element.className = 'w-full h-64 rounded';
+    if (extension !== 'pdf') element.alt = file.name;
+    filesPreview.appendChild(element);
+    return;
+  }
+  const response = await fetch(`/api/files/preview?${query}`);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Could not preview this file.');
+  const text = document.createElement('pre');
+  text.className = 'whitespace-pre-wrap break-words text-body-sm';
+  text.textContent = data.content;
+  filesPreview.appendChild(text);
+}
+
+async function downloadFile(file) {
+  const query = new URLSearchParams({ path: file.path });
+  const response = await fetch(`/api/files/download?${query}`);
+  if (!response.ok) throw new Error('Could not download this file.');
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = file.name;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function renderNotifications() {
+  const unread = document.getElementById('notification-unread');
+  if (unread) unread.textContent = String(state.unread);
+  if (!notificationList) return;
+  notificationList.replaceChildren();
+  for (const item of state.notifications) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `block w-full rounded px-2 py-1 text-left text-body-sm ${item.read ? 'bg-surface-container-low text-outline' : 'bg-surface-container text-on-surface'}`;
+    button.textContent = item.title;
+    button.addEventListener('click', () => openNotification(item));
+    notificationList.appendChild(button);
+  }
+}
+
+async function openNotification(item) {
+  await fetch('/api/notifications/read', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: item.id }),
+  });
+  if (item.result_path) {
+    const file = state.workspaceFiles.find((candidate) => candidate.path === item.result_path);
+    if (file) await previewFile(file);
+  } else if (item.job_id) {
+    const response = await fetch(`/api/ask-jobs/${encodeURIComponent(item.job_id)}`);
+    const data = await response.json();
+    if (data.job && data.job.state === 'waiting_for_user') showQuestion(data.job);
+    else if (data.job && data.job.result) appendChatMessage('assistant', data.job.result);
+  }
+  await refreshState();
+}
+
+async function searchWorkspace() {
+  const query = new URLSearchParams();
+  const text = document.getElementById('files-search').value.trim();
+  const fileType = document.getElementById('files-type').value;
+  if (text) query.set('q', text);
+  if (fileType) query.set('type', fileType);
+  const response = await fetch(`/api/files?${query}`);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Workspace search failed.');
+  state.workspaceFiles = data.files || [];
+  renderWorkspaceFiles();
+}
+
+async function openJobFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const jobId = params.get('job');
+  const filePath = params.get('file');
+  if (filePath) {
+    const file = state.workspaceFiles.find((candidate) => candidate.path === filePath);
+    if (file) await previewFile(file);
+  }
+  if (jobId) {
+    const response = await fetch(`/api/ask-jobs/${encodeURIComponent(jobId)}`);
+    const data = await response.json();
+    if (data.job && data.job.state === 'waiting_for_user') {
+      showQuestion(data.job);
+      pollAskJob(jobId);
+    } else if (data.job && data.job.result) {
+      appendChatMessage('assistant', data.job.result);
+    }
+  }
+}
+
+async function markAllNotificationsRead() {
+  await fetch('/api/notifications/read', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  await refreshState();
+}
+
+let eventStreamRetry = null;
+async function startNotificationStream() {
+  if (eventStreamRetry) clearTimeout(eventStreamRetry);
+  try {
+    const lastId = Number(localStorage.getItem('hsx-last-notification-id') || '0');
+    const response = await fetch(`/api/notifications/stream?after=${lastId}`);
+    if (!response.ok || !response.body) throw new Error('Notification stream unavailable.');
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split('\n\n');
+      buffer = events.pop() || '';
+      for (const eventText of events) {
+        const idLine = eventText.split('\n').find((line) => line.startsWith('id: '));
+        if (idLine) localStorage.setItem('hsx-last-notification-id', idLine.slice(4));
+        const dataLine = eventText.split('\n').find((line) => line.startsWith('data: '));
+        if (dataLine) refreshState();
+      }
     }
   } catch (error) {
-    console.error('Could not create a video job', error);
+    console.error('Notification stream disconnected', error);
   }
+  eventStreamRetry = setTimeout(startNotificationStream, 3000);
+}
+
+function decodeApplicationKey(encoded) {
+  const padded = encoded.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(encoded.length / 4) * 4, '=');
+  return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
+}
+
+async function enablePush() {
+  const status = document.getElementById('push-status');
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      throw new Error('Push notifications are not supported by this browser.');
+    }
+    const configResponse = await fetch('/api/notifications/webpush/config');
+    const config = await configResponse.json();
+    if (!config.enabled) throw new Error('Web Push has not been configured on this server.');
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') throw new Error('Notification permission was not granted.');
+    const registration = await navigator.serviceWorker.ready;
+    let pushSubscription = await registration.pushManager.getSubscription();
+    if (!pushSubscription) {
+      pushSubscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: decodeApplicationKey(config.public_key),
+      });
+    }
+    const response = await fetch('/api/notifications/webpush/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subscription: pushSubscription.toJSON(),
+        device_name: `${navigator.platform || 'Device'} browser`,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not register this device.');
+    localStorage.setItem('hsx-push-subscription-id', data.subscription.id);
+    status.textContent = 'Push notifications enabled on this device.';
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+async function disablePush() {
+  const status = document.getElementById('push-status');
+  const subscriptionId = localStorage.getItem('hsx-push-subscription-id');
+  if (!('serviceWorker' in navigator)) {
+    status.textContent = 'Service workers are not supported by this browser.';
+    return;
+  }
+  const registration = await navigator.serviceWorker.ready;
+  const subscription = await registration.pushManager.getSubscription();
+  if (subscription) await subscription.unsubscribe();
+  if (subscriptionId) {
+    await fetch(`/api/notifications/webpush/subscriptions/${encodeURIComponent(subscriptionId)}`, { method: 'DELETE' });
+    localStorage.removeItem('hsx-push-subscription-id');
+  }
+  status.textContent = 'Push notifications disabled on this device.';
+}
+
+async function testPush() {
+  const response = await fetch('/api/notifications/webpush/test', { method: 'POST' });
+  const data = await response.json();
+  document.getElementById('push-status').textContent = response.ok ? 'Test notification sent.' : (data.error || 'Push test failed.');
+}
+
+async function touchPushActivity() {
+  const activePushId = localStorage.getItem('hsx-push-subscription-id');
+  if (!authToken || !activePushId) return;
+  await fetch('/api/notifications/webpush/activity', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: activePushId }),
+  });
+}
+
+function addVoiceControls() {
+  if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) return;
+  const controls = document.createElement('div');
+  controls.className = 'fixed bottom-3 right-3 z-40 flex gap-2';
+  controls.innerHTML = '<button id="voice-talk" class="px-3 py-2 rounded bg-primary text-on-primary text-xs">Push to talk</button><button id="voice-mute" class="px-3 py-2 rounded bg-surface-container text-xs">Mute</button>';
+  document.body.appendChild(controls);
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const recognition = new Recognition();
+  recognition.lang = 'en-US';
+  recognition.onresult = (event) => {
+    if (aiPrompt) aiPrompt.value = event.results[0][0].transcript;
+    submitPrompt();
+  };
+  document.getElementById('voice-talk').addEventListener('click', () => recognition.start());
+  document.getElementById('voice-mute').addEventListener('click', (event) => {
+    speechMuted = !speechMuted;
+    event.currentTarget.textContent = speechMuted ? 'Unmute' : 'Mute';
+  });
 }
 
 if (runPromptBtn) {
@@ -282,7 +661,7 @@ if (runPromptBtn) {
 }
 
 if (renderBtn) {
-  renderBtn.addEventListener('click', submitPrompt);
+  renderBtn.addEventListener('click', submitVideoPrompt);
 }
 
 if (ingestBtn && mediaInput) {
@@ -293,5 +672,48 @@ if (mediaInput) {
   mediaInput.addEventListener('change', uploadMedia);
 }
 
-refreshState();
+document.getElementById('question-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const job = state.activeQuestion;
+  const input = document.getElementById('question-answer');
+  if (!job || !input.value.trim()) return;
+  document.getElementById('question-status').textContent = 'Resuming the task…';
+  const response = await fetch(`/api/ask-jobs/${encodeURIComponent(job.id)}/answer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answer: input.value.trim() }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    document.getElementById('question-status').textContent = data.error || 'Could not submit that answer.';
+    return;
+  }
+  input.value = '';
+  questionCard.classList.add('hidden');
+  await refreshState();
+});
+
+document.getElementById('files-refresh').addEventListener('click', searchWorkspace);
+document.getElementById('files-search').addEventListener('input', () => {
+  clearTimeout(window.hsxFileSearchTimer);
+  window.hsxFileSearchTimer = setTimeout(searchWorkspace, 250);
+});
+document.getElementById('files-type').addEventListener('change', searchWorkspace);
+document.getElementById('notifications-read-all').addEventListener('click', markAllNotificationsRead);
+document.getElementById('push-enable').addEventListener('click', enablePush);
+document.getElementById('push-disable').addEventListener('click', disablePush);
+document.getElementById('push-test').addEventListener('click', testPush);
+
+if (authToken) {
+  refreshState();
+  openJobFromUrl();
+  startNotificationStream();
+}
+touchPushActivity().catch((error) => console.error('Could not update push-device activity', error));
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/web/service-worker.js').catch((error) => console.error('PWA setup failed', error));
+}
+setInterval(() => {
+  if (authToken) refreshState();
+}, 15000);
 addVoiceControls();

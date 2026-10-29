@@ -1,1 +1,1 @@
-{"name":"search_files","description":"Search text files in uploads or outputs.","risk":"safe","input_schema":{"type":"object","properties":{"query":{"type":"string"},"directory":{"type":"string"}},"required":["query"]}}
+{"name":"search_files","description":"Search readable file content inside the shared workspace. Use workspace search for fuzzy filename matching.","risk":"safe","input_schema":{"type":"object","properties":{"query":{"type":"string"},"directory":{"type":"string"}},"required":["query"]}}

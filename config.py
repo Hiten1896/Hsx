@@ -8,7 +8,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
-OUTPUTS_DIR = BASE_DIR / "outputs"
+WORKSPACE_DIR = Path(
+    os.getenv("HSX_WORKSPACE", str(BASE_DIR if os.name == "nt" else "/home/hsxshare"))
+).expanduser().resolve()
+WORK_DIR = Path(os.getenv("HSX_WORK_DIR", "Hsx Work")).expanduser()
+if not WORK_DIR.is_absolute():
+    WORK_DIR = WORKSPACE_DIR / WORK_DIR
+WORK_DIR = WORK_DIR.absolute()
+if WORK_DIR == WORKSPACE_DIR:
+    raise ValueError("HSX_WORK_DIR must be a dedicated subdirectory of HSX_WORKSPACE.")
+if WORKSPACE_DIR not in WORK_DIR.parents:
+    raise ValueError("HSX_WORK_DIR must remain inside HSX_WORKSPACE.")
+OUTPUTS_DIR = WORK_DIR
 SCRATCH_DIR = BASE_DIR / "scratch"
 UPLOADS_DIR = BASE_DIR / "uploads"
 MEMORY_DIR = BASE_DIR / "memory"
@@ -87,5 +98,5 @@ def is_loopback_host(host: str) -> bool:
         return False
 
 
-for directory in (OUTPUTS_DIR, SCRATCH_DIR, UPLOADS_DIR, MEMORY_DIR, DATA_DIR):
-    directory.mkdir(exist_ok=True)
+for directory in (WORKSPACE_DIR, OUTPUTS_DIR, SCRATCH_DIR, UPLOADS_DIR, MEMORY_DIR, DATA_DIR):
+    directory.mkdir(parents=True, exist_ok=True)

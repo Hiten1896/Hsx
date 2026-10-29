@@ -1,13 +1,16 @@
-from agent.security import safe_path
-from config import OUTPUTS_DIR, UPLOADS_DIR
+from agent.workspace import Workspace
+from config import WORKSPACE_DIR, WORK_DIR
+
+WORKSPACE = Workspace(WORKSPACE_DIR, WORK_DIR)
 
 
 def run(path: str) -> dict:
-    for base in (UPLOADS_DIR, OUTPUTS_DIR):
-        try:
-            target = safe_path(base, path)
-        except ValueError:
-            continue
-        if target.is_file():
-            return {"success": True, "path": str(target), "content": target.read_text(encoding="utf-8")[:100_000]}
-    return {"success": False, "error": "File not found in uploads or outputs."}
+    try:
+        target = WORKSPACE.resolve_read(path)
+        return {
+            "success": True,
+            "path": target.relative_to(WORKSPACE.root).as_posix(),
+            "content": WORKSPACE.read_text(path),
+        }
+    except (OSError, ValueError) as error:
+        return {"success": False, "error": str(error)}

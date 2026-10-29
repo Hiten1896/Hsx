@@ -1,0 +1,18 @@
+{
+  "name": "Hsx Shared Workspace",
+  "short_name": "Hsx",
+  "description": "Hsx workspace assistant and files",
+  "start_url": "/web/",
+  "scope": "/web/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#131316",
+  "icons": [
+    {
+      "src": "/web/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

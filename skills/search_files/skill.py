@@ -1,16 +1,19 @@
-from config import OUTPUTS_DIR, UPLOADS_DIR
+from agent.workspace import Workspace
+from config import WORKSPACE_DIR, WORK_DIR
+
+WORKSPACE = Workspace(WORKSPACE_DIR, WORK_DIR)
 
 
-def run(query: str, directory: str = "uploads") -> dict:
-    base = UPLOADS_DIR if directory == "uploads" else OUTPUTS_DIR if directory == "outputs" else None
-    if base is None:
-        return {"success": False, "error": "Directory must be uploads or outputs."}
+def run(query: str, directory: str = ".") -> dict:
     matches = []
-    for path in base.rglob("*"):
-        if path.is_file():
+    try:
+        for path in WORKSPACE.iter_files(directory):
             try:
-                if query.lower() in path.read_text(encoding="utf-8").lower():
-                    matches.append(path.name)
-            except (OSError, UnicodeDecodeError):
+                content = WORKSPACE.read_text(path.relative_to(WORKSPACE.root))
+            except (OSError, ValueError, UnicodeDecodeError):
                 continue
+            if query.lower() in content.lower():
+                matches.append(path.relative_to(WORKSPACE.root).as_posix())
+    except (OSError, ValueError) as error:
+        return {"success": False, "error": str(error)}
     return {"success": True, "matches": matches[:100]}

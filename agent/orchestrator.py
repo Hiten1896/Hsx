@@ -1,5 +1,6 @@
 import json
 
+from agent.ask_user import AskUserRequest
 from agent.llm_client import call_llm
 from agent.memory import MemoryManager
 from agent.policy import POLICY
@@ -14,9 +15,51 @@ def _text_from_response(response) -> str:
     return "\n".join(block.text for block in response.content if getattr(block, "type", "") == "text")
 
 
-def run_agent(user_input: str, conversation_history: list, tools: list, skill_map: dict, max_iterations: int = 10, session_id: str = "default", approvals: dict | None = None, sensitive: bool = False):
-    MEMORY.record_message("default", "user", user_input)
-    conversation_history.append({"role": "user", "content": user_input})
+def _serializable_history(history: list) -> list:
+    def convert(value):
+        if isinstance(value, dict):
+            return {key: convert(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [convert(item) for item in value]
+        if getattr(value, "type", "") == "tool_use":
+            return {
+                "type": "tool_use",
+                "id": value.id,
+                "name": value.name,
+                "input": convert(value.input),
+            }
+        if getattr(value, "type", "") == "text":
+            return {"type": "text", "text": value.text}
+        if hasattr(value, "__dict__"):
+            return {key: convert(item) for key, item in value.__dict__.items()}
+        return value
+
+    return convert(history)
+
+
+def run_agent(
+    user_input: str,
+    conversation_history: list,
+    tools: list,
+    skill_map: dict,
+    max_iterations: int = 10,
+    session_id: str = "default",
+    approvals: dict | None = None,
+    sensitive: bool = False,
+    resume_tool_result: dict | None = None,
+):
+    if resume_tool_result:
+        conversation_history.append({
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": resume_tool_result["tool_call_id"],
+                "content": json.dumps({"success": True, "answer": resume_tool_result["answer"]}),
+            }],
+        })
+    else:
+        MEMORY.record_message(session_id, "user", user_input)
+        conversation_history.append({"role": "user", "content": user_input})
     for _ in range(max_iterations):
         if POLICY.is_stopped():
             return "This run was stopped by the kill switch.", conversation_history
@@ -47,6 +90,10 @@ def run_agent(user_input: str, conversation_history: list, tools: list, skill_ma
                 return json.dumps(decision), conversation_history
             try:
                 result = skill_map[call.name](**call.input)
+            except AskUserRequest as question:
+                question.checkpoint = _serializable_history(conversation_history)
+                question.tool_call_id = call.id
+                raise
             except (OSError, RuntimeError, TypeError, ValueError) as error:
                 result = {"success": False, "error": str(error)}
             results.append({"type": "tool_result", "tool_use_id": call.id, "content": json.dumps(result)})
