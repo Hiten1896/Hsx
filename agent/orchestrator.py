@@ -47,7 +47,11 @@ def run_agent(
     approvals: dict | None = None,
     sensitive: bool = False,
     resume_tool_result: dict | None = None,
+    target_device: str = "client_browser",
+    device_actions: list[dict] | None = None,
 ):
+    if target_device not in {"local_host", "client_browser"}:
+        raise ValueError("target_device must be local_host or client_browser.")
     if resume_tool_result:
         conversation_history.append({
             "role": "user",
@@ -68,6 +72,7 @@ def run_agent(
             tools,
             MEMORY.prompt_context(user_input),
             sensitive=sensitive,
+            target_device=target_device,
         )
         if response is None:
             return _local_response(user_input, conversation_history), conversation_history
@@ -89,7 +94,12 @@ def run_agent(
             if not decision["allowed"]:
                 return json.dumps(decision), conversation_history
             try:
-                result = skill_map[call.name](**call.input)
+                tool_input = dict(call.input)
+                if call.name in {"audio_play", "camera_record"}:
+                    tool_input["target_device"] = target_device
+                result = skill_map[call.name](**tool_input)
+                if isinstance(result, dict) and result.get("browser_action") and device_actions is not None:
+                    device_actions.append(result["browser_action"])
             except AskUserRequest as question:
                 question.checkpoint = _serializable_history(conversation_history)
                 question.tool_call_id = call.id

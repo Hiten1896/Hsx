@@ -55,6 +55,7 @@ const state = {
   notifications: [],
   unread: 0,
   activeQuestion: null,
+  handledDeviceActions: new Set(),
 };
 
 const assetList = document.getElementById('asset-list');
@@ -297,11 +298,16 @@ async function submitPrompt() {
   aiPrompt.value = '';
   appendChatMessage('user', message);
   appendChatMessage('assistant', `Understood: I’ll work on: ${message}`);
+  const approvals = {};
+  if (/\b(camera|webcam|snapshot|photo|record|play|audio|music)\b/i.test(message)) {
+    const pin = window.prompt('Owner PIN for requested local media actions (leave blank to skip):');
+    if (pin) approvals.audio_play = approvals.camera_record = pin;
+  }
   try {
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, session_id: 'web' }),
+      body: JSON.stringify({ message, session_id: 'web', target_device: 'client_browser', approvals }),
     });
     const data = await response.json();
     if (!response.ok && response.status !== 202) throw new Error(data.error || 'The request could not be completed.');
@@ -378,6 +384,7 @@ async function pollAskJob(jobId) {
       if (job.state === 'waiting_for_user') {
         showQuestion(job);
       } else if (['done', 'failed', 'cancelled'].includes(job.state)) {
+        await handleBrowserActions(job);
         state.activeQuestion = null;
         questionCard.classList.add('hidden');
         appendChatMessage('assistant', job.result || job.error || 'The task was cancelled.');
@@ -387,6 +394,110 @@ async function pollAskJob(jobId) {
     } catch (error) {
       console.error('Could not refresh the pending question', error);
     }
+  }
+}
+
+async function handleBrowserActions(job) {
+  for (const [index, action] of (job.device_actions || []).entries()) {
+    const key = `${job.id}:${index}`;
+    if (state.handledDeviceActions.has(key)) continue;
+    state.handledDeviceActions.add(key);
+    const card = document.createElement('div');
+    card.className = 'rounded border border-outline-variant bg-surface-container-low p-2 text-body-sm';
+    const label = document.createElement('span');
+    label.textContent = action.type === 'camera_record'
+      ? `HSX requests ${action.mode} capture from this browser's camera (${action.duration_seconds || 1}s). `
+      : 'HSX requests audio playback in this browser. ';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'ml-2 rounded border border-secondary px-2 py-1 text-secondary';
+    button.textContent = action.type === 'camera_record' ? 'Allow camera capture' : 'Play audio';
+    card.append(label, button);
+    chatHistory?.appendChild(card);
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        if (action.type === 'audio_play') {
+          let source = action.source_url;
+          if (action.source_path) {
+            const response = await fetch(`/api/outputs/${encodeURIComponent(action.source_path)}`);
+            if (!response.ok) throw new Error('Could not load the requested audio file.');
+            source = URL.createObjectURL(await response.blob());
+          }
+          if (!source) throw new Error('No browser-playable audio source was returned.');
+          const player = new Audio(source);
+          await player.play();
+          card.append(document.createTextNode('Playback started.'));
+          player.addEventListener('ended', () => {
+            if (source.startsWith('blob:')) URL.revokeObjectURL(source);
+          }, { once: true });
+        } else if (action.type === 'camera_record') {
+          await captureBrowserMedia(action, card);
+        } else {
+          throw new Error(`Unsupported browser media action: ${action.type}`);
+        }
+      } catch (error) {
+        card.append(document.createTextNode(` ${error.message}`));
+        button.disabled = false;
+      }
+    });
+  }
+}
+
+async function captureBrowserMedia(action, card) {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error('This browser does not support camera capture.');
+  }
+  const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+  try {
+    let blob;
+    let mimeType;
+    if (action.mode === 'snapshot') {
+      const video = document.createElement('video');
+      video.muted = true;
+      video.srcObject = stream;
+      await video.play();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+      blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+      mimeType = 'image/jpeg';
+    } else {
+      const recorder = new MediaRecorder(stream);
+      const parts = [];
+      recorder.addEventListener('dataavailable', (event) => {
+        if (event.data.size) parts.push(event.data);
+      });
+      const stopped = new Promise((resolve, reject) => {
+        recorder.addEventListener('stop', resolve, { once: true });
+        recorder.addEventListener('error', () => reject(new Error('Browser recording failed.')), { once: true });
+      });
+      recorder.start();
+      await new Promise((resolve) => setTimeout(resolve, Math.max(1, Math.min(action.duration_seconds || 10, 60)) * 1000));
+      recorder.stop();
+      await stopped;
+      mimeType = recorder.mimeType || 'video/webm';
+      blob = new Blob(parts, { type: mimeType });
+    }
+    if (!blob) throw new Error('The browser did not produce a media file.');
+    const extension = action.mode === 'snapshot' ? '.jpg' : (mimeType.includes('mp4') ? '.mp4' : '.webm');
+    let filename = action.filename || `browser_capture${extension}`;
+    if (action.mode === 'video' && !filename.toLowerCase().endsWith(extension)) {
+      filename = `${filename.replace(/\.[^.]+$/, '')}${extension}`;
+    }
+    const response = await fetch('/api/media/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': mimeType, 'X-Filename': filename },
+      body: blob,
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not save the browser capture.');
+    card.append(document.createTextNode(` Saved ${result.path} (${result.bytes} bytes).`));
+    await refreshState();
+  } finally {
+    stream.getTracks().forEach((track) => track.stop());
   }
 }
 

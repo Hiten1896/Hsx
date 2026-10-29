@@ -7,10 +7,11 @@ Wants=network-online.target
 Type=simple
 User=hsx
 WorkingDirectory=/opt/hsx
+EnvironmentFile=/opt/hsx/.env
 EnvironmentFile=-/etc/hsx/secrets.env
-Environment=HSX_VENV_DIR=/opt/hsx/.venv
-ExecStart=/opt/hsx/scripts/run_hsx.sh
-Restart=always
+Environment=HSX_VENV_DIR=/opt/hsx/venv
+ExecStart=/bin/bash /opt/hsx/scripts/run_hsx.sh
+Restart=on-failure
 RestartSec=5
 StandardOutput=append:/opt/hsx/logs/hsx_service.log
 StandardError=append:/opt/hsx/logs/hsx_service.log

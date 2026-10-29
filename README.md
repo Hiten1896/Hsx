@@ -40,8 +40,8 @@ python main.py
 ### Linux
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+python -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 python main.py
@@ -51,26 +51,85 @@ Open `http://127.0.0.1:8000`. You do not need Anthropic: configure any available
 
 ### Headless Debian boot automation
 
-To enable both TTY1 auto-login and a systemd service that launches the project at boot, run the repo setup script once from the project root as root:
+After creating `venv`, installing `requirements.txt`, and copying `.env.example` to `.env`,
+run this single installer from the repository root:
 
 ```bash
-sudo bash scripts/setup_systemd.sh
+sudo bash scripts/enable_boot_mode.sh
 ```
 
-This script verifies that the project contains the expected entries (`main.py`, `venv/bin/activate`, and `.env`), writes a `hsx.service` unit under `/etc/systemd/system/`, enables it with `Restart=always` and `RestartSec=5`, and redirects logs to `logs/hsx_service.log`. It also writes the TTY1 override file at `/etc/systemd/system/getty@tty1.service.d/override.conf` so the configured user is auto-logged in without a password on boot.
+The installer asks for one-time consent before enabling persistent microphone listening.
+It then installs/checks the host audio/video and local Whisper, sounddevice, and WebRTC VAD dependencies,
+downloads the selected Whisper model under the service user's account, enables the HSX
+systemd service at `multi-user.target`, enables the voice-listener service, configures
+passwordless TTY1 auto-login, and adds a TTY1-only CLI launcher to `~/.profile` (and
+`~/.bash_profile` or `~/.bash_login` when present). `hsx.service` uses `Restart=on-failure`; SSH and other
+TTY sessions do not start the CLI.
 
-If you want to customize the service user or autologin account, set `HSX_AUTO_LOGIN_USER` before running the script, for example:
+The voice service continuously uses the microphone while enabled, but only sends recognized
+speech after the configured wake phrase (`HSX_VOICE_WAKE_PHRASE`, default `hey hsx`).
+Captured audio is held in memory for local transcription and discarded. Its active state
+is printed to the voice service journal. To disable microphone startup later:
 
 ```bash
-sudo HSX_AUTO_LOGIN_USER=hsx bash scripts/setup_systemd.sh
+sudo systemctl disable --now hsx-voice-listener.service
 ```
 
-After installation:
+Set `HSX_AUTO_LOGIN_USER` to select a different Linux account. The selected account needs
+access to the microphone/sound device; the installer adds it to `audio` and `video` groups
+when those groups exist. Ensure all people near the machine know that the microphone is
+active.
+
+After installation, check status and logs:
 
 ```bash
-sudo systemctl status hsx.service
+sudo systemctl status hsx.service hsx-voice-listener.service
 sudo journalctl -u hsx.service -f
+sudo journalctl -u hsx-voice-listener.service -f
 ```
+
+TTY1 launches `python cli.py` after auto-login. The client submits prompts to the local API
+with `target_device=local_host`, displays streamed acknowledgements and job results, and
+asks for answers when a job pauses for user input. Other terminals and SSH logins remain
+normal shells. The CLI can also be started manually with `python cli.py`.
+
+### Local voice and hardware
+
+Media requests carry a server-validated `target_device`: browser requests are fixed to
+`client_browser`; the TTY and voice listener use `local_host`. Host audio playback uses
+`mpv` (and `yt-dlp` for supported online sources). Host camera capture uses `ffmpeg` and
+`/dev/video0`; outputs are saved under the active dated task folder. Browser audio and
+camera requests are handed back to the browser. Audio requires a user click; camera
+capture requires an explicit browser confirmation and the browser's camera permission.
+
+The microphone listener is opt-in and uses frame-based WebRTC VAD plus local Whisper
+transcription. Captured audio remains in memory for transcription and is discarded; only
+recognized command text is submitted to HSX and then processed by the configured LLM
+provider (which may be remote). The default wake phrase is `hey hsx`.
+
+Install optional voice and hardware dependencies on Debian:
+
+```bash
+sudo apt install libportaudio2 portaudio19-dev ffmpeg mpv yt-dlp
+source venv/bin/activate
+pip install -r requirements-voice.txt
+```
+
+The single boot-mode installer above enables the listener after explicit consent. For a
+manual service setup, set `HSX_ENABLE_VOICE_LISTENER=1` in `.env` and install the optional
+listener service:
+
+```bash
+sudo cp deploy/hsx-voice-listener.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now hsx-voice-listener.service
+sudo systemctl status hsx-voice-listener.service
+```
+
+The supplied service unit assumes `/opt/hsx`, user `hsx`, and virtual environment
+`/opt/hsx/venv`; adjust those paths/user to match the installation. Grant the HSX
+service account only the needed `audio` and `video` device access. Do not enable the
+listener unless people near the device know the microphone is active.
 
 ### Free-tier provider setup
 
@@ -104,7 +163,7 @@ For text-only requests, `HSX_PANEL_MODE=off` is the default. Set it to `auto` to
 - The LLM router supports Anthropic, Gemini, and Ollama with ordered fallbacks configured through `HSX_PROVIDER` and `HSX_FALLBACKS`; `/api/chat/stream` emits normalized SSE events.
 - Skills default to `confirm`, support `safe` and `dangerous` tiers, and are audited in append-only JSONL. Advisory skills request explicit consent, with session-level repeat suppression; `POST /api/stop` activates the global kill switch.
 - Phase 11 self-improvement is proposal-only: research and prototypes stay in `scratch/self_improvement/`, dependencies and production files are not changed automatically, strict tests must pass, and approval/promotion require the separate owner PIN.
-- Device control is capability-scoped: pairing requires the owner PIN, device tokens are stored only as hashes and returned once, capabilities are allowlisted, every authorization is audited, and revocation is immediate. The foundation does not expose unrestricted shell, browser, desktop, camera, microphone, or LAN control.
+- Device pairing remains capability-scoped: pairing requires the owner PIN, device tokens are stored only as hashes and returned once, capabilities are allowlisted, every authorization is audited, and revocation is immediate. Local media capture/playback is provided separately by explicit skills; browser camera capture always requires a user confirmation and browser permission.
 
 ### Phase 11 workflow
 
@@ -126,7 +185,7 @@ Skills may declare an optional plain-language `advisory` (under 300 characters) 
 
 ## Phase 18 shared workspace
 
-On Debian, set `HSX_WORKSPACE=/home/hsxshare` and `HSX_WORK_DIR=Hsx Work`. The work directory must be a dedicated subdirectory of the workspace, not the workspace root itself. The Windows development default is the repository workspace, preserving local testing; set both variables to use another directory. Hsx reads supported files anywhere in the workspace and writes deliverables only under `Hsx Work/YYYY-MM-DD HHMM <task>/`. It never deletes or overwrites an existing file. Workspace paths reject absolute paths, traversal, and symlinks that escape the workspace.
+On Debian, set `HSX_WORKSPACE=/home/hsxshare` and `HSX_WORK_DIR="Hsx Work"`. The work directory must be a dedicated subdirectory of the workspace, not the workspace root itself. The Windows development default is the repository workspace, preserving local testing; set both variables to use another directory. Hsx reads supported files anywhere in the workspace and writes deliverables only under `Hsx Work/YYYY-MM-DD HHMM <task>/`. It never deletes or overwrites an existing file. Workspace paths reject absolute paths, traversal, and symlinks that escape the workspace.
 
 The `workspace` skill lists, typo-tolerantly searches, describes, and reads text, Markdown, CSV, DOCX, XLSX, and PDF files. The authenticated Files panel provides workspace search, text/PDF/image preview, byte-range downloads, and result retrieval. The `report` skill extracts DOCX/PDF layout details, reads CSV/XLSX/DOCX/PDF data, and creates a PDF with ReportLab. PDF-template output follows section order and approximates typography and pagination; it is not pixel-perfect. When source/template matching is ambiguous, Hsx asks in the web interface. Questions are checkpointed in SQLite, expire after the configured question timeout, and are limited to three per job.
 
