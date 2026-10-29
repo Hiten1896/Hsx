@@ -16,6 +16,7 @@ def _request(
     method: str = "GET",
     headers: dict | None = None,
     payload: dict | None = None,
+    stop_event: str | None = None,
 ):
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.HsxHandler)
     thread = threading.Thread(target=httpd.handle_request)
@@ -32,8 +33,16 @@ def _request(
         headers=request_headers,
     )
     try:
-        with urllib.request.urlopen(request) as response:
-            result = response.status, response.headers, response.read()
+        with urllib.request.urlopen(request, timeout=5) as response:
+            if stop_event:
+                body = []
+                while line := response.readline():
+                    body.append(line)
+                    if line.startswith(f"event: {stop_event}".encode()):
+                        break
+                result = response.status, response.headers, b"".join(body)
+            else:
+                result = response.status, response.headers, response.read()
     except urllib.error.HTTPError as error:
         result = error.code, error.headers, error.read()
     thread.join(timeout=2)
@@ -65,6 +74,39 @@ def test_files_panel_lists_workspace_files_and_serves_ranges(tmp_path: Path, mon
     assert status == 206
     assert headers["Content-Range"] == "bytes 2-5/10"
     assert body == b"2345"
+
+
+def test_chat_stream_forwards_model_text_deltas(tmp_path: Path, monkeypatch):
+    root = tmp_path / "share"
+    root.mkdir()
+    monkeypatch.setattr(server, "WORKSPACE", Workspace(root, "Hsx Work"))
+    monkeypatch.setattr(server, "WORK_DIR", root / "Hsx Work")
+    monkeypatch.setattr(server, "ASK_JOBS", AskUserJobs(tmp_path / "jobs.db"))
+    monkeypatch.setattr(server, "AUTH_TOKEN", "")
+    monkeypatch.setattr(server.POLICY, "audit_event", lambda *args: None)
+
+    def fake_run_chat_job(job_id, approvals, sensitive, target_device, on_text_delta):
+        on_text_delta("Streaming ")
+        on_text_delta("answer")
+        completed = server.ASK_JOBS.complete(job_id, "Streaming answer", [])
+        server._emit_chat_event(job_id, "job", server._ask_job_payload(completed))
+        server._emit_chat_event(job_id, "done", {})
+
+    monkeypatch.setattr(server, "_run_chat_job", fake_run_chat_job)
+    status, headers, body = _request(
+        "/api/chat/stream",
+        method="POST",
+        payload={"message": "Say hello", "target_device": "client_browser"},
+        stop_event="done",
+    )
+
+    text = body.decode()
+    assert status == 200
+    assert headers["Content-Type"] == "text/event-stream"
+    assert "event: acknowledgement" in text
+    assert "event: text_delta\ndata: {\"text\":\"Streaming \"}" in text
+    assert "event: text_delta\ndata: {\"text\":\"answer\"}" in text
+    assert '"result":"Streaming answer"' in text
 
 
 def test_files_panel_rejects_traversal(tmp_path: Path, monkeypatch):

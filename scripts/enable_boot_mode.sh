@@ -25,6 +25,14 @@ if ! id "${AUTO_LOGIN_USER}" >/dev/null 2>&1; then
   echo "Unknown HSX user: ${AUTO_LOGIN_USER}" >&2
   exit 1
 fi
+if ! runuser -u "${AUTO_LOGIN_USER}" -- test -r "${ENV_FILE}"; then
+  echo "The HSX service account ${AUTO_LOGIN_USER} cannot read ${ENV_FILE}." >&2
+  exit 1
+fi
+if ! runuser -u "${AUTO_LOGIN_USER}" -- test -x "${VENV_DIR}/bin/python"; then
+  echo "The HSX service account ${AUTO_LOGIN_USER} cannot execute ${VENV_DIR}/bin/python." >&2
+  exit 1
+fi
 
 VOICE_ENABLED="$(grep -E '^HSX_ENABLE_VOICE_LISTENER=' "${ENV_FILE}" | tail -n 1 | cut -d= -f2- || true)"
 if [[ "${VOICE_ENABLED}" != "1" ]]; then
@@ -68,6 +76,12 @@ if ! runuser -u "${AUTO_LOGIN_USER}" -- "${VENV_DIR}/bin/python" -c 'import nump
   runuser -u "${AUTO_LOGIN_USER}" -- "${VENV_DIR}/bin/python" -m pip install -r "${REPO_ROOT}/requirements-voice.txt"
 fi
 
+for group in audio video; do
+  if getent group "${group}" >/dev/null && ! id -nG "${AUTO_LOGIN_USER}" | tr ' ' '\n' | grep -qx "${group}"; then
+    usermod -aG "${group}" "${AUTO_LOGIN_USER}"
+  fi
+done
+
 echo "Checking/downloading the configured local Whisper model as ${AUTO_LOGIN_USER}..."
 runuser -u "${AUTO_LOGIN_USER}" -- env HSX_PROJECT_ROOT="${REPO_ROOT}" "${VENV_DIR}/bin/python" -c '
 import os
@@ -75,15 +89,27 @@ from pathlib import Path
 from dotenv import dotenv_values
 settings = dotenv_values(Path(os.environ["HSX_PROJECT_ROOT"]) / ".env")
 model = settings.get("HSX_VOICE_MODEL", "base")
+if settings.get("HSX_ENABLE_VOICE_LISTENER") != "1":
+    raise SystemExit("HSX_ENABLE_VOICE_LISTENER must be set to 1.")
+if not str(settings.get("HSX_VOICE_WAKE_PHRASE", "hey hsx")).strip():
+    raise SystemExit("HSX_VOICE_WAKE_PHRASE must not be empty.")
+if not str(settings.get("HSX_AUDIO_DEVICE", "alsa/default")).strip():
+    raise SystemExit("HSX_AUDIO_DEVICE must not be empty.")
 import whisper
+if model not in whisper.available_models():
+    raise SystemExit(f"Unsupported HSX_VOICE_MODEL: {model}")
 whisper.load_model(model)
+import sounddevice as sd
+sd.query_devices(kind="input")
+sd.query_devices(kind="output")
 '
 
-for group in audio video; do
-  if getent group "${group}" >/dev/null && ! id -nG "${AUTO_LOGIN_USER}" | tr ' ' '\n' | grep -qx "${group}"; then
-    usermod -aG "${group}" "${AUTO_LOGIN_USER}"
-  fi
-done
+if [[ -e /dev/video0 ]] && {
+  ! runuser -u "${AUTO_LOGIN_USER}" -- test -r /dev/video0 ||
+  ! runuser -u "${AUTO_LOGIN_USER}" -- test -w /dev/video0
+}; then
+  echo "Warning: ${AUTO_LOGIN_USER} lacks read/write access to /dev/video0; camera capture may fail." >&2
+fi
 
 bash "${REPO_ROOT}/scripts/setup_systemd.sh"
 

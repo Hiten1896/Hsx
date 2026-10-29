@@ -155,4 +155,11 @@ def test_agent_overrides_media_tool_target_with_request_context(monkeypatch):
     )
     assert answer == "Playback started."
     assert observed == {"source": "tone.wav", "target_device": "local_host"}
-    assert actions == []
+    assert actions == [{
+        "type": "audio_play",
+        "target_device": "local_host",
+        "success": True,
+        "message": "",
+        "path": None,
+        "pid": None,
+    }]

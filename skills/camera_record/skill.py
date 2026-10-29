@@ -46,19 +46,24 @@ def run(
         raise RuntimeError("ffmpeg is required for host camera capture. Install it with: sudo apt install ffmpeg")
     output = task_output_path(WORKSPACE, requested_name)
     if mode == "snapshot":
-        command = [ffmpeg, "-y", "-f", "v4l2", "-i", "/dev/video0", "-frames:v", "1", str(output)]
+        command = [ffmpeg, "-nostdin", "-v", "error", "-y", "-f", "v4l2", "-i", "/dev/video0", "-frames:v", "1", str(output)]
     else:
         command = [
-            ffmpeg, "-y", "-f", "v4l2", "-i", "/dev/video0",
+            ffmpeg, "-nostdin", "-v", "error", "-y", "-f", "v4l2", "-i", "/dev/video0",
             "-t", str(duration_seconds), "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
             str(output),
         ]
-    try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=duration_seconds + 20, check=False)
-    except subprocess.TimeoutExpired as error:
-        raise RuntimeError(f"Camera capture timed out after {duration_seconds + 20} seconds.") from error
-    if result.returncode:
-        raise RuntimeError(result.stderr[-2000:] or f"ffmpeg exited with {result.returncode}.")
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
+        try:
+            _, stderr = process.communicate(timeout=duration_seconds + 20)
+        except subprocess.TimeoutExpired as error:
+            process.kill()
+            process.communicate()
+            raise RuntimeError(
+                f"Camera capture timed out after {duration_seconds + 20} seconds."
+            ) from error
+    if process.returncode:
+        raise RuntimeError(stderr[-2000:] or f"ffmpeg exited with {process.returncode}.")
     return {
         "success": True,
         "target_device": "local_host",
