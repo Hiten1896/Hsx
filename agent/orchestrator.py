@@ -1,6 +1,8 @@
 import json
+from collections.abc import Callable
 
 from agent.ask_user import AskUserRequest
+from agent.devices import system_body_context
 from agent.llm_client import call_llm
 from agent.memory import MemoryManager
 from agent.policy import POLICY
@@ -49,6 +51,7 @@ def run_agent(
     resume_tool_result: dict | None = None,
     target_device: str = "client_browser",
     device_actions: list[dict] | None = None,
+    on_text_delta: Callable[[str], None] | None = None,
 ):
     if target_device not in {"local_host", "client_browser"}:
         raise ValueError("target_device must be local_host or client_browser.")
@@ -73,6 +76,8 @@ def run_agent(
             MEMORY.prompt_context(user_input),
             sensitive=sensitive,
             target_device=target_device,
+            body_context=system_body_context(target_device),
+            on_text_delta=on_text_delta,
         )
         if response is None:
             return _local_response(user_input, conversation_history), conversation_history
@@ -98,13 +103,30 @@ def run_agent(
                 if call.name in {"audio_play", "camera_record"}:
                     tool_input["target_device"] = target_device
                 result = skill_map[call.name](**tool_input)
-                if isinstance(result, dict) and result.get("browser_action") and device_actions is not None:
-                    device_actions.append(result["browser_action"])
+                if isinstance(result, dict) and call.name in {"audio_play", "camera_record"} and device_actions is not None:
+                    device_actions.append(
+                        result.get("browser_action")
+                        or {
+                            "type": call.name,
+                            "target_device": target_device,
+                            "success": result.get("success", False),
+                            "message": result.get("message", ""),
+                            "path": result.get("path"),
+                            "pid": result.get("pid"),
+                        }
+                    )
             except AskUserRequest as question:
                 question.checkpoint = _serializable_history(conversation_history)
                 question.tool_call_id = call.id
                 raise
             except (OSError, RuntimeError, TypeError, ValueError) as error:
+                if call.name in {"audio_play", "camera_record"} and device_actions is not None:
+                    device_actions.append({
+                        "type": call.name,
+                        "target_device": target_device,
+                        "success": False,
+                        "error": str(error),
+                    })
                 result = {"success": False, "error": str(error)}
             results.append({"type": "tool_result", "tool_use_id": call.id, "content": json.dumps(result)})
         conversation_history.append({"role": "user", "content": results})

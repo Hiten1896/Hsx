@@ -1,6 +1,9 @@
 import hashlib
 import hmac
+import ipaddress
 import json
+import os
+import platform
 import secrets
 import sqlite3
 from datetime import UTC, datetime
@@ -9,6 +12,15 @@ from typing import Any
 
 from agent.approval import ApprovalGuard
 from config import BASE_DIR, DATA_DIR
+
+SYSTEM_BODY = {
+    "host": "local Linux host running HSX",
+    "microphone": "ears; local audio input processed with VAD before transcription",
+    "speakers": "voice; local audio playback through the configured host output",
+    "webcam": "eyes; camera capture from /dev/video0 when available and approved",
+    "tty": "local consciousness screen; interactive client runs independently of the server",
+    "execution": "motor control; host commands run with the HSX service account's OS permissions",
+}
 
 ALLOWED_DEVICE_TYPES = frozenset({"windows_pc", "android", "telegram", "local_network"})
 ALLOWED_CAPABILITIES = frozenset({
@@ -24,6 +36,71 @@ ALLOWED_CAPABILITIES = frozenset({
     "system.services",
     "system.resource",
 })
+
+
+def resolve_target_device(target_device: str, peer_host: str) -> str:
+    if target_device not in {"local_host", "client_browser"}:
+        raise ValueError("target_device must be local_host or client_browser.")
+    if target_device == "local_host":
+        try:
+            address = ipaddress.ip_address(peer_host)
+            is_local = address.is_loopback or (
+                isinstance(address, ipaddress.IPv6Address)
+                and address.ipv4_mapped is not None
+                and address.ipv4_mapped.is_loopback
+            )
+        except ValueError:
+            is_local = peer_host.lower() == "localhost"
+        if not is_local:
+            raise PermissionError("local_host routing is only available to requests from this machine.")
+    return target_device
+
+
+def system_body_state(target_device: str = "client_browser") -> dict:
+    return {
+        "metaphor": "System-as-Body is an interface model, not an assertion of sentience.",
+        "host": SYSTEM_BODY["host"],
+        "platform": platform.system(),
+        "process_user": os.getenv("USER") or os.getenv("USERNAME", "unknown"),
+        "execution_permissions": "current service account only; no implicit privilege escalation",
+        "target_device": target_device,
+        "audio_device": os.getenv("HSX_AUDIO_DEVICE", "alsa/default"),
+        "interfaces": {
+            "microphone": {
+                "role": SYSTEM_BODY["microphone"],
+                "available": os.path.exists("/dev/snd"),
+            },
+            "speakers": {
+                "role": SYSTEM_BODY["speakers"],
+                "available": os.path.exists("/dev/snd"),
+            },
+            "webcam": {
+                "role": SYSTEM_BODY["webcam"],
+                "available": os.path.exists("/dev/video0"),
+            },
+            "tty": {
+                "role": SYSTEM_BODY["tty"],
+                "available": os.path.exists("/dev/tty1"),
+            },
+            "execution": {"role": SYSTEM_BODY["execution"]},
+        },
+    }
+
+
+def system_body_context(target_device: str) -> str:
+    state = system_body_state(target_device)
+    interfaces = state["interfaces"]
+    return (
+        "System-as-Body operational model (a routing metaphor, not sentience): "
+        f"this host is {state['host']} ({state['platform']}); the microphone is ears "
+        f"(available={interfaces['microphone']['available']}), speakers are voice "
+        f"(available={interfaces['speakers']['available']}), /dev/video0 is eyes "
+        f"(available={interfaces['webcam']['available']}), the local TTY is the local "
+        f"consciousness screen (tty1_available={interfaces['tty']['available']}), and system_execute "
+        f"is motor control. Execute only with the service account's existing OS permissions; "
+        f"never imply root ownership or privilege escalation. Local audio output device is "
+        f"{state['audio_device']}. Current output target: {target_device}."
+    )
 
 
 class DeviceRegistry:

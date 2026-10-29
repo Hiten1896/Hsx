@@ -59,6 +59,7 @@ def _request_stream(path: str, payload: dict) -> dict:
     )
     event_name = ""
     job = None
+    streamed_text = []
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             while line := response.readline().decode("utf-8", errors="replace"):
@@ -68,9 +69,15 @@ def _request_stream(path: str, payload: dict) -> dict:
                 elif line.startswith("data:"):
                     data = json.loads(line[5:].strip() or "{}")
                     if event_name == "text_delta":
-                        print(data.get("text", ""), end="", flush=True)
+                        text = data.get("text", "")
+                        streamed_text.append(text)
+                        print(text, end="", flush=True)
+                    elif event_name == "acknowledgement":
+                        print(data.get("text", ""), flush=True)
                     elif event_name == "job":
                         job = data
+                    elif event_name == "done":
+                        break
                 elif not line:
                     event_name = ""
     except urllib.error.HTTPError as error:
@@ -79,7 +86,7 @@ def _request_stream(path: str, payload: dict) -> dict:
     except (OSError, json.JSONDecodeError) as error:
         raise RuntimeError(f"Could not stream from HSX at {BASE_URL}: {error}") from error
     print(flush=True)
-    return {"job": job}
+    return {"job": job, "streamed_text": "".join(streamed_text)}
 
 
 def _submit(message: str) -> None:
@@ -103,12 +110,27 @@ def _submit(message: str) -> None:
         return
     print(response.get("response", "Request accepted."))
     print(f"[HSX] Job {job['id']} started; local-host media routing is active.")
+    last_state = job.get("state")
+    shown_actions = set()
 
     while True:
         time.sleep(1)
         job = _request(f"/api/ask-jobs/{job['id']}").get("job")
         if not job:
             raise RuntimeError("HSX job disappeared before completion.")
+        if job.get("state") != last_state:
+            print(f"[HSX] Job state: {job['state']}")
+            last_state = job.get("state")
+        for index, action in enumerate(job.get("device_actions") or []):
+            if index in shown_actions:
+                continue
+            shown_actions.add(index)
+            target = action.get("target_device", "client_browser")
+            status = "completed" if action.get("success", True) else "failed"
+            print(f"[HSX action] {action.get('type', 'unknown')} -> {target}: {status}")
+            detail = action.get("message") or action.get("error") or action.get("path")
+            if detail:
+                print(f"  {detail}")
         if job["state"] == "waiting_for_user":
             print(f"\n[HSX needs input] {job['question']}")
             for index, option in enumerate(job.get("options", []), start=1):
@@ -120,7 +142,11 @@ def _submit(message: str) -> None:
             _request(f"/api/ask-jobs/{job['id']}/answer", {"answer": answer})
             print("[HSX] Resuming the job.")
         elif job["state"] == "done":
-            print(f"\n[HSX]\n{job.get('result') or 'Task completed.'}")
+            result = job.get("result") or "Task completed."
+            if response.get("streamed_text", "").endswith(result):
+                print("\n[HSX response complete]")
+            else:
+                print(f"\n[HSX]\n{result}")
             return
         elif job["state"] in {"failed", "cancelled"}:
             print(f"\n[HSX {job['state']}] {job.get('error') or 'Task did not complete.'}")

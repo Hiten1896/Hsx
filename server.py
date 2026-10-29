@@ -2,8 +2,10 @@ import hmac
 import json
 import mimetypes
 import os
+import queue
 import re
 import threading
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
@@ -11,7 +13,7 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 from agent.ask_user import AskUserJobs, AskUserRequest
 from agent.jobs import JobQueue
 from agent.approval import ApprovalGuard
-from agent.devices import DeviceRegistry
+from agent.devices import DeviceRegistry, resolve_target_device, system_body_state
 from agent.memory import MemoryManager
 from agent.notifier import Notifier
 from agent.orchestrator import run_agent
@@ -39,6 +41,8 @@ HISTORY = []
 SESSION_HISTORIES = {}
 SESSION_LOCKS = {}
 SESSION_LOCKS_GUARD = threading.Lock()
+CHAT_STREAMS = {}
+CHAT_STREAMS_GUARD = threading.Lock()
 MEMORY = MemoryManager(MEMORY_DB)
 JOBS = JobQueue(JOBS_DB)
 ASK_JOBS = AskUserJobs(JOBS_DB)
@@ -67,6 +71,13 @@ def _ask_job_payload(job: dict | None) -> dict | None:
             "expires_at", "result", "error", "target_device", "device_actions",
         )
     }
+
+
+def _emit_chat_event(job_id: str, event: str, payload: dict) -> None:
+    with CHAT_STREAMS_GUARD:
+        event_queue = CHAT_STREAMS.get(job_id)
+    if event_queue is not None:
+        event_queue.put((event, payload))
 
 
 def _resume_ask_job(job_id: str) -> None:
@@ -146,6 +157,7 @@ def _run_chat_job(
     approvals: dict | None = None,
     sensitive: bool = False,
     target_device: str = "client_browser",
+    on_text_delta: Callable[[str], None] | None = None,
 ) -> None:
     job = ASK_JOBS.get(job_id)
     if job is None or job["state"] != "running":
@@ -166,10 +178,13 @@ def _run_chat_job(
                 sensitive=sensitive,
                 target_device=job.get("target_device", target_device),
                 device_actions=device_actions,
+                on_text_delta=on_text_delta,
             )
     except AskUserRequest as question:
         updated = ASK_JOBS.pause(job_id, question)
         ASK_JOBS.save_device_actions(job_id, device_actions)
+        _emit_chat_event(job_id, "job", _ask_job_payload(updated))
+        _emit_chat_event(job_id, "done", {})
         if updated["state"] == "waiting_for_user":
             POLICY.audit_event("needs_input", job["session_id"], job_id, "waiting_for_user")
             NOTIFIER.notify(
@@ -184,11 +199,15 @@ def _run_chat_job(
         return
     except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
         ASK_JOBS.fail(job_id, str(error))
+        _emit_chat_event(job_id, "job", _ask_job_payload(ASK_JOBS.get(job_id)))
+        _emit_chat_event(job_id, "done", {})
         POLICY.audit_event("job_failed", job["session_id"], job_id, "failed")
         NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
         return
     SESSION_HISTORIES[job["session_id"]] = updated_history
     ASK_JOBS.complete(job_id, response, device_actions)
+    _emit_chat_event(job_id, "job", _ask_job_payload(ASK_JOBS.get(job_id)))
+    _emit_chat_event(job_id, "done", {})
     POLICY.audit_event("job_done", job["session_id"], job_id, "done")
     NOTIFIER.notify(
         "job_done",
@@ -242,7 +261,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
+        self.send_header("Connection", "close")
         self.send_header("X-Accel-Buffering", "no")
         origin = self.headers.get("Origin")
         if origin in ALLOWED_ORIGINS:
@@ -291,6 +310,8 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"proposals": IMPROVEMENTS.list()})
         elif path == "/api/devices":
             self._json({"devices": DEVICES.list()})
+        elif path == "/api/body":
+            self._json(system_body_state())
         elif path == "/api/memory":
             self._json({"facts": MEMORY.list_facts()})
         elif path == "/api/notifications":
@@ -381,9 +402,13 @@ class HsxHandler(BaseHTTPRequestHandler):
             if not message:
                 self._json({"error": "Message is required."}, 400)
                 return
-            target_device = str(payload.get("target_device", "client_browser"))
-            if target_device not in {"local_host", "client_browser"}:
-                self._json({"error": "target_device must be local_host or client_browser."}, 400)
+            try:
+                target_device = resolve_target_device(
+                    str(payload.get("target_device", "client_browser")),
+                    self.client_address[0],
+                )
+            except (ValueError, PermissionError) as error:
+                self._json({"error": str(error)}, 400 if isinstance(error, ValueError) else 403)
                 return
             session_id = str(payload.get("session_id", "default"))[:100]
             task_directory = WORKSPACE.create_task_dir(message).relative_to(WORK_DIR).as_posix()
@@ -557,31 +582,63 @@ class HsxHandler(BaseHTTPRequestHandler):
             if not message:
                 self._json({"error": "Message is required."}, 400)
                 return
-            target_device = str(payload.get("target_device", "client_browser"))
-            if target_device not in {"local_host", "client_browser"}:
-                self._json({"error": "target_device must be local_host or client_browser."}, 400)
+            try:
+                target_device = resolve_target_device(
+                    str(payload.get("target_device", "client_browser")),
+                    self.client_address[0],
+                )
+            except (ValueError, PermissionError) as error:
+                self._json({"error": str(error)}, 400 if isinstance(error, ValueError) else 403)
                 return
             session_id = str(payload.get("session_id", "default"))[:100]
             task_directory = WORKSPACE.create_task_dir(message).relative_to(WORK_DIR).as_posix()
             job = ASK_JOBS.create_running(message, session_id, task_directory, target_device)
             POLICY.audit_event("job_created", session_id, job["id"], "queued")
+            event_queue = queue.Queue()
+            with CHAT_STREAMS_GUARD:
+                CHAT_STREAMS[job["id"]] = event_queue
             threading.Thread(
                 target=_run_chat_job,
-                args=(job["id"], payload.get("approvals"), bool(payload.get("sensitive", False)), target_device),
+                args=(
+                    job["id"],
+                    payload.get("approvals"),
+                    bool(payload.get("sensitive", False)),
+                    target_device,
+                    lambda text: _emit_chat_event(job["id"], "text_delta", {"text": text}),
+                ),
                 daemon=True,
             ).start()
             restatement = f"Understood: I’ll work on: {message}"
-            events = (
-                f"event: text_delta\ndata: {json.dumps({'text': restatement})}\n\n"
-                f"event: job\ndata: {json.dumps({'id': job['id'], 'state': 'running'})}\n\n"
-                "event: done\ndata: {}\n\n"
-            ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Content-Length", str(len(events)))
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
             self.end_headers()
-            self.wfile.write(events)
+            try:
+                initial_events = (
+                    f"event: acknowledgement\ndata: {json.dumps({'text': restatement})}\n\n"
+                    f"event: job\ndata: {json.dumps({'id': job['id'], 'state': 'running'})}\n\n"
+                )
+                self.wfile.write(initial_events.encode())
+                self.wfile.flush()
+                while True:
+                    try:
+                        event_name, event_data = event_queue.get(timeout=15)
+                    except queue.Empty:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                        continue
+                    data = json.dumps(event_data, separators=(",", ":"))
+                    self.wfile.write(f"event: {event_name}\ndata: {data}\n\n".encode())
+                    self.wfile.flush()
+                    if event_name == "done":
+                        break
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                with CHAT_STREAMS_GUARD:
+                    CHAT_STREAMS.pop(job["id"], None)
         elif path == "/api/memory":
             payload = self._body()
             try:

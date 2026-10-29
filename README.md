@@ -24,6 +24,24 @@ Name: **[Hiten Sharma]**
 - Phase 13: multi-model debate and synthesis complete
 - Phase 17: capability-scoped device-control foundation complete
 - Phase 18: shared workspace, ask-me flow, report skill, notifications, and PWA complete
+- Phase 19: System-as-Body runtime context, host-device routing enforcement, and hardware lifecycle safety complete
+- Phase 20: live-streaming local CLI and validated headless boot setup complete
+
+### Latest updates: Phases 19 and 20
+
+**Phase 19 — System-as-Body and safe local hardware routing**
+
+- Added a runtime body context that maps the host microphone, speakers, webcam, TTY, and command execution to their operational roles. This is a routing metaphor, not a claim of sentience or elevated ownership.
+- Added authenticated `/api/body` status for host platform, interface availability, target device, and the service account's permission boundary.
+- Enforced `local_host` routing on the server: only loopback-origin requests may select host peripherals; browser requests remain routed to `client_browser`.
+- Kept local audio playback asynchronous and made camera capture reliably clean up the ffmpeg process and device access on success and timeout.
+- Persisted successful and failed local/browser media action outcomes so the CLI can show what happened.
+
+**Phase 20 — interactive CLI streaming and boot validation**
+
+- Wired model text deltas into the `/api/chat/stream` SSE endpoint and the local TTY CLI; the CLI also shows job-state changes, action outcomes, and final results while remaining independent of the server process.
+- Strengthened the unified Debian boot installer with checks for service-account access to `.env` and the virtual environment, voice configuration and Whisper model, and default audio input/output availability. It warns when the service account cannot access `/dev/video0`.
+- Added regression coverage for SSE delivery, local-only host routing, media action reporting, asynchronous audio, and camera process cleanup.
 
 ## Setup
 
@@ -89,9 +107,12 @@ sudo journalctl -u hsx-voice-listener.service -f
 ```
 
 TTY1 launches `python cli.py` after auto-login. The client submits prompts to the local API
-with `target_device=local_host`, displays streamed acknowledgements and job results, and
-asks for answers when a job pauses for user input. Other terminals and SSH logins remain
-normal shells. The CLI can also be started manually with `python cli.py`.
+with `target_device=local_host`, displays streamed model text, job-state updates,
+local/browser media action logs, and job results, and asks for answers when a job pauses
+for user input.
+The CLI is a separate process from the server; leaving the prompt does not stop HSX.
+Other terminals and SSH logins remain normal shells. The CLI can also be started manually
+with `python cli.py`.
 
 ### Local voice and hardware
 
@@ -101,6 +122,15 @@ Media requests carry a server-validated `target_device`: browser requests are fi
 `/dev/video0`; outputs are saved under the active dated task folder. Browser audio and
 camera requests are handed back to the browser. Audio requires a user click; camera
 capture requires an explicit browser confirmation and the browser's camera permission.
+Requests from non-loopback clients cannot select `local_host`, so a remote browser request
+cannot trigger host audio or camera capture by changing its payload.
+
+HSX uses a **System-as-Body** operational metaphor: the microphone is ears, speakers are
+voice, `/dev/video0` is eyes, the local TTY is the terminal interface, and `system_execute`
+is motor control. This is a routing/context model, not a claim of sentience. Host operations
+run only with the Unix account permissions assigned to the HSX service; the service does
+not acquire root privileges automatically. The authenticated `/api/body` endpoint reports
+the current host interface availability and routing target.
 
 The microphone listener is opt-in and uses frame-based WebRTC VAD plus local Whisper
 transcription. Captured audio remains in memory for transcription and is discarded; only
@@ -115,9 +145,12 @@ source venv/bin/activate
 pip install -r requirements-voice.txt
 ```
 
-The single boot-mode installer above enables the listener after explicit consent. For a
-manual service setup, set `HSX_ENABLE_VOICE_LISTENER=1` in `.env` and install the optional
-listener service:
+The single boot-mode installer above enables the listener after explicit consent. It checks
+that the service account can read `.env` and run the virtualenv, validates the wake phrase
+and Whisper model, and verifies that PortAudio can see default input and output devices. If
+`/dev/video0` exists but the service account lacks read/write access, setup warns that
+camera capture may fail. For a manual service setup, set
+`HSX_ENABLE_VOICE_LISTENER=1` in `.env` and install the optional listener service:
 
 ```bash
 sudo cp deploy/hsx-voice-listener.service /etc/systemd/system/
