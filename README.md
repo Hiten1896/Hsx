@@ -22,7 +22,10 @@ Name: **[Hiten Sharma]**
 - Phase 11: guarded self-improvement proposal pipeline complete
 - Phase 12: free-tier provider configuration complete
 - Phase 13: multi-model debate and synthesis complete
-- Phase 17: capability-scoped device-control foundation complete
+- Phase 14: startup, secrets, and approval hardening complete
+- Phase 15: one-time web-token login complete
+- Phase 16: hardened Docker code-execution isolation complete
+- Phase 17: capability-scoped device registry and policy broker complete
 - Phase 18: shared workspace, ask-me flow, report skill, notifications, and PWA complete
 - Phase 19: System-as-Body runtime context, host-device routing enforcement, and hardware lifecycle safety complete
 - Phase 20: live-streaming local CLI and validated headless boot setup complete
