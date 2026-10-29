@@ -1,0 +1,15 @@
+{
+  "name": "voice_input",
+  "description": "Transcribe a local audio recording using the optional local Whisper model. Audio is processed locally and is not retained by this skill.",
+  "risk": "confirm",
+  "advisory": "This reads and transcribes the selected local audio file.",
+  "requires_acknowledgement": true,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "audio_path": {"type": "string"},
+      "model_name": {"type": "string"}
+    },
+    "required": ["audio_path"]
+  }
+}

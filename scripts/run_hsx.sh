@@ -18,7 +18,4 @@ fi
 
 cd "${REPO_ROOT}"
 source "${VENV_ACTIVATE}"
-set -a
-source "${ENV_FILE}"
-set +a
 exec python main.py

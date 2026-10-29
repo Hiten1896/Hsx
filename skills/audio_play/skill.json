@@ -1,0 +1,15 @@
+{
+  "name": "audio_play",
+  "description": "Play audio on the local host speakers or hand playback off to the requesting browser.",
+  "risk": "confirm",
+  "advisory": "This plays audio through the selected device.",
+  "requires_acknowledgement": true,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "source": {"type": "string"},
+      "target_device": {"type": "string", "enum": ["local_host", "client_browser"]}
+    },
+    "required": ["source"]
+  }
+}

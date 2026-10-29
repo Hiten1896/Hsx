@@ -1,0 +1,19 @@
+[Unit]
+Description=Hsx opt-in local voice command listener
+After=hsx.service sound.target
+Requires=hsx.service
+
+[Service]
+Type=simple
+User=hsx
+WorkingDirectory=/opt/hsx
+EnvironmentFile=/opt/hsx/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/hsx/venv/bin/python /opt/hsx/scripts/voice_listener.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

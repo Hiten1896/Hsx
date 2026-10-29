@@ -1,0 +1,17 @@
+{
+  "name": "camera_record",
+  "description": "Capture a snapshot or short video from the local host camera, or request a user-confirmed capture from the browser camera.",
+  "risk": "confirm",
+  "advisory": "This accesses a camera and can create a photo or video. Confirm the capture and ensure people present consent.",
+  "requires_acknowledgement": true,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "mode": {"type": "string", "enum": ["snapshot", "video"]},
+      "duration_seconds": {"type": "integer"},
+      "filename": {"type": "string"},
+      "target_device": {"type": "string", "enum": ["local_host", "client_browser"]}
+    },
+    "required": ["mode"]
+  }
+}

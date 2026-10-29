@@ -18,6 +18,7 @@ TTY_OVERRIDE_FILE="${TTY_OVERRIDE_DIR}/override.conf"
 LOG_DIR="${REPO_ROOT}/logs"
 LOG_FILE="${LOG_DIR}/hsx_service.log"
 AUTO_LOGIN_USER="${HSX_AUTO_LOGIN_USER:-${SUDO_USER:-$(logname 2>/dev/null || whoami)}}"
+AUTO_LOGIN_HOME="$(getent passwd "${AUTO_LOGIN_USER}" | cut -d: -f6)"
 
 if [[ ! -f "${MAIN_FILE}" ]]; then
   echo "Missing project entrypoint: ${MAIN_FILE}" >&2
@@ -39,6 +40,11 @@ if [[ ! -f "${RUNNER}" ]]; then
   exit 1
 fi
 
+if [[ -z "${AUTO_LOGIN_HOME}" || ! -d "${AUTO_LOGIN_HOME}" ]]; then
+  echo "Could not resolve a home directory for ${AUTO_LOGIN_USER}." >&2
+  exit 1
+fi
+
 mkdir -p "${LOG_DIR}"
 touch "${LOG_FILE}"
 chown "${AUTO_LOGIN_USER}:$(id -gn "${AUTO_LOGIN_USER}")" "${LOG_FILE}"
@@ -56,8 +62,9 @@ User=${AUTO_LOGIN_USER}
 WorkingDirectory=${REPO_ROOT}
 Environment=PYTHONUNBUFFERED=1
 Environment=HSX_VENV_DIR=${REPO_ROOT}/venv
-ExecStart=${RUNNER}
-Restart=always
+EnvironmentFile=${ENV_FILE}
+ExecStart=/bin/bash ${RUNNER}
+Restart=on-failure
 RestartSec=5
 StandardOutput=append:${LOG_FILE}
 StandardError=append:${LOG_FILE}
@@ -80,6 +87,35 @@ EOF
 install -o root -g root -m 0644 "${TTY_OVERRIDE_FILE}.tmp" "${TTY_OVERRIDE_FILE}"
 rm -f "${TTY_OVERRIDE_FILE}.tmp"
 
+PROFILE_MARKER="# >>> HSX TTY1 CLI >>>"
+install_tty_cli_hook() {
+  local profile_file="$1"
+  if grep -Fq "${PROFILE_MARKER}" "${profile_file}" 2>/dev/null; then
+    return
+  fi
+  SHELL_REPO_ROOT="$(printf '%q' "${REPO_ROOT}")"
+  cat >> "${profile_file}" <<EOF
+
+${PROFILE_MARKER}
+if [[ "\$(tty 2>/dev/null)" == "/dev/tty1" ]]; then
+  HSX_REPO_ROOT=${SHELL_REPO_ROOT}
+  cd "\${HSX_REPO_ROOT}"
+  source "\${HSX_REPO_ROOT}/venv/bin/activate"
+  exec python "\${HSX_REPO_ROOT}/cli.py"
+fi
+# <<< HSX TTY1 CLI <<<
+EOF
+  chown "${AUTO_LOGIN_USER}:$(id -gn "${AUTO_LOGIN_USER}")" "${profile_file}"
+}
+
+install_tty_cli_hook "${AUTO_LOGIN_HOME}/.profile"
+if [[ -f "${AUTO_LOGIN_HOME}/.bash_profile" ]]; then
+  install_tty_cli_hook "${AUTO_LOGIN_HOME}/.bash_profile"
+fi
+if [[ -f "${AUTO_LOGIN_HOME}/.bash_login" ]]; then
+  install_tty_cli_hook "${AUTO_LOGIN_HOME}/.bash_login"
+fi
+
 systemctl daemon-reload
 systemctl enable --now "${SERVICE_NAME}.service"
 systemctl enable "getty@tty1.service"
@@ -88,6 +124,7 @@ echo
 echo "Hsx service installed: ${SERVICE_FILE}"
 echo "TTY1 autologin configured: ${TTY_OVERRIDE_FILE}"
 echo "TTY1 auto-login will take effect on the next boot."
+echo "TTY1 shell profile launches the interactive HSX CLI."
 echo "Logs: ${LOG_FILE}"
 echo "To check status: systemctl status ${SERVICE_NAME}.service"
 echo "To view logs: journalctl -u ${SERVICE_NAME}.service -f"

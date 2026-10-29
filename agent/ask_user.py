@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import sqlite3
 import threading
@@ -57,12 +59,22 @@ class AskUserJobs:
                 state TEXT NOT NULL, question_count INTEGER NOT NULL, answers TEXT NOT NULL,
                 checkpoint TEXT NOT NULL, tool_call_id TEXT NOT NULL, result TEXT NOT NULL DEFAULT '',
                 error TEXT NOT NULL DEFAULT '', task_dir TEXT NOT NULL DEFAULT '',
+                target_device TEXT NOT NULL DEFAULT 'client_browser',
+                device_actions TEXT NOT NULL DEFAULT '[]',
                 created TEXT NOT NULL, updated TEXT NOT NULL,
                 expires_at TEXT NOT NULL)"""
             )
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(ask_jobs)")}
             if "task_dir" not in columns:
                 connection.execute("ALTER TABLE ask_jobs ADD COLUMN task_dir TEXT NOT NULL DEFAULT ''")
+            if "target_device" not in columns:
+                connection.execute(
+                    "ALTER TABLE ask_jobs ADD COLUMN target_device TEXT NOT NULL DEFAULT 'client_browser'"
+                )
+            if "device_actions" not in columns:
+                connection.execute(
+                    "ALTER TABLE ask_jobs ADD COLUMN device_actions TEXT NOT NULL DEFAULT '[]'"
+                )
             connection.execute(
                 """UPDATE ask_jobs SET state = 'failed',
                 error = 'The server restarted while this job was running; submit it again.',
@@ -77,8 +89,8 @@ class AskUserJobs:
     @staticmethod
     def _public(row: sqlite3.Row) -> dict:
         job = dict(row)
-        for field in ("options", "answers", "checkpoint", "result"):
-            job[field] = json.loads(job[field]) if job[field] else ([] if field in {"options", "answers", "checkpoint"} else None)
+        for field in ("options", "answers", "checkpoint", "device_actions", "result"):
+            job[field] = json.loads(job[field]) if job[field] else ([] if field in {"options", "answers", "checkpoint", "device_actions"} else None)
         job["allow_free_text"] = bool(job["allow_free_text"])
         return job
 
@@ -90,6 +102,7 @@ class AskUserJobs:
         checkpoint: list[dict],
         tool_call_id: str,
         task_dir: str = "",
+        target_device: str = "client_browser",
     ) -> dict:
         now = self._now()
         job_id = uuid.uuid4().hex
@@ -98,8 +111,8 @@ class AskUserJobs:
             connection.execute(
                 """INSERT INTO ask_jobs(
                     id, request, session_id, question, options, allow_free_text, state,
-                    question_count, answers, checkpoint, tool_call_id, task_dir, created, updated, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'waiting_for_user', 1, '[]', ?, ?, ?, ?, ?, ?)""",
+                    question_count, answers, checkpoint, tool_call_id, task_dir, target_device, created, updated, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'waiting_for_user', 1, '[]', ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     job_id,
                     request,
@@ -110,6 +123,7 @@ class AskUserJobs:
                     json.dumps(checkpoint),
                     tool_call_id,
                     task_dir,
+                    target_device,
                     now.isoformat(),
                     now.isoformat(),
                     expires.isoformat(),
@@ -117,7 +131,13 @@ class AskUserJobs:
             )
         return self.get(job_id)
 
-    def create_running(self, request: str, session_id: str, task_dir: str = "") -> dict:
+    def create_running(
+        self,
+        request: str,
+        session_id: str,
+        task_dir: str = "",
+        target_device: str = "client_browser",
+    ) -> dict:
         now = self._now().isoformat()
         job_id = uuid.uuid4().hex
         expires = (self._now() + timedelta(hours=24)).isoformat()
@@ -125,9 +145,9 @@ class AskUserJobs:
             connection.execute(
                 """INSERT INTO ask_jobs(
                     id, request, session_id, question, options, allow_free_text, state,
-                    question_count, answers, checkpoint, tool_call_id, task_dir, created, updated, expires_at
-                ) VALUES (?, ?, ?, '', '[]', 1, 'running', 0, '[]', '[]', '', ?, ?, ?, ?)""",
-                (job_id, request, session_id, task_dir, now, now, expires),
+                    question_count, answers, checkpoint, tool_call_id, task_dir, target_device, created, updated, expires_at
+                ) VALUES (?, ?, ?, '', '[]', 1, 'running', 0, '[]', '[]', '', ?, ?, ?, ?, ?)""",
+                (job_id, request, session_id, task_dir, target_device, now, now, expires),
             )
         return self.get(job_id)
 
@@ -141,7 +161,8 @@ class AskUserJobs:
         self.expire()
         with self._connect() as connection:
             rows = connection.execute(
-                """SELECT id, state, question, options, allow_free_text, question_count, expires_at
+                """SELECT id, state, question, options, allow_free_text, question_count,
+                expires_at, target_device, device_actions
                 FROM ask_jobs ORDER BY created DESC LIMIT 100"""
             ).fetchall()
         return [
@@ -149,6 +170,8 @@ class AskUserJobs:
                 **dict(row),
                 "options": json.loads(row["options"]),
                 "allow_free_text": bool(row["allow_free_text"]),
+                "target_device": row["target_device"],
+                "device_actions": json.loads(row["device_actions"]),
                 "result": None,
                 "error": "",
             }
@@ -232,13 +255,20 @@ class AskUserJobs:
             updated = connection.execute("SELECT * FROM ask_jobs WHERE id = ?", (job_id,)).fetchone()
         return self._public(updated)
 
-    def complete(self, job_id: str, result: str) -> dict:
+    def complete(self, job_id: str, result: str, device_actions: list[dict] | None = None) -> dict:
         with self._connect() as connection:
             connection.execute(
-                "UPDATE ask_jobs SET state = 'done', result = ?, error = '', updated = ? WHERE id = ?",
-                (json.dumps(result), self._now().isoformat(), job_id),
+                "UPDATE ask_jobs SET state = 'done', result = ?, device_actions = ?, error = '', updated = ? WHERE id = ?",
+                (json.dumps(result), json.dumps(device_actions or []), self._now().isoformat(), job_id),
             )
         return self.get(job_id)
+
+    def save_device_actions(self, job_id: str, device_actions: list[dict]) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE ask_jobs SET device_actions = ?, updated = ? WHERE id = ?",
+                (json.dumps(device_actions), self._now().isoformat(), job_id),
+            )
 
     def fail(self, job_id: str, error: str) -> dict:
         with self._connect() as connection:

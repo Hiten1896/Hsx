@@ -62,7 +62,10 @@ def _ask_job_payload(job: dict | None) -> dict | None:
         return None
     return {
         key: job[key]
-        for key in ("id", "state", "question", "options", "allow_free_text", "question_count", "expires_at", "result", "error")
+        for key in (
+            "id", "state", "question", "options", "allow_free_text", "question_count",
+            "expires_at", "result", "error", "target_device", "device_actions",
+        )
     }
 
 
@@ -71,6 +74,7 @@ def _resume_ask_job(job_id: str) -> None:
     if job is None or job["state"] != "running":
         return
     lock = _session_lock(job["session_id"])
+    device_actions = list(job.get("device_actions") or [])
     try:
         with lock, task_output_scope(WORKSPACE, job["request"], job["task_dir"]):
             response, history = run_agent(
@@ -83,9 +87,12 @@ def _resume_ask_job(job_id: str) -> None:
                     "tool_call_id": job["tool_call_id"],
                     "answer": job["answers"][-1],
                 },
+                target_device=job.get("target_device", "client_browser"),
+                device_actions=device_actions,
             )
     except AskUserRequest as question:
         updated = ASK_JOBS.pause(job_id, question)
+        ASK_JOBS.save_device_actions(job_id, device_actions)
         if updated["state"] == "waiting_for_user":
             POLICY.audit_event("needs_input", job["session_id"], job_id, "waiting_for_user")
             NOTIFIER.notify(
@@ -104,7 +111,7 @@ def _resume_ask_job(job_id: str) -> None:
         NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
         return
     SESSION_HISTORIES[job["session_id"]] = history
-    ASK_JOBS.complete(job_id, response)
+    ASK_JOBS.complete(job_id, response, device_actions)
     POLICY.audit_event("job_done", job["session_id"], job_id, "done")
     NOTIFIER.notify(
         "job_done",
@@ -134,12 +141,18 @@ def _task_result_path(job: dict) -> str:
     return files[0]["path"] if files else ""
 
 
-def _run_chat_job(job_id: str, approvals: dict | None = None, sensitive: bool = False) -> None:
+def _run_chat_job(
+    job_id: str,
+    approvals: dict | None = None,
+    sensitive: bool = False,
+    target_device: str = "client_browser",
+) -> None:
     job = ASK_JOBS.get(job_id)
     if job is None or job["state"] != "running":
         return
     lock = _session_lock(job["session_id"])
     POLICY.audit_event("job_started", job["session_id"], job_id, "running")
+    device_actions = list(job.get("device_actions") or [])
     try:
         with lock, task_output_scope(WORKSPACE, job["request"], job["task_dir"]):
             history = SESSION_HISTORIES.setdefault(job["session_id"], [])
@@ -151,9 +164,12 @@ def _run_chat_job(job_id: str, approvals: dict | None = None, sensitive: bool = 
                 session_id=job["session_id"],
                 approvals=approvals,
                 sensitive=sensitive,
+                target_device=job.get("target_device", target_device),
+                device_actions=device_actions,
             )
     except AskUserRequest as question:
         updated = ASK_JOBS.pause(job_id, question)
+        ASK_JOBS.save_device_actions(job_id, device_actions)
         if updated["state"] == "waiting_for_user":
             POLICY.audit_event("needs_input", job["session_id"], job_id, "waiting_for_user")
             NOTIFIER.notify(
@@ -172,7 +188,7 @@ def _run_chat_job(job_id: str, approvals: dict | None = None, sensitive: bool = 
         NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
         return
     SESSION_HISTORIES[job["session_id"]] = updated_history
-    ASK_JOBS.complete(job_id, response)
+    ASK_JOBS.complete(job_id, response, device_actions)
     POLICY.audit_event("job_done", job["session_id"], job_id, "done")
     NOTIFIER.notify(
         "job_done",
@@ -365,13 +381,17 @@ class HsxHandler(BaseHTTPRequestHandler):
             if not message:
                 self._json({"error": "Message is required."}, 400)
                 return
+            target_device = str(payload.get("target_device", "client_browser"))
+            if target_device not in {"local_host", "client_browser"}:
+                self._json({"error": "target_device must be local_host or client_browser."}, 400)
+                return
             session_id = str(payload.get("session_id", "default"))[:100]
             task_directory = WORKSPACE.create_task_dir(message).relative_to(WORK_DIR).as_posix()
-            job = ASK_JOBS.create_running(message, session_id, task_directory)
+            job = ASK_JOBS.create_running(message, session_id, task_directory, target_device)
             POLICY.audit_event("job_created", session_id, job["id"], "queued")
             threading.Thread(
                 target=_run_chat_job,
-                args=(job["id"], payload.get("approvals"), bool(payload.get("sensitive", False))),
+                args=(job["id"], payload.get("approvals"), bool(payload.get("sensitive", False)), target_device),
                 daemon=True,
             ).start()
             self._json({
@@ -537,13 +557,17 @@ class HsxHandler(BaseHTTPRequestHandler):
             if not message:
                 self._json({"error": "Message is required."}, 400)
                 return
+            target_device = str(payload.get("target_device", "client_browser"))
+            if target_device not in {"local_host", "client_browser"}:
+                self._json({"error": "target_device must be local_host or client_browser."}, 400)
+                return
             session_id = str(payload.get("session_id", "default"))[:100]
             task_directory = WORKSPACE.create_task_dir(message).relative_to(WORK_DIR).as_posix()
-            job = ASK_JOBS.create_running(message, session_id, task_directory)
+            job = ASK_JOBS.create_running(message, session_id, task_directory, target_device)
             POLICY.audit_event("job_created", session_id, job["id"], "queued")
             threading.Thread(
                 target=_run_chat_job,
-                args=(job["id"], payload.get("approvals"), bool(payload.get("sensitive", False))),
+                args=(job["id"], payload.get("approvals"), bool(payload.get("sensitive", False)), target_device),
                 daemon=True,
             ).start()
             restatement = f"Understood: I’ll work on: {message}"
@@ -599,6 +623,36 @@ class HsxHandler(BaseHTTPRequestHandler):
                 self._json({"error": str(error)}, 400)
                 return
             self._json({"success": True, "name": destination.name, "type": destination.suffix[1:]})
+        elif path == "/api/media/upload":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self._json({"error": "Content-Length must be an integer."}, 400)
+                return
+            if length <= 0 or length > 100 * 1024 * 1024:
+                self._json({"error": "Media upload must be between 1 byte and 100 MB."}, 413)
+                return
+            filename = Path(
+                self.headers.get("X-Filename", "browser_capture.webm").replace("\\", "/")
+            ).name
+            if not filename or filename in {".", ".."}:
+                self._json({"error": "A valid media filename is required."}, 400)
+                return
+            try:
+                media = self.rfile.read(length)
+                if len(media) != length:
+                    raise ValueError("The media upload was incomplete.")
+                destination = WORKSPACE.unique_write_path(Path("Browser Media") / filename)
+                destination.write_bytes(media)
+            except (OSError, ValueError) as error:
+                self._json({"error": str(error)}, 400)
+                return
+            self._json({
+                "success": True,
+                "name": destination.name,
+                "path": destination.relative_to(WORK_DIR).as_posix(),
+                "bytes": len(media),
+            }, 201)
         elif path == "/api/video/jobs":
             payload = self._body()
             project_id = str(payload.get("project_id", "project_video")).strip() or "project_video"

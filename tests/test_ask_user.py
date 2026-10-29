@@ -56,6 +56,26 @@ def test_ask_user_timeout_and_question_limit(tmp_path: Path):
     assert "question limit" in limited["error"].lower()
 
 
+def test_target_device_survives_job_store_restart(tmp_path: Path):
+    database = tmp_path / "jobs.db"
+    job = AskUserJobs(database).create_running(
+        "Play a tone", "local-tty", target_device="local_host"
+    )
+    restored = AskUserJobs(database).get(job["id"])
+    assert restored["target_device"] == "local_host"
+    assert restored["device_actions"] == []
+    AskUserJobs(database).complete(
+        job["id"],
+        "Playback ready",
+        [{"type": "audio_play", "source_url": "https://example.test/tone.wav"}],
+    )
+    completed = AskUserJobs(database).get(job["id"])
+    assert completed["device_actions"][0]["type"] == "audio_play"
+    listed = AskUserJobs(database).list()[0]
+    assert listed["target_device"] == "local_host"
+    assert listed["device_actions"][0]["type"] == "audio_play"
+
+
 def test_agent_question_checkpoint_resumes_without_replaying_tool_call(tmp_path: Path, monkeypatch):
     from agent import orchestrator
     from skills.ask_user.skill import run as ask_user
@@ -100,3 +120,39 @@ def test_agent_question_checkpoint_resumes_without_replaying_tool_call(tmp_path:
     tool_result = resumed_history[-2]["content"][0]
     assert tool_result["tool_use_id"] == "ask-call-123"
     assert "source.xlsx" in tool_result["content"]
+
+
+def test_agent_overrides_media_tool_target_with_request_context(monkeypatch):
+    from agent import orchestrator
+
+    responses = iter([
+        NormalizedResponse([
+            NormalizedBlock(
+                type="tool_use",
+                name="audio_play",
+                input={"source": "tone.wav", "target_device": "client_browser"},
+                id="audio-call",
+            )
+        ]),
+        NormalizedResponse([NormalizedBlock(type="text", text="Playback started.")]),
+    ])
+    observed = {}
+
+    def fake_audio(source: str, target_device: str):
+        observed["source"] = source
+        observed["target_device"] = target_device
+        return {"success": True, "target_device": target_device}
+
+    monkeypatch.setattr(orchestrator, "call_llm", lambda *args, **kwargs: next(responses))
+    actions = []
+    answer, _ = orchestrator.run_agent(
+        "Play the sound on this host",
+        [],
+        [{"name": "audio_play", "risk": "safe"}],
+        {"audio_play": fake_audio},
+        target_device="local_host",
+        device_actions=actions,
+    )
+    assert answer == "Playback started."
+    assert observed == {"source": "tone.wav", "target_device": "local_host"}
+    assert actions == []
