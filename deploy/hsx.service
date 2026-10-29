@@ -1,16 +1,20 @@
 [Unit]
 Description=Hsx local AI agent
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=hsx
 WorkingDirectory=/opt/hsx
-EnvironmentFile=/opt/hsx/.env
 EnvironmentFile=-/etc/hsx/secrets.env
-ExecStart=/opt/hsx/.venv/bin/python main.py
-Restart=on-failure
-NoNewPrivileges=true
+Environment=HSX_VENV_DIR=/opt/hsx/.venv
+ExecStart=/opt/hsx/scripts/run_hsx.sh
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/hsx/logs/hsx_service.log
+StandardError=append:/opt/hsx/logs/hsx_service.log
+NoNewPrivileges=false
 PrivateTmp=true
 
 [Install]

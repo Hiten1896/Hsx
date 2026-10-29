@@ -19,6 +19,13 @@ class PolicyEngine:
         self._stopped = threading.Event()
         self.approval_guard = approval_guard
 
+    @staticmethod
+    def dangerous_override_enabled() -> bool:
+        value = os.getenv("HSX_ALLOW_DANGEROUS", "").strip().lower()
+        if value in {"1", "true", "yes", "on", "allow", "override"}:
+            return True
+        return os.getenv("HSX_ALLOW_SYSTEM_CONTROL", "").strip().lower() in {"1", "true", "yes", "on", "allow", "override"}
+
     def stop_all(self) -> None:
         self._stopped.set()
 
@@ -70,20 +77,38 @@ class PolicyEngine:
         key = (session, skill["name"])
         with self._lock:
             already_acknowledged = self._acknowledged.get(key) == fingerprint
+
         if approved is False:
             self._audit(session, skill["name"], arguments, risk, "cancel", "denied", advisory)
             return {"allowed": False, "status": "cancelled"}
         if approved is True:
             approved = None
+
         if isinstance(approved, str) and self.approval_guard is not None and self.approval_guard.verify(approved):
-            if risk == "dangerous" and os.getenv("HSX_ALLOW_DANGEROUS") != "1":
+            if risk == "dangerous" and not self.dangerous_override_enabled():
                 self._audit(session, skill["name"], arguments, risk, "deny", "dangerous_disabled", advisory)
                 return {"allowed": False, "status": "dangerous_disabled"}
             with self._lock:
                 self._acknowledged[key] = fingerprint
             self._audit(session, skill["name"], arguments, risk, "proceed", "approved", advisory)
             return {"allowed": True, "status": "approved"}
-        if risk == "dangerous" or (not already_acknowledged and (requires_ack or risk == "confirm")):
+
+        if risk == "dangerous":
+            self._audit(session, skill["name"], arguments, risk, "ask", "waiting_approval", advisory)
+            return {
+                "allowed": False,
+                "status": "waiting_approval",
+                "approval_request": {
+                    "tool": skill["name"],
+                    "arguments": arguments,
+                    "advisory": advisory,
+                    "choices": ["I understand, proceed", "Cancel"],
+                    "requires_owner_pin": True,
+                    "override_env": "HSX_ALLOW_DANGEROUS=1 or HSX_ALLOW_SYSTEM_CONTROL=1",
+                },
+            }
+
+        if not already_acknowledged and (requires_ack or risk == "confirm"):
             self._audit(session, skill["name"], arguments, risk, "ask", "waiting_approval", advisory)
             return {
                 "allowed": False,
@@ -95,6 +120,7 @@ class PolicyEngine:
                     "choices": ["I understand, proceed", "Cancel"],
                 },
             }
+
         self._audit(session, skill["name"], arguments, risk, "allow", "approved", advisory)
         return {"allowed": True, "status": "allowed"}
 

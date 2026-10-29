@@ -49,6 +49,29 @@ python main.py
 
 Open `http://127.0.0.1:8000`. You do not need Anthropic: configure any available provider key in `.env` and order providers with `HSX_PROVIDER` and `HSX_FALLBACKS`. Gemini, Groq, OpenRouter free models, OpenAI-compatible endpoints, and local Ollama are supported. Without a configured provider, the workspace remains usable for local testing.
 
+### Headless Debian boot automation
+
+To enable both TTY1 auto-login and a systemd service that launches the project at boot, run the repo setup script once from the project root as root:
+
+```bash
+sudo bash scripts/setup_systemd.sh
+```
+
+This script verifies that the project contains the expected entries (`main.py`, `venv/bin/activate`, and `.env`), writes a `hsx.service` unit under `/etc/systemd/system/`, enables it with `Restart=always` and `RestartSec=5`, and redirects logs to `logs/hsx_service.log`. It also writes the TTY1 override file at `/etc/systemd/system/getty@tty1.service.d/override.conf` so the configured user is auto-logged in without a password on boot.
+
+If you want to customize the service user or autologin account, set `HSX_AUTO_LOGIN_USER` before running the script, for example:
+
+```bash
+sudo HSX_AUTO_LOGIN_USER=hsx bash scripts/setup_systemd.sh
+```
+
+After installation:
+
+```bash
+sudo systemctl status hsx.service
+sudo journalctl -u hsx.service -f
+```
+
 ### Free-tier provider setup
 
 Copy the key slots from `.env.example` into `.env` and fill only the providers you use:
@@ -90,6 +113,10 @@ For text-only requests, `HSX_PANEL_MODE=off` is the default. Set it to `auto` to
 3. Run the fixed strict pytest check with a scrubbed environment.
 4. Present the passing proposal, test output, changed files, and risk summary to Hiten.
 5. Require explicit owner approval before promotion; promotion is limited to `agent/`, `skills/`, `interfaces/`, or `prompts/`.
+
+### Local system administration control
+
+The `system_execute` skill is a dangerous, capability-scoped tool for host-level administration on Debian 13. It can execute shell commands, inspect files and directories outside the workspace, read/write system config files, and inspect processes, services, and resource usage. By design it requires explicit owner approval and audit logging through the policy engine. The environment toggle `HSX_ALLOW_SYSTEM_CONTROL=1` or `HSX_ALLOW_DANGEROUS=1` can enable a trusted local override for administrative workflows, but the default remains locked behind policy checks.
 
 ## Roadmap additions
 

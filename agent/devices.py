@@ -18,6 +18,11 @@ ALLOWED_CAPABILITIES = frozenset({
     "camera.capture",
     "location.read",
     "media.control",
+    "system.execute",
+    "system.files",
+    "system.process",
+    "system.services",
+    "system.resource",
 })
 
 

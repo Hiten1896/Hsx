@@ -1,0 +1,29 @@
+{
+  "name": "system_execute",
+  "description": "Execute shell commands, inspect files, and manage host services on the local Debian system with explicit approval and audit logging.",
+  "risk": "dangerous",
+  "advisory": "This command can read, write, restart, or remove system files and services. Only run commands you trust and understand.",
+  "requires_acknowledgement": true,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["exec", "read_file", "write_file", "list_dir", "stat", "processes", "services", "service_action", "resource"]
+      },
+      "command": {"type": "string"},
+      "path": {"type": "string"},
+      "content": {"type": "string"},
+      "timeout": {"type": "number"},
+      "cwd": {"type": "string"},
+      "shell": {"type": "boolean"},
+      "append": {"type": "boolean"},
+      "encoding": {"type": "string"},
+      "service": {"type": "string"},
+      "service_action": {"type": "string"},
+      "limit": {"type": "integer"},
+      "recursive": {"type": "boolean"}
+    },
+    "required": ["action"]
+  }
+}
