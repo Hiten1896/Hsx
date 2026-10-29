@@ -17,6 +17,7 @@ class LLMEvent:
     text: str = ""
     tool_name: str = ""
     tool_input: dict[str, Any] = field(default_factory=dict)
+    tool_call_id: str = ""
     usage: dict[str, int] = field(default_factory=dict)
     stop_reason: str = ""
 

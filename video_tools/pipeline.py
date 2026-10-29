@@ -8,13 +8,15 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from config import MEMORY_DIR, OUTPUTS_DIR, SCRATCH_DIR, UPLOADS_DIR
+from agent.workspace import Workspace
+from config import MEMORY_DIR, OUTPUTS_DIR, SCRATCH_DIR, WORKSPACE_DIR
 
 JOB_STORE_PATH = MEMORY_DIR / "video_jobs.json"
 _JOB_LOCK = threading.Lock()
 _JOB_QUEUE = queue.Queue()
 _JOB_STATE = {}
 _BACKGROUND_WORKER = None
+WORKSPACE = Workspace(WORKSPACE_DIR, OUTPUTS_DIR)
 
 
 def _module_available(module_name: str) -> bool:
@@ -48,18 +50,12 @@ def _resolve_source_files(source_files: list | None) -> list[Path]:
 
     candidates = []
     for raw_path in source_files:
-        path = Path(raw_path)
-        if path.is_absolute():
-            candidates.append(path)
+        try:
+            resolved = WORKSPACE.resolve_read(raw_path)
+        except ValueError:
             continue
-
-        for base in (UPLOADS_DIR, OUTPUTS_DIR, SCRATCH_DIR, Path.cwd()):
-            resolved = (base / path).resolve()
-            if resolved.exists():
-                candidates.append(resolved)
-                break
-        else:
-            candidates.append((Path.cwd() / path).resolve())
+        if resolved.is_file():
+            candidates.append(resolved)
     return candidates
 
 
@@ -153,7 +149,9 @@ def create_video_job(
     trim_start: float | None = None,
     trim_end: float | None = None,
 ) -> dict:
+    output_directory = WORKSPACE.create_task_dir(project_id).relative_to(OUTPUTS_DIR).as_posix()
     plan = build_edit_plan(project_id, prompt, source_files, output_filename, trim_start, trim_end)
+    plan["render"]["output_directory"] = output_directory
     job_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc).isoformat()
     job = {
@@ -264,7 +262,7 @@ def _ffmpeg_concat(output_path: Path, input_paths: list[Path]) -> None:
             handle.write(f"file '{item.as_posix()}'\n")
 
     subprocess.run(
-        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_file), "-c", "copy", str(output_path)],
+        ["ffmpeg", "-n", "-f", "concat", "-safe", "0", "-i", str(list_file), "-c", "copy", str(output_path)],
         check=True,
         capture_output=True,
         text=True,
@@ -274,7 +272,7 @@ def _ffmpeg_concat(output_path: Path, input_paths: list[Path]) -> None:
 
 
 def _ffmpeg_trim(output_path: Path, input_path: Path, start_seconds: float | None = None, end_seconds: float | None = None) -> None:
-    command = ["ffmpeg", "-y", "-i", str(input_path)]
+    command = ["ffmpeg", "-n", "-i", str(input_path)]
     if start_seconds is not None:
         command.extend(["-ss", str(start_seconds)])
     if end_seconds is not None:
@@ -320,8 +318,14 @@ def execute_edit_plan(plan: dict) -> dict:
     if not resolved_files:
         return {"success": False, "error": "No valid source video files were found for the edit plan.", "tooling": status}
 
-    output_filename = plan.get("render", {}).get("output_filename", "edited_video.mp4")
-    output_path = OUTPUTS_DIR / output_filename
+    output_filename = Path(plan.get("render", {}).get("output_filename", "edited_video.mp4")).name
+    output_directory = plan.get("render", {}).get("output_directory")
+    if not output_directory:
+        output_directory = WORKSPACE.create_task_dir("video task").relative_to(OUTPUTS_DIR).as_posix()
+    try:
+        output_path = WORKSPACE.resolve_write(Path(output_directory) / output_filename)
+    except ValueError as error:
+        return {"success": False, "error": str(error), "tooling": status}
     output_path.parent.mkdir(exist_ok=True, parents=True)
 
     try:
@@ -335,8 +339,9 @@ def execute_edit_plan(plan: dict) -> dict:
             summary = f"Trimmed {input_path.name} into {output_path.name} using the planned EDL cut."
         elif plan_info["operation"] == "transcribe":
             transcript = _transcribe_video(resolved_files[0])
-            transcript_path = OUTPUTS_DIR / f"{Path(output_filename).stem}.txt"
-            transcript_path.write_text(transcript, encoding="utf-8")
+            transcript_path = output_path.with_suffix(".txt")
+            with transcript_path.open("x", encoding="utf-8") as transcript_file:
+                transcript_file.write(transcript)
             _remember_video_edit(
                 f"Transcribed {resolved_files[0].name} into {transcript_path.name}.",
                 str(transcript_path),
@@ -352,7 +357,7 @@ def execute_edit_plan(plan: dict) -> dict:
             }
         else:
             input_path = resolved_files[0]
-            subprocess.run(["ffmpeg", "-y", "-i", str(input_path), "-c", "copy", str(output_path)], check=True, capture_output=True, text=True)
+            subprocess.run(["ffmpeg", "-n", "-i", str(input_path), "-c", "copy", str(output_path)], check=True, capture_output=True, text=True)
             summary = f"Passed through {input_path.name} to {output_path.name} as the default EDL fallback."
 
         _remember_video_edit(summary, str(output_path), prompt, [str(path) for path in resolved_files])

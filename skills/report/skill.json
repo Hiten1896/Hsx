@@ -1,0 +1,16 @@
+{
+  "name": "report",
+  "description": "Extract a DOCX/PDF layout, read source data from XLSX/CSV/DOCX/PDF, then generate a PDF report. If the template or data mapping is ambiguous, ask_user before generating; PDF styling is approximated, not pixel-perfect.",
+  "risk": "safe",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {"type": "string", "enum": ["extract_template", "read_data", "make_pdf"]},
+      "file": {"type": "string"},
+      "structure": {"type": "object"},
+      "content": {},
+      "path": {"type": "string"}
+    },
+    "required": ["action"]
+  }
+}

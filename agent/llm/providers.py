@@ -38,7 +38,12 @@ class AnthropicProvider(Provider):
             if getattr(block, "type", "") == "text":
                 yield LLMEvent(type="text_delta", text=block.text)
             elif getattr(block, "type", "") == "tool_use":
-                yield LLMEvent(type="tool_call", tool_name=block.name, tool_input=block.input)
+                yield LLMEvent(
+                    type="tool_call",
+                    tool_name=block.name,
+                    tool_input=block.input,
+                    tool_call_id=getattr(block, "id", ""),
+                )
         yield LLMEvent(
             type="stop",
             stop_reason=getattr(response, "stop_reason", "") or "",
@@ -119,5 +124,6 @@ class OpenAICompatibleProvider(JSONHTTPProvider):
                 type="tool_call",
                 tool_name=function.get("name", ""),
                 tool_input=tool_input,
+                tool_call_id=tool_call.get("id", ""),
             )
         yield LLMEvent(type="stop", stop_reason=choice.get("finish_reason", "stop"))

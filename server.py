@@ -1,26 +1,34 @@
 import hmac
 import json
+import mimetypes
 import os
+import re
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
+from agent.ask_user import AskUserJobs, AskUserRequest
 from agent.jobs import JobQueue
 from agent.approval import ApprovalGuard
 from agent.devices import DeviceRegistry
 from agent.memory import MemoryManager
+from agent.notifier import Notifier
 from agent.orchestrator import run_agent
 from agent.policy import POLICY
 from agent.self_improvement import SelfImprovement
 from agent.skill_loader import load_skills
+from agent.workspace import Workspace, task_output_path, task_output_scope, workspace_search
 from config import (
     ALLOWED_ORIGINS,
     AUTH_TOKEN,
+    DATA_DIR,
     JOBS_DB,
     MEMORY_DB,
     MODE,
-    OUTPUTS_DIR,
     UPLOADS_DIR,
+    WORKSPACE_DIR,
+    WORK_DIR,
 )
 from config import BASE_DIR, IMPROVEMENTS_DB
 from video_tools.pipeline import create_video_job, get_video_job, list_video_jobs
@@ -28,8 +36,13 @@ from video_tools.pipeline import create_video_job, get_video_job, list_video_job
 ROOT = Path(__file__).resolve().parent
 TOOLS, SKILL_MAP = load_skills(str(ROOT / "skills"))
 HISTORY = []
+SESSION_HISTORIES = {}
+SESSION_LOCKS = {}
+SESSION_LOCKS_GUARD = threading.Lock()
 MEMORY = MemoryManager(MEMORY_DB)
 JOBS = JobQueue(JOBS_DB)
+ASK_JOBS = AskUserJobs(JOBS_DB)
+ASK_JOBS.start_expiration_worker()
 APPROVAL_GUARD = ApprovalGuard(
     Path.home() / ".hsx" / "owner.pin",
     os.getenv("HSX_OWNER_PIN"),
@@ -40,6 +53,133 @@ IMPROVEMENTS = SelfImprovement(
     approval_guard=APPROVAL_GUARD,
 )
 DEVICES = DeviceRegistry(approval_guard=APPROVAL_GUARD)
+WORKSPACE = Workspace(WORKSPACE_DIR, WORK_DIR)
+NOTIFIER = Notifier(DATA_DIR / "notifications.db")
+
+
+def _ask_job_payload(job: dict | None) -> dict | None:
+    if job is None:
+        return None
+    return {
+        key: job[key]
+        for key in ("id", "state", "question", "options", "allow_free_text", "question_count", "expires_at", "result", "error")
+    }
+
+
+def _resume_ask_job(job_id: str) -> None:
+    job = ASK_JOBS.get(job_id)
+    if job is None or job["state"] != "running":
+        return
+    lock = _session_lock(job["session_id"])
+    try:
+        with lock, task_output_scope(WORKSPACE, job["request"], job["task_dir"]):
+            response, history = run_agent(
+                job["request"],
+                job["checkpoint"],
+                TOOLS,
+                SKILL_MAP,
+                session_id=job["session_id"],
+                resume_tool_result={
+                    "tool_call_id": job["tool_call_id"],
+                    "answer": job["answers"][-1],
+                },
+            )
+    except AskUserRequest as question:
+        updated = ASK_JOBS.pause(job_id, question)
+        if updated["state"] == "waiting_for_user":
+            POLICY.audit_event("needs_input", job["session_id"], job_id, "waiting_for_user")
+            NOTIFIER.notify(
+                "needs_input",
+                "Hsx needs your input",
+                job_id=job_id,
+                dedupe_key=f"{job_id}:question:{updated['question_count']}",
+            )
+            return
+        POLICY.audit_event("question_limit", job["session_id"], job_id, "cancelled")
+        NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
+        return
+    except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
+        ASK_JOBS.fail(job_id, str(error))
+        POLICY.audit_event("job_failed", job["session_id"], job_id, "failed")
+        NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
+        return
+    SESSION_HISTORIES[job["session_id"]] = history
+    ASK_JOBS.complete(job_id, response)
+    POLICY.audit_event("job_done", job["session_id"], job_id, "done")
+    NOTIFIER.notify(
+        "job_done",
+        "Your Hsx task is complete",
+        job_id=job_id,
+        result_path=_task_result_path(job),
+    )
+
+
+def _session_lock(session_id: str):
+    with SESSION_LOCKS_GUARD:
+        if session_id not in SESSION_LOCKS:
+            SESSION_LOCKS[session_id] = threading.Lock()
+        return SESSION_LOCKS[session_id]
+
+
+def _task_result_path(job: dict) -> str:
+    directory = Path(job["task_dir"]) if job.get("task_dir") else Path(".")
+    try:
+        files = workspace_search(
+            WORKSPACE,
+            directory=(WORK_DIR.relative_to(WORKSPACE_DIR) / directory),
+            limit=1,
+        )
+    except (OSError, ValueError):
+        return ""
+    return files[0]["path"] if files else ""
+
+
+def _run_chat_job(job_id: str, approvals: dict | None = None, sensitive: bool = False) -> None:
+    job = ASK_JOBS.get(job_id)
+    if job is None or job["state"] != "running":
+        return
+    lock = _session_lock(job["session_id"])
+    POLICY.audit_event("job_started", job["session_id"], job_id, "running")
+    try:
+        with lock, task_output_scope(WORKSPACE, job["request"], job["task_dir"]):
+            history = SESSION_HISTORIES.setdefault(job["session_id"], [])
+            response, updated_history = run_agent(
+                job["request"],
+                history,
+                TOOLS,
+                SKILL_MAP,
+                session_id=job["session_id"],
+                approvals=approvals,
+                sensitive=sensitive,
+            )
+    except AskUserRequest as question:
+        updated = ASK_JOBS.pause(job_id, question)
+        if updated["state"] == "waiting_for_user":
+            POLICY.audit_event("needs_input", job["session_id"], job_id, "waiting_for_user")
+            NOTIFIER.notify(
+                "needs_input",
+                "Hsx needs your input",
+                job_id=job_id,
+                dedupe_key=f"{job_id}:question:{updated['question_count']}",
+            )
+        else:
+            POLICY.audit_event("question_limit", job["session_id"], job_id, "cancelled")
+            NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
+        return
+    except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
+        ASK_JOBS.fail(job_id, str(error))
+        POLICY.audit_event("job_failed", job["session_id"], job_id, "failed")
+        NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
+        return
+    SESSION_HISTORIES[job["session_id"]] = updated_history
+    ASK_JOBS.complete(job_id, response)
+    POLICY.audit_event("job_done", job["session_id"], job_id, "done")
+    NOTIFIER.notify(
+        "job_done",
+        "Your Hsx task is complete",
+        job_id=job_id,
+        result_path=_task_result_path(job),
+    )
 
 
 class HsxHandler(BaseHTTPRequestHandler):
@@ -69,7 +209,7 @@ class HsxHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.end_headers()
         self.wfile.write(data)
 
@@ -77,10 +217,42 @@ class HsxHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         return json.loads(self.rfile.read(length) or b"{}")
 
+    def _stream_notifications(self, query: dict[str, list[str]]) -> None:
+        try:
+            last_id = int(self.headers.get("Last-Event-ID", query.get("after", ["0"])[0]))
+        except ValueError:
+            self._json({"error": "Last-Event-ID must be an integer."}, 400)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        origin = self.headers.get("Origin")
+        if origin in ALLOWED_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        self.end_headers()
+        try:
+            while True:
+                notifications = NOTIFIER.wait_for_notifications(last_id, timeout=15)
+                if not notifications:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                    continue
+                for notification in notifications:
+                    data = json.dumps(notification, separators=(",", ":"))
+                    self.wfile.write(f"id: {notification['id']}\nevent: notification\ndata: {data}\n\n".encode())
+                    last_id = notification["id"]
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            return
+
     def do_GET(self) -> None:
         path = self._request_path()
-        if not self._api_access_allowed():
+        if (path.startswith("/api/") or path == "/health") and not self._api_access_allowed():
             return
+        query = parse_qs(urlsplit(self.path).query)
         if path == "/health":
             self._json({"status": "ok"})
         elif path == "/api/skills":
@@ -91,6 +263,11 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"mode": MODE})
         elif path == "/api/jobs":
             self._json({"jobs": JOBS.list()})
+        elif path == "/api/ask-jobs":
+            self._json({"jobs": [_ask_job_payload(job) for job in ASK_JOBS.list()]})
+        elif path.startswith("/api/ask-jobs/"):
+            job = ASK_JOBS.get(path.removeprefix("/api/ask-jobs/"))
+            self._json({"job": _ask_job_payload(job)} if job else {"error": "Job not found."}, 200 if job else 404)
         elif path.startswith("/api/jobs/"):
             job = JOBS.get(path.removeprefix("/api/jobs/"))
             self._json({"job": job} if job else {"error": "Job not found."}, 200 if job else 404)
@@ -100,8 +277,53 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"devices": DEVICES.list()})
         elif path == "/api/memory":
             self._json({"facts": MEMORY.list_facts()})
-        elif self.path == "/api/outputs":
-            files = [{"name": p.name, "path": str(p), "type": p.suffix[1:]} for p in OUTPUTS_DIR.iterdir() if p.is_file()]
+        elif path == "/api/notifications":
+            notifications, unread = NOTIFIER.list_notifications()
+            self._json({"notifications": notifications, "unread": unread})
+        elif path == "/api/notifications/stream":
+            self._stream_notifications(query)
+            return
+        elif path == "/api/notifications/webpush/config":
+            self._json({"public_key": NOTIFIER.public_key, "enabled": bool(NOTIFIER.public_key)})
+        elif path == "/api/notifications/webpush/subscriptions":
+            self._json({"subscriptions": NOTIFIER.list_subscriptions()})
+        elif path == "/api/files/preview":
+            relative_path = query.get("path", [""])[0]
+            try:
+                content = WORKSPACE.read_text(relative_path, max_bytes=2_000_000, max_chars=50_000)
+            except (OSError, ValueError) as error:
+                self._json({"error": str(error)}, 400)
+                return
+            self._json({"content": content})
+        elif path == "/api/files":
+            try:
+                files = workspace_search(
+                    WORKSPACE,
+                    query=query.get("q", [""])[0],
+                    directory=query.get("path", ["."])[0],
+                    file_type=query.get("type", [""])[0],
+                    recent_days=int(query["recent_days"][0]) if "recent_days" in query else None,
+                    limit=int(query.get("limit", ["100"])[0]),
+                )
+            except (OSError, ValueError) as error:
+                self._json({"error": str(error)}, 400)
+                return
+            self._json({"files": files})
+        elif path in {"/api/files/content", "/api/files/download"}:
+            relative_path = query.get("path", [""])[0]
+            try:
+                target = WORKSPACE.resolve_read(relative_path)
+                if not target.is_file():
+                    raise FileNotFoundError("Workspace file not found.")
+            except (OSError, ValueError) as error:
+                self._json({"error": str(error)}, 404)
+                return
+            self._serve_file(target, inline=path.endswith("/content"))
+        elif path == "/api/outputs":
+            files = [
+                {"name": item["name"], "path": item["path"], "type": item["type"]}
+                for item in workspace_search(WORKSPACE, directory=WORK_DIR.relative_to(WORKSPACE_DIR), limit=200)
+            ]
             self._json({"files": files})
         elif self.path == "/api/video/jobs":
             self._json({"jobs": list_video_jobs()})
@@ -121,18 +343,15 @@ class HsxHandler(BaseHTTPRequestHandler):
                 "video_jobs": list_video_jobs(),
             })
         elif path.startswith("/api/outputs/"):
-            filename = Path(path.removeprefix("/api/outputs/")).name
-            output = (OUTPUTS_DIR / filename).resolve()
-            if OUTPUTS_DIR.resolve() not in output.parents or not output.is_file():
-                self._json({"error": "Artifact not found."}, 404)
+            relative_path = unquote(path.removeprefix("/api/outputs/"))
+            try:
+                output = WORKSPACE.resolve_write(relative_path)
+                if not output.is_file():
+                    raise FileNotFoundError("Artifact not found.")
+            except (OSError, ValueError) as error:
+                self._json({"error": str(error)}, 404)
                 return
-            data = output.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Disposition", f'attachment; filename="{output.name}"')
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
+            self._serve_file(output, inline=False)
         else:
             self._serve_frontend()
 
@@ -146,13 +365,19 @@ class HsxHandler(BaseHTTPRequestHandler):
             if not message:
                 self._json({"error": "Message is required."}, 400)
                 return
-            response, _ = run_agent(
-                message, HISTORY, TOOLS, SKILL_MAP,
-                session_id=str(payload.get("session_id", "default")),
-                approvals=payload.get("approvals"),
-                sensitive=bool(payload.get("sensitive", False)),
-            )
-            self._json({"response": response, "outputs": self._recent_outputs()})
+            session_id = str(payload.get("session_id", "default"))[:100]
+            task_directory = WORKSPACE.create_task_dir(message).relative_to(WORK_DIR).as_posix()
+            job = ASK_JOBS.create_running(message, session_id, task_directory)
+            POLICY.audit_event("job_created", session_id, job["id"], "queued")
+            threading.Thread(
+                target=_run_chat_job,
+                args=(job["id"], payload.get("approvals"), bool(payload.get("sensitive", False))),
+                daemon=True,
+            ).start()
+            self._json({
+                "response": f"Understood: I’ll work on: {message}",
+                "job": _ask_job_payload(job),
+            }, 202)
         elif path == "/api/stop":
             POLICY.stop_all()
             self._json({"success": True, "stopped": True})
@@ -179,6 +404,51 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/jobs/") and path.endswith("/cancel"):
             job_id = path.removeprefix("/api/jobs/").removesuffix("/cancel")
             self._json({"success": JOBS.cancel(job_id)})
+        elif path.startswith("/api/ask-jobs/") and path.endswith("/answer"):
+            job_id = path.removeprefix("/api/ask-jobs/").removesuffix("/answer")
+            answer = str(self._body().get("answer", ""))
+            try:
+                job = ASK_JOBS.answer(job_id, answer)
+            except (KeyError, ValueError) as error:
+                self._json({"error": str(error)}, 404 if isinstance(error, KeyError) else 400)
+                return
+            POLICY.audit_event("user_answered", job["session_id"], job_id, "running")
+            threading.Thread(target=_resume_ask_job, args=(job_id,), daemon=True).start()
+            self._json({"job": _ask_job_payload(job)}, 202)
+        elif path == "/api/notifications/read":
+            payload = self._body()
+            notification_id = payload.get("id")
+            try:
+                count = NOTIFIER.mark_read(int(notification_id)) if notification_id is not None else NOTIFIER.mark_read()
+            except (TypeError, ValueError):
+                self._json({"error": "Notification id must be an integer."}, 400)
+                return
+            notifications, unread = NOTIFIER.list_notifications()
+            self._json({"updated": count, "notifications": notifications, "unread": unread})
+        elif path == "/api/notifications/webpush/subscribe":
+            payload = self._body()
+            try:
+                subscription = NOTIFIER.subscribe(
+                    payload.get("subscription", {}),
+                    str(payload.get("device_name", "")),
+                )
+            except (TypeError, ValueError) as error:
+                self._json({"error": str(error)}, 400)
+                return
+            self._json({"subscription": subscription}, 201)
+        elif path == "/api/notifications/webpush/activity":
+            payload = self._body()
+            if not NOTIFIER.touch_subscription(str(payload.get("id", ""))):
+                self._json({"error": "Subscription not found."}, 404)
+                return
+            self._json({"success": True})
+        elif path == "/api/notifications/webpush/test":
+            try:
+                NOTIFIER.send_test()
+            except (OSError, PermissionError, RuntimeError, ValueError) as error:
+                self._json({"error": str(error)}, 503 if isinstance(error, RuntimeError) else 400)
+                return
+            self._json({"success": True})
         elif path == "/api/improvements":
             payload = self._body()
             try:
@@ -267,9 +537,19 @@ class HsxHandler(BaseHTTPRequestHandler):
             if not message:
                 self._json({"error": "Message is required."}, 400)
                 return
-            response, _ = run_agent(message, HISTORY, TOOLS, SKILL_MAP)
+            session_id = str(payload.get("session_id", "default"))[:100]
+            task_directory = WORKSPACE.create_task_dir(message).relative_to(WORK_DIR).as_posix()
+            job = ASK_JOBS.create_running(message, session_id, task_directory)
+            POLICY.audit_event("job_created", session_id, job["id"], "queued")
+            threading.Thread(
+                target=_run_chat_job,
+                args=(job["id"], payload.get("approvals"), bool(payload.get("sensitive", False))),
+                daemon=True,
+            ).start()
+            restatement = f"Understood: I’ll work on: {message}"
             events = (
-                f"event: text_delta\ndata: {json.dumps({'text': response})}\n\n"
+                f"event: text_delta\ndata: {json.dumps({'text': restatement})}\n\n"
+                f"event: job\ndata: {json.dumps({'id': job['id'], 'state': 'running'})}\n\n"
                 "event: done\ndata: {}\n\n"
             ).encode()
             self.send_response(200)
@@ -311,8 +591,13 @@ class HsxHandler(BaseHTTPRequestHandler):
             if not content or not filename:
                 self._json({"error": "A file is required."}, 400)
                 return
-            destination = UPLOADS_DIR / filename
-            destination.write_text(content, encoding="utf-8")
+            try:
+                destination = task_output_path(WORKSPACE, filename, "Uploads")
+                with destination.open("x", encoding="utf-8") as uploaded_file:
+                    uploaded_file.write(content)
+            except (OSError, ValueError) as error:
+                self._json({"error": str(error)}, 400)
+                return
             self._json({"success": True, "name": destination.name, "type": destination.suffix[1:]})
         elif path == "/api/video/jobs":
             payload = self._body()
@@ -351,6 +636,22 @@ class HsxHandler(BaseHTTPRequestHandler):
         path = self._request_path()
         if path.startswith("/api/") and not self._api_access_allowed():
             return
+        if path.startswith("/api/notifications/webpush/subscriptions/"):
+            subscription_id = path.removeprefix("/api/notifications/webpush/subscriptions/")
+            if not NOTIFIER.unsubscribe(subscription_id):
+                self._json({"error": "Subscription not found."}, 404)
+                return
+            self._json({"success": True, "subscriptions": NOTIFIER.list_subscriptions()})
+            return
+        if path.startswith("/api/notifications/"):
+            try:
+                notification_id = int(path.removeprefix("/api/notifications/"))
+            except ValueError:
+                self._json({"error": "Notification id must be an integer."}, 400)
+                return
+            count = NOTIFIER.mark_read(notification_id)
+            self._json({"success": bool(count)})
+            return
         if path.startswith("/api/devices/"):
             device_id = path.removeprefix("/api/devices/")
             try:
@@ -372,7 +673,55 @@ class HsxHandler(BaseHTTPRequestHandler):
         self._json({"success": True, "facts": MEMORY.list_facts()})
 
     def _recent_outputs(self) -> list:
-        return [{"name": p.name, "path": str(p), "type": p.suffix[1:]} for p in OUTPUTS_DIR.iterdir() if p.is_file()]
+        return [
+            {"name": item["name"], "path": item["path"], "type": item["type"]}
+            for item in workspace_search(
+                WORKSPACE,
+                directory=WORK_DIR.relative_to(WORKSPACE_DIR),
+                limit=100,
+            )
+        ]
+
+    def _serve_file(self, target: Path, *, inline: bool) -> None:
+        size = target.stat().st_size
+        start, end = 0, size - 1
+        status = 200
+        range_header = self.headers.get("Range", "")
+        if range_header:
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
+            if not match or size == 0:
+                self.send_error(416, "Invalid byte range")
+                return
+            first, last = match.groups()
+            if first:
+                start = int(first)
+                end = min(int(last), size - 1) if last else size - 1
+            elif last:
+                start = max(0, size - int(last))
+            if start >= size or end < start:
+                self.send_error(416, "Invalid byte range")
+                return
+            status = 206
+        length = end - start + 1
+        content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        disposition = "inline" if inline else "attachment"
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Disposition", f"{disposition}; filename*=UTF-8''{quote(target.name)}")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        with target.open("rb") as source:
+            source.seek(start)
+            remaining = length
+            while remaining:
+                chunk = source.read(min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
 
     def _serve_frontend(self) -> None:
         request_path = self.path.split("?", 1)[0]
@@ -390,6 +739,7 @@ class HsxHandler(BaseHTTPRequestHandler):
             ".html": "text/html",
             ".svg": "image/svg+xml",
             ".json": "application/json",
+            ".webmanifest": "application/manifest+json",
             ".png": "image/png",
             ".ico": "image/x-icon",
         }.get(asset.suffix.lower(), "application/octet-stream")

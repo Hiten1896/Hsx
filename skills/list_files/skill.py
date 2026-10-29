@@ -1,10 +1,16 @@
-from agent.security import safe_path
-from config import OUTPUTS_DIR, UPLOADS_DIR
+from agent.workspace import Workspace, workspace_search
+from config import WORKSPACE_DIR, WORK_DIR
+
+WORKSPACE = Workspace(WORKSPACE_DIR, WORK_DIR)
 
 
-def run(directory: str = "uploads") -> dict:
-    base = UPLOADS_DIR if directory == "uploads" else OUTPUTS_DIR if directory == "outputs" else None
-    if base is None:
-        return {"success": False, "error": "Directory must be uploads or outputs."}
-    target = safe_path(base, ".")
-    return {"success": True, "files": [p.name for p in target.iterdir() if p.is_file()]}
+def run(directory: str = ".") -> dict:
+    try:
+        files = workspace_search(WORKSPACE, directory=directory, limit=200)
+    except (OSError, ValueError) as error:
+        return {"success": False, "error": str(error)}
+    return {
+        "success": True,
+        "files": [item["path"] for item in files],
+        "truncated": len(files) == 200,
+    }

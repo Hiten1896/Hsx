@@ -4,14 +4,16 @@ import threading
 import uuid
 from pathlib import Path
 
-from config import OUTPUTS_DIR
+from agent.workspace import Workspace, task_output_path
+from config import WORKSPACE_DIR, WORK_DIR
 
 _JOBS: dict[str, dict] = {}
 _LOCK = threading.Lock()
+WORKSPACE = Workspace(WORKSPACE_DIR, WORK_DIR)
 
 
 def _download(job_id: str, url: str, filename: str, max_duration: int, max_size_mb: int) -> None:
-    destination = OUTPUTS_DIR / filename
+    destination = Path(_JOBS[job_id]["destination"])
     try:
         command = [
             "yt-dlp", "--no-playlist", "--max-filesize", f"{max_size_mb}M",
@@ -46,14 +48,15 @@ def run(url: str, filename: str = "", max_duration_seconds: int = 3600, max_size
     if shutil.which("yt-dlp") is None:
         return {"success": False, "error": "yt-dlp is not installed."}
     job_id = uuid.uuid4().hex
+    destination = task_output_path(WORKSPACE, filename)
     with _LOCK:
-        _JOBS[job_id] = {"job_id": job_id, "status": "queued"}
+        _JOBS[job_id] = {"job_id": job_id, "status": "queued", "destination": str(destination)}
     threading.Thread(
         target=_download,
         args=(job_id, url, filename, max_duration_seconds, max_size_mb),
         daemon=True,
     ).start()
-    return {"success": True, "job_id": job_id, "status": "queued", "output_directory": str(OUTPUTS_DIR)}
+    return {"success": True, "job_id": job_id, "status": "queued", "output_directory": str(destination.parent)}
 
 
 def get_job(job_id: str) -> dict | None:

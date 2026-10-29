@@ -37,13 +37,26 @@ class PolicyEngine:
             "timestamp": datetime.now(UTC).isoformat(),
             "session": session,
             "tool": tool,
-            "args_summary": {key: str(value)[:120] for key, value in arguments.items()},
+            "args_summary": {key: type(value).__name__ for key, value in arguments.items()},
             "risk_tier": risk,
             "decision": decision,
             "result_status": result,
         }
         if advisory:
             entry["advisory"] = advisory
+        with self._lock, self.audit_path.open("a", encoding="utf-8") as log:
+            log.write(json.dumps(entry, sort_keys=True) + "\n")
+
+    def audit_event(self, event: str, session: str, job_id: str, status: str) -> None:
+        entry = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "session": session,
+            "job_id": job_id,
+            "event": event,
+            "risk_tier": "workflow",
+            "decision": status,
+            "result_status": status,
+        }
         with self._lock, self.audit_path.open("a", encoding="utf-8") as log:
             log.write(json.dumps(entry, sort_keys=True) + "\n")
 

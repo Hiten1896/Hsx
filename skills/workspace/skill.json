@@ -1,0 +1,21 @@
+{
+  "name": "workspace",
+  "description": "Browse and read files anywhere in the shared workspace. Supports typo-tolerant filename search by query, type, and modified time. Read-only.",
+  "risk": "safe",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["list", "search", "info", "read_text"]
+      },
+      "path": {"type": "string"},
+      "query": {"type": "string"},
+      "directory": {"type": "string"},
+      "file_type": {"type": "string"},
+      "recent_days": {"type": "integer"},
+      "limit": {"type": "integer"}
+    },
+    "required": ["action"]
+  }
+}

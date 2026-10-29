@@ -6,7 +6,10 @@ PyYAML
 # Document and spreadsheet skills.
 python-docx
 openpyxl
+rapidfuzz
 # PDF and presentation skills.
 pdfplumber
 reportlab
 python-pptx
+# Optional notification channel; used when Web Push is configured.
+pywebpush

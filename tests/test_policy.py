@@ -42,3 +42,16 @@ def test_dangerous_always_asks_and_advisory_limit(tmp_path: Path, monkeypatch):
         pass
     else:
         raise AssertionError("long advisory was accepted")
+
+
+def test_audit_log_does_not_store_argument_values(tmp_path: Path):
+    audit = tmp_path / "audit.jsonl"
+    policy = PolicyEngine(audit)
+    policy.decide(
+        skill(name="read_file", risk="safe"),
+        {"path": "owner-secret.txt", "content": "private document contents"},
+        "session",
+    )
+    serialized = audit.read_text(encoding="utf-8")
+    assert "owner-secret.txt" not in serialized
+    assert "private document contents" not in serialized

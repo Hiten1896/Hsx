@@ -1,1 +1,1 @@
-{"name":"list_files","description":"List files in uploads or outputs.","risk":"safe","input_schema":{"type":"object","properties":{"directory":{"type":"string"}},"required":[]}}
+{"name":"list_files","description":"List files in a directory inside the shared workspace. Read-only.","risk":"safe","input_schema":{"type":"object","properties":{"directory":{"type":"string"}},"required":[]}}

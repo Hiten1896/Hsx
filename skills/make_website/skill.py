@@ -1,10 +1,13 @@
 from pathlib import Path
 
-from config import OUTPUTS_DIR
-from agent.security import safe_path
+from agent.workspace import Workspace, task_output_path
+from config import WORKSPACE_DIR, WORK_DIR
+
+WORKSPACE = Workspace(WORKSPACE_DIR, WORK_DIR)
 
 
 def run(filename: str, html_content: str) -> dict:
-    path = safe_path(OUTPUTS_DIR, f"{Path(filename).stem}.html")
-    path.write_text(html_content, encoding="utf-8")
+    path = task_output_path(WORKSPACE, f"{Path(filename).stem}.html")
+    with path.open("x", encoding="utf-8") as output_file:
+        output_file.write(html_content)
     return {"success": True, "output_path": str(path)}
