@@ -2,6 +2,7 @@ import getpass
 import json
 import os
 import re
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -138,6 +139,10 @@ def _submit(message: str) -> None:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1].lower() == "doctor":
+        from doctor import print_report, run_doctor
+
+        raise SystemExit(print_report(run_doctor()))
     deadline = time.monotonic() + 30
     while True:
         try:

@@ -1,6 +1,7 @@
 import json
 import os
 import wave
+import time
 from pathlib import Path
 
 
@@ -54,3 +55,33 @@ def run(audio_path: str, model_name: str | None = None) -> dict:
             raise ValueError("Voice input must be mono 16-bit PCM audio at 16000 Hz.")
         transcription = transcribe_samples(audio_file.readframes(audio_file.getnframes()))
     return {"success": True, "text": transcription}
+
+
+def microphone_test(duration_seconds: float = 2.0) -> dict:
+    """Capture a short local sample and report whether the microphone produces audio."""
+    try:
+        import sounddevice as sd
+    except ImportError as error:
+        raise RuntimeError("Install optional voice dependencies with: pip install -r requirements-voice.txt") from error
+    frames: list[bytes] = []
+
+    def callback(indata, frame_count, time_info, status):
+        del frame_count, time_info
+        if status:
+            raise RuntimeError(str(status))
+        frames.append(indata[:, 0].tobytes())
+
+    with sd.InputStream(samplerate=16000, channels=1, dtype="int16", callback=callback):
+        time.sleep(max(0.1, duration_seconds))
+    byte_count = sum(len(frame) for frame in frames)
+    return {"success": byte_count > 0, "bytes": byte_count, "duration_seconds": duration_seconds}
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Hsx local voice utilities")
+    parser.add_argument("--test-microphone", action="store_true")
+    args = parser.parse_args()
+    if args.test_microphone:
+        print(microphone_test())
