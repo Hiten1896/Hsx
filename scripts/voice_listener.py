@@ -3,6 +3,8 @@ import json
 import os
 import queue
 import sys
+import threading
+import time
 import urllib.error
 from pathlib import Path
 import urllib.request
@@ -16,7 +18,6 @@ load_dotenv(ROOT / ".env")
 SAMPLE_RATE = 16000
 FRAME_SAMPLES = 480
 WAKE_PHRASE = os.getenv("HSX_VOICE_WAKE_PHRASE", "hey hsx").strip().lower()
-MODEL_NAME = os.getenv("HSX_VOICE_MODEL", "base")
 BASE_URL = os.getenv("HSX_URL", "http://127.0.0.1:8000").rstrip("/")
 
 
@@ -51,44 +52,15 @@ def _send_command(message: str) -> dict:
         raise RuntimeError(f"Could not submit voice command to HSX: {error}") from error
 
 
-def main() -> None:
-    if os.getenv("HSX_ENABLE_VOICE_LISTENER", "").strip() != "1":
-        print(
-            "[voice] listener disabled; set HSX_ENABLE_VOICE_LISTENER=1 in .env to opt in.",
-            flush=True,
-        )
-        return
-    if not WAKE_PHRASE:
-        raise SystemExit("Set HSX_VOICE_WAKE_PHRASE to a non-empty phrase.")
-
-    try:
-        import numpy as np
-        import sounddevice as sd
-        import webrtcvad
-    except ImportError as error:
-        raise SystemExit(
-            "Install optional microphone dependencies with "
-            "`pip install -r requirements-voice.txt` and install libportaudio2."
-        ) from error
-
-    from skills.voice_input.skill import transcribe_samples
-
-    frames: queue.Queue = queue.Queue(maxsize=256)
-    vad = webrtcvad.Vad(2)
-
+def _listen(frames, vad, transcribe_samples, sd, stop_event) -> None:
     def enqueue_audio(indata, frame_count, time_info, status):
         if status:
             print(f"[voice] audio input status: {status}", flush=True)
         try:
-            frames.put_nowait(indata[:, 0].copy())
+            frames.put_nowait(indata[:, 0].tobytes())
         except queue.Full:
             print("[voice] audio buffer full; dropping microphone frame.", flush=True)
 
-    print(
-        f"[voice] microphone active; waiting for wake phrase {WAKE_PHRASE!r}. "
-        "Say the wake phrase and command in one utterance. Audio stays in memory and is discarded after transcription.",
-        flush=True,
-    )
     with sd.InputStream(
         samplerate=SAMPLE_RATE,
         channels=1,
@@ -99,9 +71,12 @@ def main() -> None:
         active_frames = []
         silence_frames = 0
         speech_started = False
-        while True:
-            frame = frames.get()
-            voiced = vad.is_speech(frame.tobytes(), SAMPLE_RATE)
+        while not stop_event.is_set():
+            try:
+                frame = frames.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            voiced = vad.is_speech(frame, SAMPLE_RATE)
             if voiced:
                 speech_started = True
                 silence_frames = 0
@@ -111,12 +86,12 @@ def main() -> None:
                 silence_frames += 1
 
             if speech_started and (silence_frames >= 30 or len(active_frames) >= 500):
-                samples = np.concatenate(active_frames)
+                samples = b"".join(active_frames)
                 active_frames = []
                 silence_frames = 0
                 speech_started = False
                 try:
-                    transcript = transcribe_samples(samples, MODEL_NAME).strip()
+                    transcript = transcribe_samples(samples).strip()
                 except (OSError, RuntimeError, ValueError) as error:
                     print(f"[voice] transcription failed: {error}", flush=True)
                     continue
@@ -130,11 +105,54 @@ def main() -> None:
                     continue
                 print(f"[voice] recognized command: {command}", flush=True)
                 try:
-                    result = _send_command(command)
-                    job = result.get("job", {})
-                    print(f"[voice] submitted local-host job {job.get('id', 'unknown')}.", flush=True)
+                    _send_command(command)
                 except RuntimeError as error:
                     print(f"[voice] {error}", flush=True)
+
+
+def main() -> None:
+    if os.getenv("HSX_ENABLE_VOICE_LISTENER", "").strip() != "1":
+        print(
+            "[voice] listener disabled; set HSX_ENABLE_VOICE_LISTENER=1 in .env to opt in.",
+            flush=True,
+        )
+        return
+    if not WAKE_PHRASE:
+        raise SystemExit("Set HSX_VOICE_WAKE_PHRASE to a non-empty phrase.")
+
+    try:
+        import sounddevice as sd
+        import webrtcvad
+    except ImportError as error:
+        raise SystemExit(
+            "Install optional microphone dependencies with "
+            "`pip install -r requirements-voice.txt` and install libportaudio2."
+        ) from error
+
+    from skills.voice_input.skill import transcribe_samples
+
+    frames: queue.Queue = queue.Queue(maxsize=256)
+    vad = webrtcvad.Vad(2)
+
+    print(
+        f"[voice] microphone active; waiting for wake phrase {WAKE_PHRASE!r}. "
+        "Say the wake phrase and command in one utterance. Audio stays in memory and is discarded after transcription.",
+        flush=True,
+    )
+    stop_event = threading.Event()
+    listener = threading.Thread(
+        target=_listen,
+        args=(frames, vad, transcribe_samples, sd, stop_event),
+        name="hsx-microphone-listener",
+        daemon=True,
+    )
+    listener.start()
+    try:
+        while listener.is_alive():
+            time.sleep(1)
+    except (KeyboardInterrupt, SystemExit):
+        stop_event.set()
+        listener.join(timeout=2)
 
 
 if __name__ == "__main__":

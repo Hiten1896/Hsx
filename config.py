@@ -3,11 +3,13 @@ import os
 import secrets
 from pathlib import Path
 
+BASE_DIR = Path(__file__).resolve().parent
+ENV_FILE = BASE_DIR / ".env"
+
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(ENV_FILE)
 
-BASE_DIR = Path(__file__).resolve().parent
 WORKSPACE_DIR = Path(
     os.getenv("HSX_WORKSPACE", str(BASE_DIR if os.name == "nt" else "/home/hsxshare"))
 ).expanduser().resolve()
@@ -24,7 +26,6 @@ SCRATCH_DIR = BASE_DIR / "scratch"
 UPLOADS_DIR = BASE_DIR / "uploads"
 MEMORY_DIR = BASE_DIR / "memory"
 DATA_DIR = BASE_DIR / "data"
-ENV_FILE = BASE_DIR / ".env"
 MEMORY_DB = DATA_DIR / "memory.db"
 JOBS_DB = DATA_DIR / "jobs.db"
 IMPROVEMENTS_DB = DATA_DIR / "improvements.db"
@@ -42,12 +43,12 @@ PANEL_PROVIDERS = tuple(
     for item in os.getenv("HSX_PANEL_PROVIDERS", "gemini,groq,openrouter").split(",")
     if item.strip()
 )
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 GROK_API_KEY = (os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip()
-GROK_MODEL = os.getenv("GROK_MODEL") or os.getenv("XAI_MODEL", "grok-3-mini")
+GROK_MODEL = (os.getenv("GROK_MODEL") or os.getenv("XAI_MODEL") or "grok-3-mini").strip()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")

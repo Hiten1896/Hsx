@@ -1,4 +1,4 @@
-# Optional provider client.
+# Anthropic client for the default LLM provider.
 anthropic
 # Environment configuration.
 python-dotenv
