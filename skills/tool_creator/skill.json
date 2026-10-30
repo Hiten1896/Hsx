@@ -1,0 +1,20 @@
+{
+  "name": "tool_creator",
+  "description": "Create and validate a narrowly scoped non-dangerous Hsx skill for a missing capability, then register it in the active runtime.",
+  "risk": "confirm",
+  "advisory": "This writes executable Python and metadata into the Hsx skill area. Review the requested capability and generated code before proceeding.",
+  "requires_acknowledgement": true,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "task": {"type": "string"},
+      "name": {"type": "string"},
+      "description": {"type": "string"},
+      "code": {"type": "string"},
+      "input_schema": {"type": "object"},
+      "risk": {"type": "string", "enum": ["safe", "confirm"]},
+      "permanent": {"type": "boolean"}
+    },
+    "required": ["task", "name", "description", "code", "input_schema"]
+  }
+}
