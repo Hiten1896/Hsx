@@ -28,7 +28,7 @@ Name: **[Hiten Sharma]**
 - Phase 17: capability-scoped device registry and policy broker complete
 - Phase 18: shared workspace, ask-me flow, report skill, notifications, and PWA complete
 - Phase 19: System-as-Body runtime context, host-device routing enforcement, and hardware lifecycle safety complete
-- Phase 20: live-streaming local CLI and validated headless boot setup complete
+- Phase 20: live-streaming local CLI, provider-agnostic routing, lightweight voice input, and validated headless boot setup complete
 - Phase 21: hardware workbench and ESP32-S3 co-processor bridge planned
 - Phase 22: multimodal sensory controls and conversational system status planned
 - Phase 23: ambient awareness, gaze-aware presence, hardware reflexes, and proactive dialogue planned
@@ -45,9 +45,11 @@ Name: **[Hiten Sharma]**
 
 **Phase 20 — interactive CLI streaming and boot validation**
 
-- Wired model text deltas into the `/api/chat/stream` SSE endpoint and the local TTY CLI; the CLI keeps the conversation focused while remaining independent of the server process.
-- Strengthened the unified Debian boot installer with checks for service-account access to `.env` and the virtual environment, voice configuration and Vosk model, and default audio input/output availability. It warns when the service account cannot access `/dev/video0`.
-- Added regression coverage for SSE delivery, local-only host routing, media action reporting, asynchronous audio, and camera process cleanup.
+- Wired model text deltas into the `/api/chat/stream` SSE endpoint and the local TTY CLI; the CLI keeps the conversation focused with clean `You >` and `HSX >` prompts while remaining independent of the server process.
+- Refactored provider startup to discover configured Gemini, Grok/XAI, Anthropic, Groq, OpenRouter, and OpenAI-compatible credentials without requiring a specific provider.
+- Added an opt-in lightweight Vosk microphone listener with WebRTC VAD, wake-phrase gating, in-memory audio handling, and a daemon listener thread.
+- Strengthened the unified Debian boot installer with checks for service-account access to `.env` and the virtual environment, Vosk model validation, default audio input/output availability, and `audio`, `dialout`, and `video` group setup.
+- Added regression coverage for provider discovery, SSE delivery, local-only host routing, media action reporting, asynchronous audio, and camera process cleanup.
 
 ### Next development phases
 
@@ -103,7 +105,7 @@ cp .env.example .env
 python main.py
 ```
 
-Open `http://127.0.0.1:8000`. Configure at least one supported provider key in `.env` and optionally order providers with `HSX_PROVIDER` and `HSX_FALLBACKS`. Gemini, Grok/XAI, Anthropic, Groq, OpenRouter, OpenAI-compatible endpoints, and local Ollama are supported. The authenticated UI and workspace can start without a provider, but LLM-backed requests require one.
+Open `http://127.0.0.1:8000`. Configure at least one supported provider key in `.env`; the router discovers configured providers automatically and respects `HSX_PROVIDER` and `HSX_FALLBACKS` when they are set. Gemini, Grok/XAI, Anthropic, Groq, OpenRouter, OpenAI-compatible endpoints, and local Ollama are supported. The authenticated workspace can start without a provider, but LLM-backed requests require one.
 
 ### Headless Debian boot automation
 
@@ -132,7 +134,8 @@ sudo systemctl disable --now hsx-voice-listener.service
 ```
 
 Set `HSX_AUTO_LOGIN_USER` to select a different Linux account. The selected account needs
-access to the microphone/sound device; the installer adds it to `audio` and `video` groups
+access to the microphone, sound, and serial devices; the installer adds it to `audio`,
+`dialout`, and `video` groups
 when those groups exist. Ensure all people near the machine know that the microphone is
 active.
 
@@ -145,8 +148,8 @@ sudo journalctl -u hsx-voice-listener.service -f
 ```
 
 TTY1 launches `python cli.py` after auto-login. The client submits prompts to the local API
-with `target_device=local_host`, displays streamed model text, and asks for answers when a
-job pauses for user input.
+with `target_device=local_host`, displays streamed model text with clean conversational
+prompts, and asks for answers when a job pauses for user input.
 The CLI is a separate process from the server; leaving the prompt does not stop HSX.
 Other terminals and SSH logins remain normal shells. The CLI can also be started manually
 with `python cli.py`.
@@ -181,16 +184,6 @@ sudo apt install libportaudio2 portaudio19-dev ffmpeg mpv yt-dlp
 source venv/bin/activate
 pip install -r requirements-voice.txt
 ```
-
-Install the lightweight local speech model once from the repository root:
-
-```bash
-python scripts/setup_voice_model.py
-```
-
-The listener uses the default microphone unless `HSX_MICROPHONE_DEVICE` is configured. Say
-`hey hsx`, pause if needed, then speak the command. Set `HSX_VOICE_REQUIRE_WAKE_PHRASE=0`
-only when every detected speech segment should be submitted as a command.
 
 The single boot-mode installer above enables the listener after explicit consent. It checks
 that the service account can read `.env` and run the virtualenv, validates the wake phrase
@@ -240,7 +233,7 @@ For text-only requests, `HSX_PANEL_MODE=off` is the default. Set it to `auto` to
 - `run_code` uses Docker first with no network, resource limits, a read-only root, and a temporary writable area. If Docker is unavailable, it uses a weaker confirm-tier subprocess fallback with a scrubbed environment, temporary working directory, and best-effort network blocking; Docker is the only strong isolation.
 - Shared-workspace reads resolve inside `HSX_WORKSPACE`; generated files are confined to `HSX_WORK_DIR`, with traversal and symlink escapes rejected. Every task output is placed in a dated folder and uses collision-safe names.
 - Agent-facing file browsing and downloads are bearer-token protected. Notifications contain titles and job identifiers only; workspace file contents are never sent in notification payloads.
-- The LLM router discovers configured provider keys, supports ordered fallbacks through `HSX_PROVIDER` and `HSX_FALLBACKS`, and emits normalized events through `/api/chat/stream`.
+- The LLM router discovers configured provider keys, supports Gemini, Grok/XAI, Anthropic, Groq, OpenRouter, OpenAI-compatible endpoints, and Ollama, and emits normalized events through `/api/chat/stream`.
 - Skills default to `confirm`, support `safe` and `dangerous` tiers, and are audited in append-only JSONL. Advisory skills request explicit consent, with session-level repeat suppression; `POST /api/stop` activates the global kill switch.
 - Phase 11 self-improvement is proposal-only: research and prototypes stay in `scratch/self_improvement/`, dependencies and production files are not changed automatically, strict tests must pass, and approval/promotion require the separate owner PIN.
 - Device pairing remains capability-scoped: pairing requires the owner PIN, device tokens are stored only as hashes and returned once, capabilities are allowlisted, every authorization is audited, and revocation is immediate. Local media capture/playback is provided separately by explicit skills; browser camera capture always requires a user confirmation and browser permission.
