@@ -297,7 +297,6 @@ async function submitPrompt() {
   const message = aiPrompt.value.trim();
   aiPrompt.value = '';
   appendChatMessage('user', message);
-  appendChatMessage('assistant', `Understood: I’ll work on: ${message}`);
   const approvals = {};
   if (/\b(camera|webcam|snapshot|photo|record|play|audio|music)\b/i.test(message)) {
     const pin = window.prompt('Owner PIN for requested local media actions (leave blank to skip):');

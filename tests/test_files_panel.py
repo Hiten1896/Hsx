@@ -103,7 +103,7 @@ def test_chat_stream_forwards_model_text_deltas(tmp_path: Path, monkeypatch):
     text = body.decode()
     assert status == 200
     assert headers["Content-Type"] == "text/event-stream"
-    assert "event: acknowledgement" in text
+    assert "event: acknowledgement" not in text
     assert "event: text_delta\ndata: {\"text\":\"Streaming \"}" in text
     assert "event: text_delta\ndata: {\"text\":\"answer\"}" in text
     assert '"result":"Streaming answer"' in text
@@ -172,7 +172,7 @@ def test_chat_question_card_answer_resumes_job(tmp_path: Path, monkeypatch):
     )
     response = json.loads(body)
     assert status == 202
-    assert response["response"].startswith("Understood:")
+    assert response["response"] == ""
     job_id = response["job"]["id"]
 
     deadline = time.monotonic() + 5
