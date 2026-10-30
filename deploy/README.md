@@ -12,4 +12,17 @@ Set `HSX_WORKSPACE=/home/hsxshare` and `HSX_WORK_DIR=Hsx Work` in `/opt/hsx/.env
 
 Install `deploy/hsx.service` with systemd. To enable Web Push, run `sudo sh deploy/generate-vapid.sh` after installing the requirements. This creates `/etc/hsx/secrets.env` with VAPID keys and `root:hsx` ownership, mode `0640`; the service loads it as an optional environment file. Keep Hsx bound to loopback and expose HTTPS through Tailscale Serve; enable HTTPS certificates for the tailnet device in the Tailscale admin console. This adds no listening port. Brave requires **Use Google Services for push messaging** to receive Web Push; Chrome and Edge work by default.
 
+The boot installer also installs and enables the `hsx-update.timer`, which checks hourly.
+Updates are disabled unless `.env` sets `HSX_AUTO_UPDATE=1` and
+`HSX_UPDATE_SIGNER_FINGERPRINT` to the exact GPG signing-key fingerprint whose public key
+is present in the service account's GPG keyring. Commits must be signed by that key;
+unsigned, invalidly signed, untrusted, non-fast-forward, dirty-tree, or wrong-origin
+updates are rejected. Set `HSX_UPDATE_REMOTE` for a trusted fork. The updater runs as the HSX service account
+without sudo, requires write access to the checkout and virtual environment, updates
+Python dependencies only when a root-level `requirements*.txt` changes, and runs
+`npm ci --ignore-scripts` only when the Node dependency manifests change. After successful
+updates it signals the running server to drain requests and re-exec. It does not update
+Docker deployments. Review and test commits before signing; a trusted signature is the
+authorization to deploy code.
+
 For optional container deployment, run `docker compose -f deploy/docker-compose.yml up -d --build`. Back up `memory/`, `data/`, and the shared `Hsx Work/` results, then update by pulling the repository, reinstalling requirements, and restarting the service.
