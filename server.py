@@ -1,4 +1,5 @@
 import json
+import logging
 import mimetypes
 import os
 import queue
@@ -43,6 +44,7 @@ from config import BASE_DIR, IMPROVEMENTS_DB
 from video_tools.pipeline import create_video_job, get_video_job, list_video_jobs
 
 ROOT = Path(__file__).resolve().parent
+LOGGER = logging.getLogger("hsx.server")
 TOOLS, SKILL_MAP = load_skills(str(ROOT / "skills"))
 set_runtime_registry(TOOLS, SKILL_MAP)
 AUTH_SERVICE = AuthService(AUTH_TOKEN, ALLOWED_ORIGINS)
@@ -71,6 +73,37 @@ NOTIFIER = Notifier(DATA_DIR / "notifications.db")
 
 def _emit_chat_event(job_id: str, event: str, payload: dict) -> None:
     CHAT_STREAMS.emit(job_id, event, payload)
+
+
+def _job_error(error: Exception) -> str:
+    """Return a useful, bounded error without exposing configured secrets."""
+    message = str(error) or error.__class__.__name__
+    for name in (
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GROK_API_KEY",
+        "XAI_API_KEY",
+        "GROQ_API_KEY",
+        "OPENROUTER_API_KEY",
+        "OPENAI_API_KEY",
+        "HSX_AUTH_TOKEN",
+    ):
+        value = os.getenv(name, "")
+        if value:
+            message = message.replace(value, "***")
+    return message[:1000]
+
+
+def _fail_job(job_id: str, job: dict, error: Exception, *, stream: bool = False) -> None:
+    error_message = _job_error(error)
+    LOGGER.exception("HSX job %s failed during agent execution: %s", job_id, error_message)
+    failed = ASK_JOBS.fail(job_id, error_message)
+    if stream:
+        _emit_chat_event(job_id, "job", _ask_job_payload(failed))
+        _emit_chat_event(job_id, "error", {"message": error_message})
+        _emit_chat_event(job_id, "done", {})
+    POLICY.audit_event("job_failed", job["session_id"], job_id, "failed")
+    NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
 
 
 def _resume_ask_job(job_id: str) -> None:
@@ -110,9 +143,10 @@ def _resume_ask_job(job_id: str) -> None:
         NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
         return
     except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
-        ASK_JOBS.fail(job_id, str(error))
-        POLICY.audit_event("job_failed", job["session_id"], job_id, "failed")
-        NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
+        _fail_job(job_id, job, error)
+        return
+    except Exception as error:
+        _fail_job(job_id, job, error)
         return
     SESSION_HISTORIES[job["session_id"]] = history
     ASK_JOBS.complete(job_id, response, device_actions)
@@ -191,11 +225,10 @@ def _run_chat_job(
             NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
         return
     except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
-        ASK_JOBS.fail(job_id, str(error))
-        _emit_chat_event(job_id, "job", _ask_job_payload(ASK_JOBS.get(job_id)))
-        _emit_chat_event(job_id, "done", {})
-        POLICY.audit_event("job_failed", job["session_id"], job_id, "failed")
-        NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
+        _fail_job(job_id, job, error, stream=True)
+        return
+    except Exception as error:
+        _fail_job(job_id, job, error, stream=True)
         return
     SESSION_HISTORIES[job["session_id"]] = updated_history
     ASK_JOBS.complete(job_id, response, device_actions)

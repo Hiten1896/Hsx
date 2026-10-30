@@ -1,7 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from agent.llm.providers import ProviderError
 from agent.llm.router import default_router
 from agent.llm.types import LLMRequest
 
@@ -48,30 +47,27 @@ def call_llm(
         + (f"\n\n{memory_context}" if memory_context else "")
     )
     request = LLMRequest(messages, tools, system=system)
-    router = default_router()
     blocks = []
-    try:
-        panel = None
-        if not tools:
-            from config import PANEL_MODE, PANEL_PROVIDERS
+    router = default_router()
+    panel = None
+    if not tools:
+        from config import PANEL_MODE, PANEL_PROVIDERS
 
-            if not sensitive and PANEL_MODE in {"auto", "always"}:
-                panel = router.panel(list(PANEL_PROVIDERS))
-        events = (panel or router).generate(request)
-        for event in events:
-            if event.type == "text_delta":
-                if on_text_delta is not None:
-                    on_text_delta(event.text)
-                blocks.append(NormalizedBlock(type="text", text=event.text))
-            elif event.type == "tool_call":
-                blocks.append(
-                    NormalizedBlock(
-                        type="tool_use",
-                        name=event.tool_name,
-                        input=event.tool_input,
-                        id=event.tool_call_id,
-                    )
+        if not sensitive and PANEL_MODE in {"auto", "always"}:
+            panel = router.panel(list(PANEL_PROVIDERS))
+    events = (panel or router).generate(request)
+    for event in events:
+        if event.type == "text_delta":
+            if on_text_delta is not None:
+                on_text_delta(event.text)
+            blocks.append(NormalizedBlock(type="text", text=event.text))
+        elif event.type == "tool_call":
+            blocks.append(
+                NormalizedBlock(
+                    type="tool_use",
+                    name=event.tool_name,
+                    input=event.tool_input,
+                    id=event.tool_call_id,
                 )
-    except ProviderError:
-        return None
+            )
     return NormalizedResponse(blocks)
