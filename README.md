@@ -29,6 +29,7 @@ Name: **[Hiten Sharma]**
 - Phase 18: shared workspace, ask-me flow, report skill, notifications, and PWA complete
 - Phase 19: System-as-Body runtime context, host-device routing enforcement, and hardware lifecycle safety complete
 - Phase 20: live-streaming local CLI, provider-agnostic routing, lightweight voice input, and validated headless boot setup complete
+- Dynamic tool creation: policy-gated generated skills with syntax/import/path/risk validation and live runtime registration complete
 - Reliability tooling: `hsx doctor`, verified Vosk installation, microphone self-test, API service boundaries, and E2E coverage complete
 - Phase 21: hardware workbench and ESP32-S3 co-processor bridge planned
 - Phase 22: multimodal sensory controls and conversational system status planned
@@ -116,6 +117,17 @@ python -m skills.voice_input --test-microphone
 The HTTP entry point remains [server.py](./server.py), while authentication, chat-stream
 registries, job payloads, file resolution, and device target validation are organized under
 the [api/](./api) package.
+
+### Dynamic tool creation
+
+When an approved request needs a capability that is not present, the agent can use the
+`tool_creator` skill to submit a generated `run` implementation and its `skill.json` metadata.
+The creator rejects syntax errors, restricted imports and operations, filesystem writes,
+invalid metadata, and dangerous risk levels. New tools are written to the dynamic scratch
+area by default and registered in the active `TOOLS` and `SKILL_MAP` collections immediately;
+permanent placement under `skills/` must be explicitly requested and remains policy-gated.
+Generated tools cannot execute arbitrary shell commands, access sockets, mutate global state,
+or write outside the controlled skill locations.
 
 ## Setup
 

@@ -39,6 +39,7 @@ def call_llm(
         "Search and read files only through the workspace skill. Write every deliverable only under Hsx Work, "
         "in its own dated task folder; never delete or overwrite any existing file. "
         "Never modify the owner's source files. "
+        "When a requested capability is missing, use the confirmed tool_creator skill to generate and validate a narrowly scoped tool. "
         "Remain provider-agnostic. Never mention provider names, API keys, or key configuration to the user. "
         "Respond in clean natural language without debug chatter, internal execution details, or status banners. "
         f"Route media actions to the {target_device} device. "

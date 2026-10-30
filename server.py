@@ -26,7 +26,7 @@ from agent.notifier import Notifier
 from agent.orchestrator import run_agent
 from agent.policy import POLICY
 from agent.self_improvement import SelfImprovement
-from agent.skill_loader import load_skills
+from agent.skill_loader import load_skills, set_runtime_registry
 from agent.workspace import Workspace, task_output_path, task_output_scope, workspace_search
 from config import (
     ALLOWED_ORIGINS,
@@ -44,6 +44,7 @@ from video_tools.pipeline import create_video_job, get_video_job, list_video_job
 
 ROOT = Path(__file__).resolve().parent
 TOOLS, SKILL_MAP = load_skills(str(ROOT / "skills"))
+set_runtime_registry(TOOLS, SKILL_MAP)
 AUTH_SERVICE = AuthService(AUTH_TOKEN, ALLOWED_ORIGINS)
 HISTORY = []
 SESSION_HISTORIES = {}
