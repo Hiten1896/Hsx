@@ -1,6 +1,6 @@
 {
   "name": "video_edit",
-  "description": "Applies prompt-driven local video operations like trimming, concatenation, and transcription using FFmpeg, MoviePy, and Whisper when available.",
+  "description": "Applies prompt-driven local video operations like trimming, concatenation, and optional local transcription when available.",
   "input_schema": {
     "type": "object",
     "properties": {

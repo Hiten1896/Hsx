@@ -17,7 +17,7 @@ specifies their intended boundaries and is not evidence that they are already av
   context. The authenticated `/api/body` endpoint reports host interface availability.
 - Local TTY and voice-listener requests may target `local_host`; remote browser requests
   are restricted to `client_browser`.
-- The opt-in voice listener uses WebRTC VAD and local Whisper transcription. The webcam
+- The opt-in voice listener uses WebRTC VAD and local Vosk transcription. The webcam
   can be accessed through the existing host-media path at `/dev/video0`.
 - Device capabilities and dangerous operations are governed by HSX policy and the
   separate root-owned policy broker. The agent service does not receive a root shell.
