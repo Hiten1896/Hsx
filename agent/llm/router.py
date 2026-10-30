@@ -22,7 +22,7 @@ class LLMRouter:
             try:
                 yield from provider.generate(request)
                 return
-            except (ProviderError, OSError, TimeoutError) as error:
+            except Exception as error:
                 errors.append(f"{provider.name}: {error}")
         raise ProviderError("No LLM provider succeeded: " + "; ".join(errors))
 
@@ -36,53 +36,44 @@ class LLMRouter:
 
 
 def default_router() -> LLMRouter:
-    from config import (
-        FALLBACKS,
-        GEMINI_MODEL,
-        GROK_MODEL,
-        GROQ_MODEL,
-        MODEL,
-        OLLAMA_URL,
-        OPENAI_COMPATIBLE_URL,
-        OPENAI_MODEL,
-        OPENROUTER_MODEL,
-        PROVIDER,
-    )
+    from config import ENV_FILE
+    from dotenv import load_dotenv
 
-    # Read the current process environment on each construction so a caller can
-    # configure or rotate keys without relying on a provider-specific default.
+    load_dotenv(ENV_FILE, override=False)
+    value = lambda name: os.getenv(name, "").strip()
     keys = {
-        "anthropic": os.getenv("ANTHROPIC_API_KEY", "").strip(),
-        "gemini": os.getenv("GEMINI_API_KEY", "").strip(),
-        "grok": (os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip(),
-        "groq": os.getenv("GROQ_API_KEY", "").strip(),
-        "openrouter": os.getenv("OPENROUTER_API_KEY", "").strip(),
-        "openai": os.getenv("OPENAI_API_KEY", "").strip(),
+        "gemini": value("GEMINI_API_KEY"),
+        "grok": value("GROK_API_KEY") or value("XAI_API_KEY"),
+        "anthropic": value("ANTHROPIC_API_KEY"),
+        "groq": value("GROQ_API_KEY"),
+        "openrouter": value("OPENROUTER_API_KEY"),
+        "openai": value("OPENAI_API_KEY"),
     }
-    if not any(keys.values()):
-        raise RuntimeError(
-            "No valid API key found in .env. Please configure at least one provider key."
-        )
+    invalid_placeholders = {"your_key_here", "your_api_key", "changeme"}
+    keys = {name: key for name, key in keys.items() if key and key.lower() not in invalid_placeholders}
+    if not keys:
+        raise RuntimeError("No valid API key found in .env. Please configure at least one provider key.")
 
-    configured_names = [name for name in [PROVIDER, *FALLBACKS] if name]
-    available_names = [name for name, key in keys.items() if key]
-    names = list(dict.fromkeys([*configured_names, *available_names]))
+    configured = [value("HSX_PROVIDER"), *value("HSX_FALLBACKS").split(",")]
+    discovered = ["gemini", "grok", "anthropic", "groq", "openrouter", "openai"]
+    names = list(dict.fromkeys(name.lower() for name in [*configured, *discovered] if name.strip()))
     providers: list[Provider] = []
+    model = value("HSX_MODEL") or "claude-sonnet-4-6"
     for name in dict.fromkeys(names):
-        if name == "anthropic" and keys["anthropic"]:
-            providers.append(AnthropicProvider(keys["anthropic"], os.getenv("ANTHROPIC_MODEL", MODEL)))
-        elif name == "gemini" and keys["gemini"]:
-            providers.append(GeminiProvider(GEMINI_MODEL, f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={keys['gemini']}", keys["gemini"]))
-        elif name in {"grok", "xai"} and keys["grok"]:
-            providers.append(OpenAICompatibleProvider("grok", keys["grok"], GROK_MODEL, "https://api.x.ai/v1/chat/completions"))
-        elif name == "groq" and keys["groq"]:
-            providers.append(OpenAICompatibleProvider("groq", keys["groq"], GROQ_MODEL, "https://api.groq.com/openai/v1/chat/completions"))
-        elif name == "openrouter" and keys["openrouter"]:
-            providers.append(OpenAICompatibleProvider("openrouter", keys["openrouter"], OPENROUTER_MODEL, "https://openrouter.ai/api/v1/chat/completions"))
-        elif name == "openai" and keys["openai"]:
-            providers.append(OpenAICompatibleProvider("openai", keys["openai"], OPENAI_MODEL, "https://api.openai.com/v1/chat/completions"))
-        elif name == "openai_compatible" and keys["openai"] and OPENAI_COMPATIBLE_URL:
-            providers.append(OpenAICompatibleProvider("openai_compatible", keys["openai"], OPENAI_MODEL, OPENAI_COMPATIBLE_URL))
-        elif name == "ollama" and (PROVIDER == "ollama" or "ollama" in FALLBACKS):
-            providers.append(OllamaProvider(MODEL, f"{OLLAMA_URL.rstrip('/')}/api/chat"))
+        if name == "anthropic" and keys.get(name):
+            providers.append(AnthropicProvider(keys[name], model))
+        elif name == "gemini" and keys.get(name):
+            gemini_model = value("GEMINI_MODEL") or "gemini-2.0-flash"
+            providers.append(GeminiProvider(gemini_model, f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent?key={keys[name]}", keys[name]))
+        elif name in {"grok", "xai"} and keys.get("grok"):
+            grok_model = value("GROK_MODEL") or value("XAI_MODEL") or "grok-3-mini"
+            providers.append(OpenAICompatibleProvider("grok", keys["grok"], grok_model, "https://api.x.ai/v1/chat/completions"))
+        elif name == "groq" and keys.get(name):
+            providers.append(OpenAICompatibleProvider("groq", keys[name], value("GROQ_MODEL") or "llama-3.1-8b-instant", "https://api.groq.com/openai/v1/chat/completions"))
+        elif name == "openrouter" and keys.get(name):
+            providers.append(OpenAICompatibleProvider("openrouter", keys[name], value("OPENROUTER_MODEL") or "google/gemini-2.0-flash-exp:free", "https://openrouter.ai/api/v1/chat/completions"))
+        elif name == "openai" and keys.get(name):
+            providers.append(OpenAICompatibleProvider("openai", keys[name], value("OPENAI_MODEL") or "gpt-4o-mini", "https://api.openai.com/v1/chat/completions"))
+        elif name == "openai_compatible" and keys.get("openai") and value("OPENAI_COMPATIBLE_URL"):
+            providers.append(OpenAICompatibleProvider("openai_compatible", keys["openai"], value("OPENAI_MODEL") or "gpt-4o-mini", value("OPENAI_COMPATIBLE_URL")))
     return LLMRouter(providers)

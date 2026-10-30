@@ -87,8 +87,7 @@ def _request_stream(path: str, payload: dict) -> dict:
         raise RuntimeError(f"HSX returned HTTP {error.code}: {detail}") from error
     except (OSError, json.JSONDecodeError) as error:
         raise RuntimeError(f"Could not stream from HSX at {BASE_URL}: {error}") from error
-    if output_started:
-        print()
+    print(flush=True)
     return {"job": job, "streamed_text": "".join(streamed_text)}
 
 
@@ -109,15 +108,18 @@ def _submit(message: str) -> None:
     )
     job = response.get("job")
     if not job:
-        print(f"HSX > {response.get('response', 'Request accepted.')}")
+        print(response.get("response", "Request accepted."))
         return
+    if response.get("response"):
+        print(response["response"])
+
     while True:
         time.sleep(1)
         job = _request(f"/api/ask-jobs/{job['id']}").get("job")
         if not job:
             raise RuntimeError("HSX job disappeared before completion.")
         if job["state"] == "waiting_for_user":
-            print(f"HSX > {job['question']}")
+            print(f"\nHSX > {job['question']}")
             for index, option in enumerate(job.get("options", []), start=1):
                 print(f"  {index}. {option}")
             answer = input("You > ").strip()

@@ -46,7 +46,7 @@ Name: **[Hiten Sharma]**
 **Phase 20 — interactive CLI streaming and boot validation**
 
 - Wired model text deltas into the `/api/chat/stream` SSE endpoint and the local TTY CLI; the CLI also shows job-state changes, action outcomes, and final results while remaining independent of the server process.
-- Strengthened the unified Debian boot installer with checks for service-account access to `.env` and the virtual environment, voice configuration and Whisper model, and default audio input/output availability. It warns when the service account cannot access `/dev/video0`.
+- Strengthened the unified Debian boot installer with checks for service-account access to `.env` and the virtual environment, voice configuration and Vosk model, and default audio input/output availability. It warns when the service account cannot access `/dev/video0`.
 - Added regression coverage for SSE delivery, local-only host routing, media action reporting, asynchronous audio, and camera process cleanup.
 
 ### Next development phases
@@ -115,8 +115,8 @@ sudo bash scripts/enable_boot_mode.sh
 ```
 
 The installer asks for one-time consent before enabling persistent microphone listening.
-It then installs/checks the host audio/video and local Whisper, sounddevice, and WebRTC VAD dependencies,
-downloads the selected Whisper model under the service user's account, enables the HSX
+It then installs/checks the host audio/video and local Vosk, sounddevice, and WebRTC VAD dependencies,
+checks the selected Vosk model under the service user's account, enables the HSX
 systemd service at `multi-user.target`, enables the voice-listener service, configures
 passwordless TTY1 auto-login, and adds a TTY1-only CLI launcher to `~/.profile` (and
 `~/.bash_profile` or `~/.bash_login` when present). `hsx.service` uses `Restart=on-failure`; SSH and other
@@ -170,7 +170,7 @@ run only with the Unix account permissions assigned to the HSX service; the serv
 not acquire root privileges automatically. The authenticated `/api/body` endpoint reports
 the current host interface availability and routing target.
 
-The microphone listener is opt-in and uses frame-based WebRTC VAD plus local Whisper
+The microphone listener is opt-in and uses frame-based WebRTC VAD plus a lightweight local Vosk
 transcription. Captured audio remains in memory for transcription and is discarded; only
 recognized command text is submitted to HSX and then processed by the configured LLM
 provider (which may be remote). The default wake phrase is `hey hsx`.
@@ -185,7 +185,7 @@ pip install -r requirements-voice.txt
 
 The single boot-mode installer above enables the listener after explicit consent. It checks
 that the service account can read `.env` and run the virtualenv, validates the wake phrase
-and Whisper model, and verifies that PortAudio can see default input and output devices. If
+and Vosk model, and verifies that PortAudio can see default input and output devices. If
 `/dev/video0` exists but the service account lacks read/write access, setup warns that
 camera capture may fail. For a manual service setup, set
 `HSX_ENABLE_VOICE_LISTENER=1` in `.env` and install the optional listener service:

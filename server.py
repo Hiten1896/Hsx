@@ -419,10 +419,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                 args=(job["id"], payload.get("approvals"), bool(payload.get("sensitive", False)), target_device),
                 daemon=True,
             ).start()
-            self._json({
-                "response": "",
-                "job": _ask_job_payload(job),
-            }, 202)
+            self._json({"response": "", "job": _ask_job_payload(job)}, 202)
         elif path == "/api/stop":
             POLICY.stop_all()
             self._json({"success": True, "stopped": True})
@@ -615,9 +612,7 @@ class HsxHandler(BaseHTTPRequestHandler):
             self.send_header("X-Accel-Buffering", "no")
             self.end_headers()
             try:
-                initial_events = (
-                    f"event: job\ndata: {json.dumps({'id': job['id'], 'state': 'running'})}\n\n"
-                )
+                initial_events = f"event: job\ndata: {json.dumps({'id': job['id'], 'state': 'running'})}\n\n"
                 self.wfile.write(initial_events.encode())
                 self.wfile.flush()
                 while True:

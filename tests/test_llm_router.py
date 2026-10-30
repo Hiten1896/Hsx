@@ -37,43 +37,26 @@ def test_llm_client_forwards_text_deltas(monkeypatch):
     assert "".join(block.text for block in response.content) == "fallback answer"
 
 
-def test_default_router_discovers_gemini_grok_and_anthropic_keys(monkeypatch):
+def test_default_router_discovers_configured_providers(monkeypatch):
     from agent.llm.router import default_router
 
-    for key in (
-        "ANTHROPIC_API_KEY",
-        "GEMINI_API_KEY",
-        "GROK_API_KEY",
-        "XAI_API_KEY",
-        "GROQ_API_KEY",
-        "OPENROUTER_API_KEY",
-        "OPENAI_API_KEY",
-    ):
+    for key in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROK_API_KEY", "XAI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test")
     monkeypatch.setenv("XAI_API_KEY", "xai-test")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-test")
     monkeypatch.delenv("HSX_PROVIDER", raising=False)
     monkeypatch.delenv("HSX_FALLBACKS", raising=False)
 
     router = default_router()
 
-    assert [provider.name for provider in router.providers] == ["anthropic", "gemini", "grok"]
-    assert router.providers[2].api_key == "xai-test"
+    assert [provider.name for provider in router.providers] == ["gemini", "grok"]
+    assert router.providers[1].api_key == "xai-test"
 
 
-def test_default_router_requires_at_least_one_api_key(monkeypatch):
+def test_default_router_requires_a_valid_api_key(monkeypatch):
     from agent.llm.router import default_router
 
-    for key in (
-        "ANTHROPIC_API_KEY",
-        "GEMINI_API_KEY",
-        "GROK_API_KEY",
-        "XAI_API_KEY",
-        "GROQ_API_KEY",
-        "OPENROUTER_API_KEY",
-        "OPENAI_API_KEY",
-    ):
+    for key in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROK_API_KEY", "XAI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"):
         monkeypatch.delenv(key, raising=False)
 
     try:

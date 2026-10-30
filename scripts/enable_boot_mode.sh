@@ -42,7 +42,7 @@ if [[ "${VOICE_ENABLED}" != "1" ]]; then
   fi
   echo "This enables a microphone listener at every boot."
   echo "It listens for the configured wake phrase, transcribes locally, and discards captured audio."
-  echo "The installer may install host audio/video packages and download the Whisper model."
+  echo "The installer may install host audio/video packages and check the local Vosk model."
   read -r -p "Enable persistent microphone listening? Type YES to continue: " confirmation
   if [[ "${confirmation}" != "YES" ]]; then
     echo "Boot mode setup cancelled; microphone listening was not enabled."
@@ -71,34 +71,37 @@ if ((${#missing_packages[@]})); then
   apt-get install -y "${missing_packages[@]}"
 fi
 
-if ! runuser -u "${AUTO_LOGIN_USER}" -- "${VENV_DIR}/bin/python" -c 'import numpy, sounddevice, webrtcvad, whisper' >/dev/null 2>&1; then
-  echo "Installing optional local Whisper, microphone, and VAD dependencies..."
+if ! runuser -u "${AUTO_LOGIN_USER}" -- "${VENV_DIR}/bin/python" -c 'import sounddevice, vosk, webrtcvad' >/dev/null 2>&1; then
+  echo "Installing optional local Vosk, microphone, and VAD dependencies..."
   runuser -u "${AUTO_LOGIN_USER}" -- "${VENV_DIR}/bin/python" -m pip install -r "${REPO_ROOT}/requirements-voice.txt"
 fi
 
-for group in audio video; do
+for group in audio dialout video; do
   if getent group "${group}" >/dev/null && ! id -nG "${AUTO_LOGIN_USER}" | tr ' ' '\n' | grep -qx "${group}"; then
     usermod -aG "${group}" "${AUTO_LOGIN_USER}"
   fi
 done
 
-echo "Checking/downloading the configured local Whisper model as ${AUTO_LOGIN_USER}..."
+echo "Checking the configured local Vosk model as ${AUTO_LOGIN_USER}..."
 runuser -u "${AUTO_LOGIN_USER}" -- env HSX_PROJECT_ROOT="${REPO_ROOT}" "${VENV_DIR}/bin/python" -c '
 import os
 from pathlib import Path
 from dotenv import dotenv_values
 settings = dotenv_values(Path(os.environ["HSX_PROJECT_ROOT"]) / ".env")
-model = settings.get("HSX_VOICE_MODEL", "base")
+model = settings.get("HSX_VOICE_MODEL_PATH", "models/vosk-model-small-en-us-0.15")
 if settings.get("HSX_ENABLE_VOICE_LISTENER") != "1":
     raise SystemExit("HSX_ENABLE_VOICE_LISTENER must be set to 1.")
 if not str(settings.get("HSX_VOICE_WAKE_PHRASE", "hey hsx")).strip():
     raise SystemExit("HSX_VOICE_WAKE_PHRASE must not be empty.")
 if not str(settings.get("HSX_AUDIO_DEVICE", "alsa/default")).strip():
     raise SystemExit("HSX_AUDIO_DEVICE must not be empty.")
-import whisper
-if model not in whisper.available_models():
-    raise SystemExit(f"Unsupported HSX_VOICE_MODEL: {model}")
-whisper.load_model(model)
+model_path = Path(model)
+if not model_path.is_absolute():
+    model_path = Path(os.environ["HSX_PROJECT_ROOT"]) / model_path
+if not model_path.is_dir():
+    raise SystemExit(f"Missing HSX_VOICE_MODEL_PATH directory: {model_path}")
+from vosk import Model
+Model(str(model_path))
 import sounddevice as sd
 sd.query_devices(kind="input")
 sd.query_devices(kind="output")

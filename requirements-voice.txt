@@ -1,5 +1,5 @@
-# Optional local speech-to-text support; installs PyTorch transitively.
-openai-whisper
+# Optional local speech-to-text support; uses a small downloadable Vosk model.
+vosk
 # Optional microphone capture and frame-based VAD for scripts/voice_listener.py.
 sounddevice
 webrtcvad-wheels

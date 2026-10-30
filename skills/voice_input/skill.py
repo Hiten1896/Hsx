@@ -1,42 +1,56 @@
+import json
+import os
+import wave
 from pathlib import Path
 
 
 _MODELS = {}
 
 
-def _load_model(model_name: str):
+def _model_path() -> Path:
+    configured = os.getenv("HSX_VOICE_MODEL_PATH", "models/vosk-model-small-en-us-0.15")
+    path = Path(configured).expanduser()
+    if not path.is_absolute():
+        path = Path(__file__).resolve().parents[2] / path
+    if not path.is_dir():
+        raise RuntimeError(f"Voice model directory not found: {path}")
+    return path
+
+
+def _load_model():
     try:
-        import whisper
+        from vosk import Model
     except ImportError as error:
         raise RuntimeError("Install optional voice dependencies with: pip install -r requirements-voice.txt") from error
-    if model_name not in _MODELS:
-        _MODELS[model_name] = whisper.load_model(model_name)
-    return _MODELS[model_name]
+    path = _model_path()
+    key = str(path)
+    if key not in _MODELS:
+        _MODELS[key] = Model(key)
+    return _MODELS[key]
 
 
-def transcribe_samples(samples, model_name: str = "base") -> str:
-    import numpy as np
-
-    audio = np.asarray(samples, dtype=np.float32)
-    if audio.size == 0:
+def transcribe_samples(samples, model_name: str | None = None) -> str:
+    del model_name
+    try:
+        from vosk import KaldiRecognizer
+    except ImportError as error:
+        raise RuntimeError("Install optional voice dependencies with: pip install -r requirements-voice.txt") from error
+    audio = samples if isinstance(samples, bytes) else bytes(samples)
+    if not audio:
         raise ValueError("No audio samples were provided.")
-    peak = float(np.max(np.abs(audio)))
-    if peak > 1:
-        audio = audio / 32768.0
-    result = _load_model(model_name).transcribe(audio, fp16=False)
+    recognizer = KaldiRecognizer(_load_model(), 16000)
+    recognizer.AcceptWaveform(audio)
+    result = json.loads(recognizer.FinalResult())
     return str(result.get("text", "")).strip()
 
 
-def run(audio_path: str, model_name: str = "base") -> dict:
-    import numpy as np
-    try:
-        import whisper
-    except ImportError as error:
-        raise RuntimeError("Install optional voice dependencies with: pip install -r requirements-voice.txt") from error
-
+def run(audio_path: str, model_name: str | None = None) -> dict:
+    del model_name
     path = Path(audio_path)
     if not path.is_file():
         raise FileNotFoundError(f"Audio file not found: {audio_path}")
-    samples = whisper.load_audio(str(path))
-    transcription = transcribe_samples(np.asarray(samples), model_name)
+    with wave.open(str(path), "rb") as audio_file:
+        if audio_file.getnchannels() != 1 or audio_file.getsampwidth() != 2 or audio_file.getframerate() != 16000:
+            raise ValueError("Voice input must be mono 16-bit PCM audio at 16000 Hz.")
+        transcription = transcribe_samples(audio_file.readframes(audio_file.getnframes()))
     return {"success": True, "text": transcription}
