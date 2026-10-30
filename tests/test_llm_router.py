@@ -1,5 +1,7 @@
 from collections.abc import Iterator
 
+import pytest
+
 from agent.llm.providers import ProviderError
 from agent.llm.router import LLMRouter
 from agent.llm.types import LLMEvent, LLMRequest
@@ -35,6 +37,15 @@ def test_llm_client_forwards_text_deltas(monkeypatch):
 
     assert streamed == ["fallback answer"]
     assert "".join(block.text for block in response.content) == "fallback answer"
+
+
+def test_llm_client_propagates_provider_failure_instead_of_using_local_fallback(monkeypatch):
+    from agent import llm_client
+
+    monkeypatch.setattr(llm_client, "default_router", lambda: LLMRouter([FailingProvider()]))
+
+    with pytest.raises(ProviderError, match="primary unavailable"):
+        llm_client.call_llm([], [], sensitive=True)
 
 
 def test_default_router_discovers_configured_providers(monkeypatch):
