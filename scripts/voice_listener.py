@@ -52,14 +52,36 @@ def _send_command(message: str) -> dict:
         raise RuntimeError(f"Could not submit voice command to HSX: {error}") from error
 
 
+def _parse_transcript(transcript: str, wake_phrase: str = WAKE_PHRASE) -> str:
+    """Return a command only when the transcript contains the configured wake phrase."""
+    lowered = transcript.lower()
+    wake_at = lowered.find(wake_phrase.lower())
+    if wake_at < 0:
+        return ""
+    return transcript[wake_at + len(wake_phrase):].strip(" ,.!?:;")
+
+
+def _queue_audio(frames: queue.Queue, indata, status=None) -> None:
+    if status:
+        print(f"[voice] audio input status: {status}", flush=True)
+    try:
+        frames.put_nowait(indata[:, 0].tobytes())
+    except queue.Full:
+        print("[voice] audio buffer full; dropping microphone frame.", flush=True)
+
+
+def route_transcript(transcript: str, send_command=_send_command, wake_phrase: str = WAKE_PHRASE) -> bool:
+    command = _parse_transcript(transcript, wake_phrase)
+    if not command:
+        return False
+    send_command(command)
+    return True
+
+
 def _listen(frames, vad, transcribe_samples, sd, stop_event) -> None:
     def enqueue_audio(indata, frame_count, time_info, status):
-        if status:
-            print(f"[voice] audio input status: {status}", flush=True)
-        try:
-            frames.put_nowait(indata[:, 0].tobytes())
-        except queue.Full:
-            print("[voice] audio buffer full; dropping microphone frame.", flush=True)
+        del frame_count, time_info
+        _queue_audio(frames, indata, status)
 
     with sd.InputStream(
         samplerate=SAMPLE_RATE,
@@ -95,11 +117,7 @@ def _listen(frames, vad, transcribe_samples, sd, stop_event) -> None:
                 except (OSError, RuntimeError, ValueError) as error:
                     print(f"[voice] transcription failed: {error}", flush=True)
                     continue
-                lowered = transcript.lower()
-                wake_at = lowered.find(WAKE_PHRASE)
-                if wake_at < 0:
-                    continue
-                command = transcript[wake_at + len(WAKE_PHRASE):].strip(" ,.!?:;")
+                command = _parse_transcript(transcript)
                 if not command:
                     print("[voice] wake phrase heard; say a command after it.", flush=True)
                     continue

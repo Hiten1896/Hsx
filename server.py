@@ -1,4 +1,3 @@
-import hmac
 import json
 import mimetypes
 import os
@@ -10,10 +9,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
+from api.auth import AuthService
+from api.chat import ChatStreamRegistry
+from api.devices import resolve_target_device
+from api.files import resolve_output
+from api.jobs import ask_job_payload
+
+_ask_job_payload = ask_job_payload
+
 from agent.ask_user import AskUserJobs, AskUserRequest
 from agent.jobs import JobQueue
 from agent.approval import ApprovalGuard
-from agent.devices import DeviceRegistry, resolve_target_device, system_body_state
+from agent.devices import DeviceRegistry, system_body_state
 from agent.memory import MemoryManager
 from agent.notifier import Notifier
 from agent.orchestrator import run_agent
@@ -37,12 +44,12 @@ from video_tools.pipeline import create_video_job, get_video_job, list_video_job
 
 ROOT = Path(__file__).resolve().parent
 TOOLS, SKILL_MAP = load_skills(str(ROOT / "skills"))
+AUTH_SERVICE = AuthService(AUTH_TOKEN, ALLOWED_ORIGINS)
 HISTORY = []
 SESSION_HISTORIES = {}
 SESSION_LOCKS = {}
 SESSION_LOCKS_GUARD = threading.Lock()
-CHAT_STREAMS = {}
-CHAT_STREAMS_GUARD = threading.Lock()
+CHAT_STREAMS = ChatStreamRegistry()
 MEMORY = MemoryManager(MEMORY_DB)
 JOBS = JobQueue(JOBS_DB)
 ASK_JOBS = AskUserJobs(JOBS_DB)
@@ -61,23 +68,8 @@ WORKSPACE = Workspace(WORKSPACE_DIR, WORK_DIR)
 NOTIFIER = Notifier(DATA_DIR / "notifications.db")
 
 
-def _ask_job_payload(job: dict | None) -> dict | None:
-    if job is None:
-        return None
-    return {
-        key: job[key]
-        for key in (
-            "id", "state", "question", "options", "allow_free_text", "question_count",
-            "expires_at", "result", "error", "target_device", "device_actions",
-        )
-    }
-
-
 def _emit_chat_event(job_id: str, event: str, payload: dict) -> None:
-    with CHAT_STREAMS_GUARD:
-        event_queue = CHAT_STREAMS.get(job_id)
-    if event_queue is not None:
-        event_queue.put((event, payload))
+    CHAT_STREAMS.emit(job_id, event, payload)
 
 
 def _resume_ask_job(job_id: str) -> None:
@@ -222,17 +214,9 @@ class HsxHandler(BaseHTTPRequestHandler):
         return urlsplit(self.path).path
 
     def _api_access_allowed(self) -> bool:
-        origin = self.headers.get("Origin")
-        if origin and origin not in ALLOWED_ORIGINS:
-            self._json({"error": "Origin is not allowed."}, 403)
-            return False
-        if AUTH_TOKEN:
-            supplied = self.headers.get("Authorization", "")
-            expected = f"Bearer {AUTH_TOKEN}"
-            if not hmac.compare_digest(supplied, expected):
-                self._json({"error": "Authentication required."}, 401)
-                return False
-        return True
+        AUTH_SERVICE.token = AUTH_TOKEN
+        AUTH_SERVICE.origins = ALLOWED_ORIGINS
+        return AUTH_SERVICE.allowed(self, self._json)
 
     def _json(self, payload: dict, status: int = 200) -> None:
         data = json.dumps(payload).encode("utf-8")
@@ -382,9 +366,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/outputs/"):
             relative_path = unquote(path.removeprefix("/api/outputs/"))
             try:
-                output = WORKSPACE.resolve_write(relative_path)
-                if not output.is_file():
-                    raise FileNotFoundError("Artifact not found.")
+                output = resolve_output(WORKSPACE, relative_path)
             except (OSError, ValueError) as error:
                 self._json({"error": str(error)}, 404)
                 return
@@ -591,9 +573,7 @@ class HsxHandler(BaseHTTPRequestHandler):
             task_directory = WORKSPACE.create_task_dir(message).relative_to(WORK_DIR).as_posix()
             job = ASK_JOBS.create_running(message, session_id, task_directory, target_device)
             POLICY.audit_event("job_created", session_id, job["id"], "queued")
-            event_queue = queue.Queue()
-            with CHAT_STREAMS_GUARD:
-                CHAT_STREAMS[job["id"]] = event_queue
+            event_queue = CHAT_STREAMS.register(job["id"])
             threading.Thread(
                 target=_run_chat_job,
                 args=(
@@ -630,8 +610,7 @@ class HsxHandler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass
             finally:
-                with CHAT_STREAMS_GUARD:
-                    CHAT_STREAMS.pop(job["id"], None)
+                CHAT_STREAMS.remove(job["id"])
         elif path == "/api/memory":
             payload = self._body()
             try:

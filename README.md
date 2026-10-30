@@ -29,6 +29,7 @@ Name: **[Hiten Sharma]**
 - Phase 18: shared workspace, ask-me flow, report skill, notifications, and PWA complete
 - Phase 19: System-as-Body runtime context, host-device routing enforcement, and hardware lifecycle safety complete
 - Phase 20: live-streaming local CLI, provider-agnostic routing, lightweight voice input, and validated headless boot setup complete
+- Reliability tooling: `hsx doctor`, verified Vosk installation, microphone self-test, API service boundaries, and E2E coverage complete
 - Phase 21: hardware workbench and ESP32-S3 co-processor bridge planned
 - Phase 22: multimodal sensory controls and conversational system status planned
 - Phase 23: ambient awareness, gaze-aware presence, hardware reflexes, and proactive dialogue planned
@@ -82,6 +83,39 @@ flows, safety controls, and acceptance criteria are in [ARCHITECTURE.md](./ARCHI
   playback, with a safe latched state and audited reset.
 - Add policy-controlled, rate-limited dialogue when configured thresholds detect repeated
   compilation failures or actionable system alerts.
+
+### Reliability commands
+
+Run the read-only installation diagnostic from the repository root:
+
+```bash
+python cli.py doctor
+python -m hsx doctor
+```
+
+The diagnostic reports Python and dependency availability, redacted provider-key presence,
+serial device access, microphone and Vosk model readiness, port 8000 reachability, systemd
+unit state, and broker socket connectivity. Missing hardware or platform-specific services
+are reported as warnings and never expose secret values.
+
+Install the lightweight Vosk model with an operator-provided SHA-256 checksum:
+
+```bash
+python scripts/setup_voice_model.py \
+  --sha256 <official-model-archive-sha256>
+```
+
+The installer uses a temporary directory, rejects unsafe archive paths, verifies the archive
+before extraction, and atomically replaces the configured model directory. Test microphone
+capture without transcribing an audio file:
+
+```bash
+python -m skills.voice_input --test-microphone
+```
+
+The HTTP entry point remains [server.py](./server.py), while authentication, chat-stream
+registries, job payloads, file resolution, and device target validation are organized under
+the [api/](./api) package.
 
 ## Setup
 
