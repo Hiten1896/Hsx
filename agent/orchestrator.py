@@ -13,7 +13,7 @@ MEMORY = MemoryManager(MEMORY_DB)
 
 def _text_from_response(response) -> str:
     if response is None:
-        return "I’m ready to help. Add an Anthropic API key in `.env` to enable the full agent loop."
+        return "I’m ready to help with your local workspace."
     return "\n".join(block.text for block in response.content if getattr(block, "type", "") == "text")
 
 
@@ -139,4 +139,4 @@ def _local_response(user_input: str, history: list) -> str:
         return "Hello. I’m Hsx, your local creative workspace. What are we making?"
     if "2+2" in lowered or "2 + 2" in lowered:
         return "4"
-    return "I can answer directly here, or create files locally once `ANTHROPIC_API_KEY` is configured."
+    return "I can answer directly here or create files locally in your workspace."

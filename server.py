@@ -420,7 +420,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                 daemon=True,
             ).start()
             self._json({
-                "response": f"Understood: I’ll work on: {message}",
+                "response": "",
                 "job": _ask_job_payload(job),
             }, 202)
         elif path == "/api/stop":
@@ -608,7 +608,6 @@ class HsxHandler(BaseHTTPRequestHandler):
                 ),
                 daemon=True,
             ).start()
-            restatement = f"Understood: I’ll work on: {message}"
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
@@ -617,7 +616,6 @@ class HsxHandler(BaseHTTPRequestHandler):
             self.end_headers()
             try:
                 initial_events = (
-                    f"event: acknowledgement\ndata: {json.dumps({'text': restatement})}\n\n"
                     f"event: job\ndata: {json.dumps({'id': job['id'], 'state': 'running'})}\n\n"
                 )
                 self.wfile.write(initial_events.encode())

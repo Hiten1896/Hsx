@@ -28,12 +28,12 @@ ENV_FILE = BASE_DIR / ".env"
 MEMORY_DB = DATA_DIR / "memory.db"
 JOBS_DB = DATA_DIR / "jobs.db"
 IMPROVEMENTS_DB = DATA_DIR / "improvements.db"
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-MODEL = os.getenv("HSX_MODEL", "claude-sonnet-4-6")
-PROVIDER = os.getenv("HSX_PROVIDER", "anthropic").strip().lower()
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+MODEL = os.getenv("HSX_MODEL", "claude-sonnet-4-6").strip()
+PROVIDER = os.getenv("HSX_PROVIDER", "").strip().lower()
 FALLBACKS = tuple(
     item.strip().lower()
-    for item in os.getenv("HSX_FALLBACKS", "ollama").split(",")
+    for item in os.getenv("HSX_FALLBACKS", "").split(",")
     if item.strip()
 )
 PANEL_MODE = os.getenv("HSX_PANEL_MODE", "off").strip().lower()
@@ -44,8 +44,10 @@ PANEL_PROVIDERS = tuple(
 )
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+GROK_API_KEY = (os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip()
+GROK_MODEL = os.getenv("GROK_MODEL") or os.getenv("XAI_MODEL", "grok-3-mini")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
