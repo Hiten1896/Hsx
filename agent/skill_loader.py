@@ -14,7 +14,6 @@ def load_skills(skills_dir: str = "skills") -> tuple[list, dict]:
         metadata_path = folder / "skill.json"
         module_path = folder / "skill.py"
         if not metadata_path.exists() or not module_path.exists():
-            print(f"Warning: skipped incomplete skill folder: {folder.name}")
             continue
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))

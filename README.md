@@ -41,11 +41,11 @@ Name: **[Hiten Sharma]**
 - Added authenticated `/api/body` status for host platform, interface availability, target device, and the service account's permission boundary.
 - Enforced `local_host` routing on the server: only loopback-origin requests may select host peripherals; browser requests remain routed to `client_browser`.
 - Kept local audio playback asynchronous and made camera capture reliably clean up the ffmpeg process and device access on success and timeout.
-- Persisted successful and failed local/browser media action outcomes so the CLI can show what happened.
+- Persisted successful and failed local/browser media action outcomes for job history and the web interface.
 
 **Phase 20 — interactive CLI streaming and boot validation**
 
-- Wired model text deltas into the `/api/chat/stream` SSE endpoint and the local TTY CLI; the CLI also shows job-state changes, action outcomes, and final results while remaining independent of the server process.
+- Wired model text deltas into the `/api/chat/stream` SSE endpoint and the local TTY CLI; the CLI keeps the conversation focused while remaining independent of the server process.
 - Strengthened the unified Debian boot installer with checks for service-account access to `.env` and the virtual environment, voice configuration and Vosk model, and default audio input/output availability. It warns when the service account cannot access `/dev/video0`.
 - Added regression coverage for SSE delivery, local-only host routing, media action reporting, asynchronous audio, and camera process cleanup.
 
@@ -103,7 +103,7 @@ cp .env.example .env
 python main.py
 ```
 
-Open `http://127.0.0.1:8000`. You do not need Anthropic: configure any available provider key in `.env` and order providers with `HSX_PROVIDER` and `HSX_FALLBACKS`. Gemini, Groq, OpenRouter free models, OpenAI-compatible endpoints, and local Ollama are supported. Without a configured provider, the workspace remains usable for local testing.
+Open `http://127.0.0.1:8000`. Configure at least one supported provider key in `.env` and optionally order providers with `HSX_PROVIDER` and `HSX_FALLBACKS`. Gemini, Grok/XAI, Anthropic, Groq, OpenRouter, OpenAI-compatible endpoints, and local Ollama are supported. The authenticated UI and workspace can start without a provider, but LLM-backed requests require one.
 
 ### Headless Debian boot automation
 
@@ -145,9 +145,8 @@ sudo journalctl -u hsx-voice-listener.service -f
 ```
 
 TTY1 launches `python cli.py` after auto-login. The client submits prompts to the local API
-with `target_device=local_host`, displays streamed model text, job-state updates,
-local/browser media action logs, and job results, and asks for answers when a job pauses
-for user input.
+with `target_device=local_host`, displays streamed model text, and asks for answers when a
+job pauses for user input.
 The CLI is a separate process from the server; leaving the prompt does not stop HSX.
 Other terminals and SSH logins remain normal shells. The CLI can also be started manually
 with `python cli.py`.
@@ -182,6 +181,16 @@ sudo apt install libportaudio2 portaudio19-dev ffmpeg mpv yt-dlp
 source venv/bin/activate
 pip install -r requirements-voice.txt
 ```
+
+Install the lightweight local speech model once from the repository root:
+
+```bash
+python scripts/setup_voice_model.py
+```
+
+The listener uses the default microphone unless `HSX_MICROPHONE_DEVICE` is configured. Say
+`hey hsx`, pause if needed, then speak the command. Set `HSX_VOICE_REQUIRE_WAKE_PHRASE=0`
+only when every detected speech segment should be submitted as a command.
 
 The single boot-mode installer above enables the listener after explicit consent. It checks
 that the service account can read `.env` and run the virtualenv, validates the wake phrase
@@ -231,7 +240,7 @@ For text-only requests, `HSX_PANEL_MODE=off` is the default. Set it to `auto` to
 - `run_code` uses Docker first with no network, resource limits, a read-only root, and a temporary writable area. If Docker is unavailable, it uses a weaker confirm-tier subprocess fallback with a scrubbed environment, temporary working directory, and best-effort network blocking; Docker is the only strong isolation.
 - Shared-workspace reads resolve inside `HSX_WORKSPACE`; generated files are confined to `HSX_WORK_DIR`, with traversal and symlink escapes rejected. Every task output is placed in a dated folder and uses collision-safe names.
 - Agent-facing file browsing and downloads are bearer-token protected. Notifications contain titles and job identifiers only; workspace file contents are never sent in notification payloads.
-- The LLM router supports Anthropic, Gemini, and Ollama with ordered fallbacks configured through `HSX_PROVIDER` and `HSX_FALLBACKS`; `/api/chat/stream` emits normalized SSE events.
+- The LLM router discovers configured provider keys, supports ordered fallbacks through `HSX_PROVIDER` and `HSX_FALLBACKS`, and emits normalized events through `/api/chat/stream`.
 - Skills default to `confirm`, support `safe` and `dangerous` tiers, and are audited in append-only JSONL. Advisory skills request explicit consent, with session-level repeat suppression; `POST /api/stop` activates the global kill switch.
 - Phase 11 self-improvement is proposal-only: research and prototypes stay in `scratch/self_improvement/`, dependencies and production files are not changed automatically, strict tests must pass, and approval/promotion require the separate owner PIN.
 - Device pairing remains capability-scoped: pairing requires the owner PIN, device tokens are stored only as hashes and returned once, capabilities are allowlisted, every authorization is audited, and revocation is immediate. Local media capture/playback is provided separately by explicit skills; browser camera capture always requires a user confirmation and browser permission.
@@ -289,7 +298,7 @@ Chrome and Edge support web push by default. Brave blocks push unless **Use Goog
 
 1. Put two files in the Samba share (for example, a DOCX template and an XLSX data file).
 2. In the Hsx web interface, send a deliberately informal request such as: `mak a repot frm file1 frmt n file2 data pdf`.
-3. Hsx posts a one-line restatement. If it cannot confidently identify the template and data file, it displays a question card with options and a text reply.
+3. If it cannot confidently identify the template and data file, it displays a question card with options and a text reply.
 4. The PDF appears in a dated folder under `Hsx Work/`; an existing file is never replaced.
 5. A push notification arrives on subscribed phone/laptop devices. Clicking opens the exact job or result; notification payloads contain no file contents.
 6. Review `logs/audit.jsonl` for the job start, tool decisions, question/answer transitions, and completion.
