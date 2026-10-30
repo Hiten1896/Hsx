@@ -29,6 +29,9 @@ Name: **[Hiten Sharma]**
 - Phase 18: shared workspace, ask-me flow, report skill, notifications, and PWA complete
 - Phase 19: System-as-Body runtime context, host-device routing enforcement, and hardware lifecycle safety complete
 - Phase 20: live-streaming local CLI and validated headless boot setup complete
+- Phase 21: hardware workbench and ESP32-S3 co-processor bridge planned
+- Phase 22: multimodal sensory controls and conversational system status planned
+- Phase 23: ambient awareness, gaze-aware presence, hardware reflexes, and proactive dialogue planned
 
 ### Latest updates: Phases 19 and 20
 
@@ -45,6 +48,38 @@ Name: **[Hiten Sharma]**
 - Wired model text deltas into the `/api/chat/stream` SSE endpoint and the local TTY CLI; the CLI also shows job-state changes, action outcomes, and final results while remaining independent of the server process.
 - Strengthened the unified Debian boot installer with checks for service-account access to `.env` and the virtual environment, voice configuration and Whisper model, and default audio input/output availability. It warns when the service account cannot access `/dev/video0`.
 - Added regression coverage for SSE delivery, local-only host routing, media action reporting, asynchronous audio, and camera process cleanup.
+
+### Next development phases
+
+Phases 21–23 are the next planned implementation phases; their modules are not yet
+implemented merely by being described here. The detailed component boundaries, data
+flows, safety controls, and acceptance criteria are in [ARCHITECTURE.md](./ARCHITECTURE.md).
+
+**Phase 21 — hardware workbench and ESP32-S3 co-processor bridge**
+
+- Discover explicitly permitted USB serial microcontrollers at `/dev/ttyACM*` and
+  `/dev/ttyUSB*`; compile and flash supported firmware with `arduino-cli` or `esptool`.
+- Add an authenticated, framed serial protocol to an ESP32-S3 bridge that exposes its
+  Bluetooth radio to HSX as a BLE peripheral co-processor.
+- Keep firmware builds staged and flashing behind policy authorization and explicit
+  device/firmware confirmation; grant serial access without granting HSX root or a shell.
+
+**Phase 22 — multimodal sensory controls and conversational status**
+
+- Combine local VAD, wake-word detection, and a configurable two-clap signature for
+  hands-free wake-up; retain the existing opt-in microphone behavior.
+- Add opt-in OpenCV gesture and motion-presence processing from `/dev/video0`.
+- Add a bounded live telemetry context for CPU, temperature, and subsystem health so a
+  status question can receive a natural-language answer grounded in current readings.
+
+**Phase 23 — ambient awareness, reflexes, and proactive dialogue**
+
+- Add local ambient sound classification for configured cues such as footsteps, knocks,
+  and doors, plus face-tracked desk presence and configurable HSX session locking.
+- Add a hardware panic input that independently interrupts active audio/video capture and
+  playback, with a safe latched state and audited reset.
+- Add policy-controlled, rate-limited dialogue when configured thresholds detect repeated
+  compilation failures or actionable system alerts.
 
 ## Setup
 
@@ -268,3 +303,13 @@ Chrome and Edge support web push by default. Brave blocks push unless **Use Goog
 - `skills/*/skill.json + skill.py`: self-contained plugins discovered at startup
 
 Adding a plugin does not require changes to the orchestrator. A skill only needs metadata in `skill.json` and a `run(**kwargs) -> dict` function in `skill.py`.
+
+The current runtime and planned hardware/sensory expansion are specified in
+[ARCHITECTURE.md](./ARCHITECTURE.md). The planned modules extend existing device routing,
+orchestration, and policy controls; they do not bypass the service account's operating
+system permissions or existing user-consent boundaries.
+
+The Debian boot installer can install an hourly GitHub update timer. It is disabled by
+default; enabling it requires a pinned GPG signer fingerprint and applies only signed,
+fast-forward updates from the configured origin/branch. See [deploy/README.md](./deploy/README.md)
+for the trust setup and operational limits.

@@ -13,6 +13,8 @@ VENV_ACTIVATE="${REPO_ROOT}/venv/bin/activate"
 RUNNER="${REPO_ROOT}/scripts/run_hsx.sh"
 SERVICE_NAME="${HSX_SERVICE_NAME:-hsx}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+UPDATE_SERVICE_FILE="/etc/systemd/system/hsx-update.service"
+UPDATE_TIMER_FILE="/etc/systemd/system/hsx-update.timer"
 TTY_OVERRIDE_DIR="/etc/systemd/system/getty@tty1.service.d"
 TTY_OVERRIDE_FILE="${TTY_OVERRIDE_DIR}/override.conf"
 LOG_DIR="${REPO_ROOT}/logs"
@@ -78,6 +80,35 @@ EOF
 install -o root -g root -m 0644 "${SERVICE_FILE}.tmp" "${SERVICE_FILE}"
 rm -f "${SERVICE_FILE}.tmp"
 
+cat > "${UPDATE_SERVICE_FILE}.tmp" <<EOF
+[Unit]
+Description=Check and apply trusted HSX source updates
+After=network-online.target ${SERVICE_NAME}.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=${AUTO_LOGIN_USER}
+WorkingDirectory=${REPO_ROOT}
+EnvironmentFile=${ENV_FILE}
+Environment=HSX_REPO_DIR=${REPO_ROOT}
+Environment=HSX_VENV_DIR=${REPO_ROOT}/venv
+Environment=HSX_SERVICE_NAME=${SERVICE_NAME}
+Environment=PIP_NO_CACHE_DIR=1
+ExecStart=${REPO_ROOT}/venv/bin/python ${REPO_ROOT}/scripts/update_hsx.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+install -o root -g root -m 0644 "${UPDATE_SERVICE_FILE}.tmp" "${UPDATE_SERVICE_FILE}"
+rm -f "${UPDATE_SERVICE_FILE}.tmp"
+
+install -o root -g root -m 0644 "${REPO_ROOT}/deploy/hsx-update.timer" "${UPDATE_TIMER_FILE}"
+
 mkdir -p "${TTY_OVERRIDE_DIR}"
 cat > "${TTY_OVERRIDE_FILE}.tmp" <<EOF
 [Service]
@@ -118,10 +149,12 @@ fi
 
 systemctl daemon-reload
 systemctl enable --now "${SERVICE_NAME}.service"
+systemctl enable --now hsx-update.timer
 systemctl enable "getty@tty1.service"
 
 echo
 echo "Hsx service installed: ${SERVICE_FILE}"
+echo "HSX update timer installed: ${UPDATE_TIMER_FILE} (disabled until explicitly configured)"
 echo "TTY1 autologin configured: ${TTY_OVERRIDE_FILE}"
 echo "TTY1 auto-login will take effect on the next boot."
 echo "TTY1 shell profile launches the interactive HSX CLI."

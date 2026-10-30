@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodically check for trusted HSX updates
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+Persistent=true
+Unit=hsx-update.service
+
+[Install]
+WantedBy=timers.target
