@@ -18,9 +18,6 @@ load_dotenv(ROOT / ".env")
 SAMPLE_RATE = 16000
 FRAME_SAMPLES = 480
 WAKE_PHRASE = os.getenv("HSX_VOICE_WAKE_PHRASE", "hey hsx").strip().lower()
-REQUIRE_WAKE_PHRASE = os.getenv("HSX_VOICE_REQUIRE_WAKE_PHRASE", "1").strip() != "0"
-COMMAND_WINDOW_SECONDS = max(3.0, float(os.getenv("HSX_VOICE_COMMAND_WINDOW_SECONDS", "8")))
-AUDIO_DEVICE = os.getenv("HSX_MICROPHONE_DEVICE", "").strip() or None
 BASE_URL = os.getenv("HSX_URL", "http://127.0.0.1:8000").rstrip("/")
 
 
@@ -55,19 +52,6 @@ def _send_command(message: str) -> dict:
         raise RuntimeError(f"Could not submit voice command to HSX: {error}") from error
 
 
-def _parse_transcript(transcript: str, wake_phrase: str, require_wake_phrase: bool) -> tuple[str, str]:
-    text = " ".join(transcript.lower().split())
-    if not text:
-        return "", ""
-    if not require_wake_phrase:
-        return "command", transcript.strip()
-    wake_at = transcript.lower().find(wake_phrase)
-    if wake_at < 0:
-        return "", ""
-    command = transcript[wake_at + len(wake_phrase):].strip(" ,.!?:;")
-    return ("wake", "") if not command else ("command", command)
-
-
 def _listen(frames, vad, transcribe_samples, sd, stop_event) -> None:
     def enqueue_audio(indata, frame_count, time_info, status):
         if status:
@@ -82,13 +66,11 @@ def _listen(frames, vad, transcribe_samples, sd, stop_event) -> None:
         channels=1,
         dtype="int16",
         blocksize=FRAME_SAMPLES,
-        device=AUDIO_DEVICE,
         callback=enqueue_audio,
     ):
         active_frames = []
         silence_frames = 0
         speech_started = False
-        command_window_deadline = 0.0
         while not stop_event.is_set():
             try:
                 frame = frames.get(timeout=0.5)
@@ -113,16 +95,14 @@ def _listen(frames, vad, transcribe_samples, sd, stop_event) -> None:
                 except (OSError, RuntimeError, ValueError) as error:
                     print(f"[voice] transcription failed: {error}", flush=True)
                     continue
-                mode, command = _parse_transcript(transcript, WAKE_PHRASE, REQUIRE_WAKE_PHRASE)
-                if mode == "wake":
-                    command_window_deadline = time.monotonic() + COMMAND_WINDOW_SECONDS
-                    print("[voice] wake phrase heard; listening for your command.", flush=True)
+                lowered = transcript.lower()
+                wake_at = lowered.find(WAKE_PHRASE)
+                if wake_at < 0:
                     continue
-                if mode != "command" and time.monotonic() > command_window_deadline:
+                command = transcript[wake_at + len(WAKE_PHRASE):].strip(" ,.!?:;")
+                if not command:
+                    print("[voice] wake phrase heard; say a command after it.", flush=True)
                     continue
-                if mode != "command":
-                    command = transcript.strip()
-                command_window_deadline = 0.0
                 print(f"[voice] recognized command: {command}", flush=True)
                 try:
                     _send_command(command)
@@ -149,20 +129,14 @@ def main() -> None:
             "`pip install -r requirements-voice.txt` and install libportaudio2."
         ) from error
 
-    from skills.voice_input.skill import _model_path, transcribe_samples
-
-    try:
-        _model_path()
-        sd.query_devices(device=AUDIO_DEVICE, kind="input")
-    except (OSError, RuntimeError, ValueError) as error:
-        raise SystemExit(f"Voice input is not ready: {error}") from error
+    from skills.voice_input.skill import transcribe_samples
 
     frames: queue.Queue = queue.Queue(maxsize=256)
     vad = webrtcvad.Vad(2)
 
     print(
         f"[voice] microphone active; waiting for wake phrase {WAKE_PHRASE!r}. "
-        "You may pause after the wake phrase; audio stays in memory and is discarded after transcription.",
+        "Say the wake phrase and command in one utterance. Audio stays in memory and is discarded after transcription.",
         flush=True,
     )
     stop_event = threading.Event()

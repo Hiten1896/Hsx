@@ -5,7 +5,6 @@ from pathlib import Path
 
 
 _MODELS = {}
-SAMPLE_RATE = 16000
 
 
 def _model_path() -> Path:
@@ -39,7 +38,7 @@ def transcribe_samples(samples, model_name: str | None = None) -> str:
     audio = samples if isinstance(samples, bytes) else bytes(samples)
     if not audio:
         raise ValueError("No audio samples were provided.")
-    recognizer = KaldiRecognizer(_load_model(), SAMPLE_RATE)
+    recognizer = KaldiRecognizer(_load_model(), 16000)
     recognizer.AcceptWaveform(audio)
     result = json.loads(recognizer.FinalResult())
     return str(result.get("text", "")).strip()
