@@ -3,7 +3,6 @@ import os
 from .providers import (
     AnthropicProvider,
     GeminiProvider,
-    OllamaProvider,
     OpenAICompatibleProvider,
     Provider,
     ProviderError,
@@ -40,7 +39,8 @@ def default_router() -> LLMRouter:
     from dotenv import load_dotenv
 
     load_dotenv(ENV_FILE, override=False)
-    value = lambda name: os.getenv(name, "").strip()
+    def value(name: str) -> str:
+        return os.getenv(name, "").strip()
     keys = {
         "gemini": value("GEMINI_API_KEY"),
         "grok": value("GROK_API_KEY") or value("XAI_API_KEY"),
@@ -64,7 +64,7 @@ def default_router() -> LLMRouter:
             providers.append(AnthropicProvider(keys[name], model))
         elif name == "gemini" and keys.get(name):
             gemini_model = value("GEMINI_MODEL") or "gemini-2.0-flash"
-            providers.append(GeminiProvider(gemini_model, f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent?key={keys[name]}", keys[name]))
+            providers.append(GeminiProvider(gemini_model, f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent", keys[name]))
         elif name in {"grok", "xai"} and keys.get("grok"):
             grok_model = value("GROK_MODEL") or value("XAI_MODEL") or "grok-3-mini"
             providers.append(OpenAICompatibleProvider("grok", keys["grok"], grok_model, "https://api.x.ai/v1/chat/completions"))

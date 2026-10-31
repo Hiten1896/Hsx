@@ -1,8 +1,11 @@
+import json
+import threading
 from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from agent.llm.providers import ProviderError
+from agent.llm.providers import GeminiProvider, JSONHTTPProvider, ProviderError
 from agent.llm.router import LLMRouter
 from agent.llm.types import LLMEvent, LLMRequest
 
@@ -61,6 +64,8 @@ def test_default_router_discovers_configured_providers(monkeypatch):
     router = default_router()
 
     assert [provider.name for provider in router.providers] == ["gemini", "grok"]
+    assert "gemini-test" not in router.providers[0].endpoint
+    assert "?key=" not in router.providers[0].endpoint
     assert router.providers[1].api_key == "xai-test"
 
 
@@ -76,3 +81,96 @@ def test_default_router_requires_a_valid_api_key(monkeypatch):
         assert str(error) == "No valid API key found in .env. Please configure at least one provider key."
     else:
         raise AssertionError("default_router should reject an empty provider configuration")
+
+
+def test_json_http_provider_sends_user_agent():
+    received = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            received.update(self.headers)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"ok": true}')
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        provider = JSONHTTPProvider("test", f"http://127.0.0.1:{server.server_port}", "secret")
+        assert provider._post({}) == {"ok": True}
+        assert received["User-Agent"] == "Hsx/1.0 (+https://github.com/Hiten1896/Hsx)"
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_gemini_sends_key_header_and_maps_roles_and_system_instruction():
+    received = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            received["path"] = self.path
+            received["headers"] = dict(self.headers)
+            received["payload"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}')
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        provider = GeminiProvider("test", f"http://127.0.0.1:{server.server_port}/generateContent", "secret-key")
+        events = list(provider.generate(LLMRequest(
+            [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
+            system="be concise",
+        )))
+        assert events[0].text == "ok"
+        assert received["path"] == "/generateContent"
+        assert received["headers"].get("X-Goog-Api-Key") == "secret-key"
+        assert "authorization" not in {key.lower() for key in received["headers"]}
+        assert "secret-key" not in received["path"]
+        assert received["payload"] == {
+            "contents": [
+                {"role": "user", "parts": [{"text": "hi"}]},
+                {"role": "model", "parts": [{"text": "hello"}]},
+            ],
+            "systemInstruction": {"parts": [{"text": "be concise"}]},
+        }
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_provider_error_includes_status_body_and_redacts_api_key():
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(403)
+            self.end_headers()
+            self.wfile.write(b'{"error":"bad secret-key and Bearer secret-key"}')
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        provider = JSONHTTPProvider("test", f"http://127.0.0.1:{server.server_port}", "secret-key")
+        with pytest.raises(ProviderError) as raised:
+            provider._post({})
+        message = str(raised.value)
+        assert "status 403" in message
+        assert "response body:" in message
+        assert "secret-key" not in message
+        assert "[REDACTED]" in message
+    finally:
+        server.shutdown()
+        thread.join()

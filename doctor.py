@@ -119,14 +119,15 @@ def _service_checks() -> list[Check]:
     broker = Path(os.getenv("HSX_BROKER_SOCKET", "/run/hsx/broker.sock"))
     if os.name == "nt":
         checks.append(_check("broker", False, "Unix socket broker is unavailable on Windows", warning=True))
-    elif not broker.exists():
-        checks.append(_check("broker", False, f"socket not found: {broker}", warning=True))
     else:
         try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-                connection.settimeout(2)
-                connection.connect(str(broker))
-            checks.append(_check("broker", True, str(broker)))
+            if not broker.exists():
+                checks.append(_check("broker", False, f"socket not found: {broker}", warning=True))
+            else:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                    connection.settimeout(2)
+                    connection.connect(str(broker))
+                checks.append(_check("broker", True, str(broker)))
         except OSError as error:
             checks.append(_check("broker", False, str(error), warning=True))
     return checks

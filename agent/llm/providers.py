@@ -1,4 +1,6 @@
 import json
+import re
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -63,26 +65,69 @@ class JSONHTTPProvider(Provider):
         self.endpoint = endpoint
         self.api_key = api_key
 
-    def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
-        headers = {"Content-Type": "application/json"}
+    def _request_headers(self) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Hsx/1.0 (+https://github.com/Hiten1896/Hsx)",
+        }
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    def _error_detail(self, status: str, body: str) -> str:
+        redacted = body
+        if self.api_key:
+            redacted = redacted.replace(self.api_key, "[REDACTED]")
+        redacted = re.sub(r"(?i)(bearer\s+)[^\s,\"']+", r"\1[REDACTED]", redacted)
+        redacted = re.sub(r"(?i)([?&]key=)[^&\s]+", r"\1[REDACTED]", redacted)
+        return f"status {status}; response body: {redacted[:200]}"
+
+    def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         request = urllib.request.Request(
-            self.endpoint, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST"
+            self.endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=self._request_headers(),
+            method="POST",
         )
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
-                return json.loads(response.read())
-        except (OSError, json.JSONDecodeError) as error:
-            raise ProviderError(f"{self.name} request failed: {error}") from error
+                status = getattr(response, "status", 200)
+                body = response.read().decode("utf-8", errors="replace")
+                try:
+                    return json.loads(body)
+                except json.JSONDecodeError as error:
+                    detail = self._error_detail(str(status), body)
+                    raise ProviderError(f"{self.name} request failed: {detail}") from error
+        except urllib.error.HTTPError as error:
+            body = error.read().decode("utf-8", errors="replace")
+            detail = self._error_detail(str(error.code), body)
+            raise ProviderError(f"{self.name} request failed: {detail}") from error
+        except OSError as error:
+            raise ProviderError(f"{self.name} request failed: {self._error_detail('unknown', str(error))}") from error
 
 
 class GeminiProvider(JSONHTTPProvider):
     name = "gemini"
 
+    def _request_headers(self) -> dict[str, str]:
+        headers = super()._request_headers()
+        headers.pop("Authorization", None)
+        if self.api_key:
+            headers["x-goog-api-key"] = self.api_key
+        return headers
+
     def generate(self, request: LLMRequest) -> EventStream:
-        messages = ([{"role": "user", "content": request.system}] if request.system else []) + request.messages
-        payload = {"contents": [{"role": message["role"], "parts": [{"text": message["content"]}]} for message in messages]}
+        payload: dict[str, Any] = {
+            "contents": [
+                {
+                    "role": "model" if message["role"] == "assistant" else message["role"],
+                    "parts": [{"text": message["content"]}],
+                }
+                for message in request.messages
+            ]
+        }
+        if request.system:
+            payload["systemInstruction"] = {"parts": [{"text": request.system}]}
         data = self._post(payload)
         text = data["candidates"][0]["content"]["parts"][0].get("text", "")
         yield LLMEvent(type="text_delta", text=text)
