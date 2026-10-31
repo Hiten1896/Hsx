@@ -1,3 +1,10 @@
-# Compatibility entry point for the default installation.
+# Standard installation: runtime dependencies and test/development tools.
+# Feature-specific dependencies are kept in separate optional requirement files
+# so a normal install does not pull in media, voice, or vector-memory packages.
 -r requirements-core.txt
 -r requirements-dev.txt
+
+# Optional feature profiles (install only when the feature is needed):
+#   requirements-media.txt  - media processing and consent-gated downloads
+#   requirements-memory.txt - persistent semantic/vector memory
+#   requirements-voice.txt  - local microphone speech recognition and VAD
