@@ -15,9 +15,6 @@ from api.chat import ChatStreamRegistry
 from api.devices import resolve_target_device
 from api.files import resolve_output
 from api.jobs import ask_job_payload
-
-_ask_job_payload = ask_job_payload
-
 from agent.ask_user import AskUserJobs, AskUserRequest
 from agent.jobs import JobQueue
 from agent.approval import ApprovalGuard
@@ -42,6 +39,8 @@ from config import (
 )
 from config import BASE_DIR, IMPROVEMENTS_DB
 from video_tools.pipeline import create_video_job, get_video_job, list_video_jobs
+
+_ask_job_payload = ask_job_payload
 
 ROOT = Path(__file__).resolve().parent
 LOGGER = logging.getLogger("hsx.server")

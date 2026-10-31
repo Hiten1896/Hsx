@@ -3,10 +3,10 @@ import os
 import secrets
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 BASE_DIR = Path(__file__).resolve().parent
 ENV_FILE = BASE_DIR / ".env"
-
-from dotenv import load_dotenv
 
 load_dotenv(ENV_FILE)
 
