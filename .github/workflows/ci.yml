@@ -9,6 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: .
+      HSX_WORKSPACE: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
