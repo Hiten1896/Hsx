@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import urllib.error
 import urllib.request
@@ -16,6 +17,146 @@ class Provider:
 
     def generate(self, request: LLMRequest) -> EventStream:
         raise NotImplementedError
+
+
+def _shape_error(provider: str, path: str, key: str, detail: str = "") -> ValueError:
+    suffix = f": {detail}" if detail else ""
+    return ValueError(f"{provider} payload invalid at {path}; offending key {key!r}{suffix}")
+
+
+def _require_keys(provider: str, value: dict, path: str, required: set[str], allowed: set[str]) -> None:
+    unknown = set(value) - allowed
+    if unknown:
+        raise _shape_error(provider, path, sorted(unknown)[0])
+    missing = required - set(value)
+    if missing:
+        raise _shape_error(provider, path, sorted(missing)[0], "required key missing")
+
+
+def _validate_gemini_payload(payload: dict[str, Any]) -> None:
+    provider = "gemini"
+    _require_keys(provider, payload, "$", {"contents"}, {"contents", "systemInstruction", "tools"})
+    if not isinstance(payload["contents"], list):
+        raise _shape_error(provider, "contents", "contents", "must be a list")
+    for index, content in enumerate(payload["contents"]):
+        path = f"contents[{index}]"
+        if not isinstance(content, dict):
+            raise _shape_error(provider, path, "content", "must be an object")
+        _require_keys(provider, content, path, {"role", "parts"}, {"role", "parts"})
+        if content["role"] not in {"user", "model"}:
+            raise _shape_error(provider, f"{path}.role", "role", "must be user or model")
+        if not isinstance(content["parts"], list):
+            raise _shape_error(provider, f"{path}.parts", "parts", "must be a list")
+        for part_index, part in enumerate(content["parts"]):
+            part_path = f"{path}.parts[{part_index}]"
+            if not isinstance(part, dict):
+                raise _shape_error(provider, part_path, "part", "must contain exactly one native part")
+            unknown = set(part) - {"text", "functionCall", "functionResponse"}
+            if unknown:
+                raise _shape_error(provider, part_path, sorted(unknown)[0])
+            if len(part) != 1:
+                raise _shape_error(provider, part_path, "part", "must contain exactly one native part")
+            kind = next(iter(part))
+            if kind == "text":
+                if not isinstance(part["text"], str):
+                    raise _shape_error(provider, part_path, "text", "must be a string")
+            elif kind == "functionCall":
+                function = part[kind]
+                if not isinstance(function, dict):
+                    raise _shape_error(provider, part_path, kind, "must be an object")
+                _require_keys(provider, function, f"{part_path}.functionCall", {"name", "args"}, {"name", "args"})
+                if not isinstance(function["name"], str) or not isinstance(function["args"], dict):
+                    raise _shape_error(provider, part_path, kind, "invalid name or args")
+            elif kind == "functionResponse":
+                function = part[kind]
+                if not isinstance(function, dict):
+                    raise _shape_error(provider, part_path, kind, "must be an object")
+                _require_keys(provider, function, f"{part_path}.functionResponse", {"name", "response"}, {"name", "response"})
+                if not isinstance(function["name"], str) or not isinstance(function["response"], dict):
+                    raise _shape_error(provider, part_path, kind, "invalid name or response")
+            else:
+                raise _shape_error(provider, part_path, kind)
+    if "systemInstruction" in payload:
+        instruction = payload["systemInstruction"]
+        _require_keys(provider, instruction, "systemInstruction", {"parts"}, {"parts"})
+        if not isinstance(instruction["parts"], list):
+            raise _shape_error(provider, "systemInstruction.parts", "parts", "must be a list")
+        for index, part in enumerate(instruction["parts"]):
+            _require_keys(provider, part, f"systemInstruction.parts[{index}]", {"text"}, {"text"})
+    if "tools" in payload:
+        if not isinstance(payload["tools"], list):
+            raise _shape_error(provider, "tools", "tools", "must be a list")
+        for index, tool in enumerate(payload["tools"]):
+            path = f"tools[{index}]"
+            _require_keys(provider, tool, path, {"functionDeclarations"}, {"functionDeclarations"})
+            if not isinstance(tool["functionDeclarations"], list):
+                raise _shape_error(provider, f"{path}.functionDeclarations", "functionDeclarations", "must be a list")
+            for declaration_index, declaration in enumerate(tool["functionDeclarations"]):
+                declaration_path = f"{path}.functionDeclarations[{declaration_index}]"
+                _require_keys(provider, declaration, declaration_path, {"name", "description", "parameters"}, {"name", "description", "parameters"})
+                if not isinstance(declaration["parameters"], dict):
+                    raise _shape_error(provider, declaration_path, "parameters", "must be an object")
+
+
+def _validate_openai_payload(payload: dict[str, Any]) -> None:
+    provider = "groq"
+    _require_keys(provider, payload, "$", {"model", "messages", "tools"}, {"model", "messages", "tools"})
+    if not isinstance(payload["model"], str) or not payload["model"]:
+        raise _shape_error(provider, "model", "model", "must be a non-empty string")
+    if not isinstance(payload["messages"], list):
+        raise _shape_error(provider, "messages", "messages", "must be a list")
+    if not isinstance(payload["tools"], list):
+        raise _shape_error(provider, "tools", "tools", "must be a list")
+    for index, message in enumerate(payload["messages"]):
+        path = f"messages[{index}]"
+        if not isinstance(message, dict) or "role" not in message:
+            raise _shape_error(provider, path, "role", "required key missing")
+        role = message["role"]
+        if role in {"system", "user"}:
+            _require_keys(provider, message, path, {"role", "content"}, {"role", "content"})
+            if not isinstance(message["content"], str):
+                raise _shape_error(provider, f"{path}.content", "content", "must be a string")
+        elif role == "assistant":
+            _require_keys(provider, message, path, {"role", "content"}, {"role", "content", "tool_calls"})
+            if message["content"] is not None and not isinstance(message["content"], str):
+                raise _shape_error(provider, f"{path}.content", "content", "must be a string or null")
+            for call_index, call in enumerate(message.get("tool_calls", [])):
+                call_path = f"{path}.tool_calls[{call_index}]"
+                _require_keys(provider, call, call_path, {"id", "type", "function"}, {"id", "type", "function"})
+                if call["type"] != "function":
+                    raise _shape_error(provider, f"{call_path}.type", "type", "must be function")
+                function = call["function"]
+                _require_keys(provider, function, f"{call_path}.function", {"name", "arguments"}, {"name", "arguments"})
+                if not isinstance(function["arguments"], str):
+                    raise _shape_error(provider, f"{call_path}.function.arguments", "arguments", "must be a JSON string")
+                try:
+                    json.loads(function["arguments"])
+                except json.JSONDecodeError as error:
+                    raise _shape_error(provider, f"{call_path}.function.arguments", "arguments", str(error)) from error
+        elif role == "tool":
+            _require_keys(provider, message, path, {"role", "tool_call_id", "content"}, {"role", "tool_call_id", "content"})
+            if not isinstance(message["content"], str):
+                raise _shape_error(provider, f"{path}.content", "content", "must be a string")
+        else:
+            raise _shape_error(provider, f"{path}.role", "role", "unsupported role")
+    for index, tool in enumerate(payload["tools"]):
+        path = f"tools[{index}]"
+        _require_keys(provider, tool, path, {"type", "function"}, {"type", "function"})
+        if tool["type"] != "function":
+            raise _shape_error(provider, f"{path}.type", "type", "must be function")
+        function = tool["function"]
+        _require_keys(provider, function, f"{path}.function", {"name", "description", "parameters"}, {"name", "description", "parameters"})
+        if not isinstance(function["parameters"], dict):
+            raise _shape_error(provider, f"{path}.function.parameters", "parameters", "must be an object")
+
+
+def assert_payload_valid(provider: str, payload: dict[str, Any]) -> None:
+    """Validate a provider payload, reporting the exact failing path."""
+    name = getattr(provider, "name", provider)
+    if name == "gemini":
+        _validate_gemini_payload(payload)
+    elif name in {"groq", "grok", "openrouter", "openai", "openai_compatible"}:
+        _validate_openai_payload(payload)
 
 
 class AnthropicProvider(Provider):
@@ -83,6 +224,8 @@ class JSONHTTPProvider(Provider):
         return f"status {status}; response body: {redacted[:200]}"
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if os.getenv("HSX_DEBUG") == "1":
+            assert_payload_valid(self.name, payload)
         request = urllib.request.Request(
             self.endpoint,
             data=json.dumps(payload).encode("utf-8"),
@@ -154,6 +297,14 @@ def to_gemini_payload(request: LLMRequest) -> dict[str, Any]:
     payload: dict[str, Any] = {"contents": contents}
     if request.system:
         payload["systemInstruction"] = {"parts": [{"text": request.system}]}
+    if request.tools:
+        payload["tools"] = [{
+            "functionDeclarations": [{
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "parameters": tool.get("input_schema", {}),
+            } for tool in request.tools]
+        }]
     return payload
 
 
@@ -237,8 +388,18 @@ class GeminiProvider(JSONHTTPProvider):
 
     def generate(self, request: LLMRequest) -> EventStream:
         data = self._post(to_gemini_payload(request))
-        text = data["candidates"][0]["content"]["parts"][0].get("text", "")
-        yield LLMEvent(type="text_delta", text=text)
+        parts = data["candidates"][0]["content"].get("parts", [])
+        for part in parts:
+            if part.get("text"):
+                yield LLMEvent(type="text_delta", text=part["text"])
+            if part.get("functionCall"):
+                function = part["functionCall"]
+                yield LLMEvent(
+                    type="tool_call",
+                    tool_name=function.get("name", ""),
+                    tool_input=function.get("args", {}),
+                    tool_call_id=f"gemini-{function.get('name', '')}",
+                )
         yield LLMEvent(type="stop", stop_reason="stop")
 
 

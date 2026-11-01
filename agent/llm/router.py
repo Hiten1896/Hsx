@@ -1,4 +1,5 @@
 import os
+import logging
 
 from .providers import (
     AnthropicProvider,
@@ -9,6 +10,8 @@ from .providers import (
 )
 from .panel import PanelRouter
 from .types import EventStream, LLMRequest
+
+LOGGER = logging.getLogger("hsx.llm.router")
 
 
 class LLMRouter:
@@ -22,6 +25,7 @@ class LLMRouter:
                 yield from provider.generate(request)
                 return
             except Exception as error:
+                LOGGER.warning("LLM provider %s failed: %s", provider.name, error)
                 errors.append(f"{provider.name}: {error}")
         raise ProviderError("No LLM provider succeeded: " + "; ".join(errors))
 

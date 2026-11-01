@@ -26,9 +26,10 @@ class WorkingProvider:
         yield LLMEvent(type="stop", stop_reason="stop")
 
 
-def test_router_falls_back_to_next_provider():
+def test_router_falls_back_to_next_provider(caplog):
     events = list(LLMRouter([FailingProvider(), WorkingProvider()]).generate(LLMRequest([])))
     assert [event.text for event in events if event.type == "text_delta"] == ["fallback answer"]
+    assert "LLM provider primary failed: primary unavailable" in caplog.text
 
 
 def test_llm_client_forwards_text_deltas(monkeypatch):

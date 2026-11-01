@@ -182,4 +182,5 @@ def test_consecutive_agent_turns_keep_history_json_serializable(monkeypatch):
     orchestrator.run_agent("first", history, [], {}, sensitive=True)
     orchestrator.run_agent("second", history, [], {}, sensitive=True)
 
+    json.dumps(history)
     assert history[1]["content"] == [{"type": "text", "text": "ok"}]
