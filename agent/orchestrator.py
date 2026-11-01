@@ -4,6 +4,7 @@ from collections.abc import Callable
 from agent.ask_user import AskUserRequest
 from agent.devices import system_body_context
 from agent.llm_client import call_llm
+from agent.llm.types import to_plain_data
 from agent.memory import MemoryManager
 from agent.policy import POLICY
 from config import MEMORY_DB
@@ -84,11 +85,11 @@ def run_agent(
         blocks = getattr(response, "content", [])
         tool_calls = [block for block in blocks if getattr(block, "type", "") == "tool_use"]
         if not tool_calls:
-            conversation_history.append({"role": "assistant", "content": blocks})
+            conversation_history.append({"role": "assistant", "content": to_plain_data(blocks)})
             answer = _text_from_response(response)
             MEMORY.record_message("default", "assistant", answer)
             return answer, conversation_history
-        conversation_history.append({"role": "assistant", "content": blocks})
+        conversation_history.append({"role": "assistant", "content": to_plain_data(blocks)})
         results = []
         for call in tool_calls:
             skill = next((tool for tool in tools if tool["name"] == call.name), None)

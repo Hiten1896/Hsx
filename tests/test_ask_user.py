@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -163,3 +164,22 @@ def test_agent_overrides_media_tool_target_with_request_context(monkeypatch):
         "path": None,
         "pid": None,
     }]
+
+
+def test_consecutive_agent_turns_keep_history_json_serializable(monkeypatch):
+    from agent import llm_client, orchestrator
+    from agent.llm.types import LLMEvent
+
+    class FakeProvider:
+        def generate(self, request):
+            json.dumps(request.messages)
+            yield LLMEvent(type="text_delta", text="ok")
+            yield LLMEvent(type="stop", stop_reason="stop")
+
+    monkeypatch.setattr(llm_client, "default_router", lambda: FakeProvider())
+    history = []
+
+    orchestrator.run_agent("first", history, [], {}, sensitive=True)
+    orchestrator.run_agent("second", history, [], {}, sensitive=True)
+
+    assert history[1]["content"] == [{"type": "text", "text": "ok"}]
