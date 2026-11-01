@@ -157,6 +157,11 @@ def assert_payload_valid(provider: str, payload: dict[str, Any]) -> None:
         _validate_gemini_payload(payload)
     elif name in {"groq", "grok", "openrouter", "openai", "openai_compatible"}:
         _validate_openai_payload(payload)
+    else:
+        try:
+            json.dumps(payload)
+        except TypeError as error:
+            raise _shape_error(str(name), "$", "payload", str(error)) from error
 
 
 class AnthropicProvider(Provider):
@@ -169,6 +174,8 @@ class AnthropicProvider(Provider):
     def generate(self, request: LLMRequest) -> EventStream:
         import anthropic
 
+        if os.getenv("HSX_DEBUG") == "1":
+            assert_payload_valid(self.name, {"messages": to_plain_data(request.messages), "tools": to_plain_data(request.tools)})
         client = anthropic.Anthropic(api_key=self.api_key)
         response = client.messages.create(
             model=self.model,
