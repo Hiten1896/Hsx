@@ -106,6 +106,125 @@ class JSONHTTPProvider(Provider):
             raise ProviderError(f"{self.name} request failed: {self._error_detail('unknown', str(error))}") from error
 
 
+def _gemini_response_value(content: Any) -> dict[str, Any]:
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, str):
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+    return {"content": content}
+
+
+def to_gemini_payload(request: LLMRequest) -> dict[str, Any]:
+    messages = to_plain_data(request.messages)
+    tool_names: dict[str, str] = {}
+    contents = []
+    for message in messages:
+        parts = []
+        raw_content = message.get("content", "")
+        blocks = raw_content if isinstance(raw_content, list) else [{"type": "text", "text": raw_content}]
+        for block in blocks:
+            block_type = block.get("type")
+            if block_type == "text":
+                parts.append({"text": block.get("text", "")})
+            elif block_type == "tool_use":
+                tool_names[block.get("id", "")] = block.get("name", "")
+                parts.append({
+                    "functionCall": {
+                        "name": block.get("name", ""),
+                        "args": block.get("input", {}),
+                    }
+                })
+            elif block_type == "tool_result":
+                parts.append({
+                    "functionResponse": {
+                        "name": tool_names.get(block.get("tool_use_id", ""), block.get("name", "")),
+                        "response": _gemini_response_value(block.get("content", "")),
+                    }
+                })
+        contents.append({
+            "role": "model" if message.get("role") == "assistant" else "user",
+            "parts": parts,
+        })
+
+    payload: dict[str, Any] = {"contents": contents}
+    if request.system:
+        payload["systemInstruction"] = {"parts": [{"text": request.system}]}
+    return payload
+
+
+def _openai_tool_result_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    return json.dumps(content)
+
+
+def to_openai_payload(request: LLMRequest, model: str = "") -> dict[str, Any]:
+    messages = to_plain_data(request.messages)
+    converted_messages = []
+    for message in messages:
+        role = message.get("role", "user")
+        raw_content = message.get("content", "")
+        if not isinstance(raw_content, list):
+            converted_messages.append({"role": role, "content": raw_content})
+            continue
+
+        text_parts = []
+        tool_calls = []
+        tool_results = []
+        for block in raw_content:
+            block_type = block.get("type")
+            if block_type == "text":
+                text_parts.append(block.get("text", ""))
+            elif block_type == "tool_use":
+                tool_calls.append({
+                    "id": block.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": block.get("name", ""),
+                        "arguments": json.dumps(block.get("input", {})),
+                    },
+                })
+            elif block_type == "tool_result":
+                tool_results.append({
+                    "role": "tool",
+                    "tool_call_id": block.get("tool_use_id", ""),
+                    "content": _openai_tool_result_content(block.get("content", "")),
+                })
+
+        if tool_results:
+            if text_parts:
+                converted_messages.append({"role": "user", "content": "".join(text_parts)})
+            converted_messages.extend(tool_results)
+        else:
+            converted_message: dict[str, Any] = {
+                "role": "assistant" if role == "assistant" else role,
+                "content": "".join(text_parts) if text_parts else None,
+            }
+            if tool_calls:
+                converted_message["tool_calls"] = tool_calls
+            converted_messages.append(converted_message)
+
+    if request.system:
+        converted_messages.insert(0, {"role": "system", "content": request.system})
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "parameters": tool.get("input_schema", {}),
+            },
+        }
+        for tool in request.tools
+    ]
+    return {"model": model, "messages": converted_messages, "tools": tools}
+
+
 class GeminiProvider(JSONHTTPProvider):
     name = "gemini"
 
@@ -117,19 +236,7 @@ class GeminiProvider(JSONHTTPProvider):
         return headers
 
     def generate(self, request: LLMRequest) -> EventStream:
-        messages = to_plain_data(request.messages)
-        payload: dict[str, Any] = {
-            "contents": [
-                {
-                    "role": "model" if message["role"] == "assistant" else message["role"],
-                    "parts": message["content"] if isinstance(message["content"], list) else [{"text": message["content"]}],
-                }
-                for message in messages
-            ]
-        }
-        if request.system:
-            payload["systemInstruction"] = {"parts": [{"text": request.system}]}
-        data = self._post(payload)
+        data = self._post(to_gemini_payload(request))
         text = data["candidates"][0]["content"]["parts"][0].get("text", "")
         yield LLMEvent(type="text_delta", text=text)
         yield LLMEvent(type="stop", stop_reason="stop")
@@ -153,8 +260,7 @@ class OpenAICompatibleProvider(JSONHTTPProvider):
         self.name = name
 
     def generate(self, request: LLMRequest) -> EventStream:
-        messages = ([{"role": "system", "content": request.system}] if request.system else []) + to_plain_data(request.messages)
-        data = self._post({"model": self.model, "messages": messages, "tools": request.tools})
+        data = self._post(to_openai_payload(request, self.model))
         choice = data.get("choices", [{}])[0]
         message = choice.get("message", {})
         content = message.get("content") or ""
