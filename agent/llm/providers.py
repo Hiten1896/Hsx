@@ -33,6 +33,57 @@ def _require_keys(provider: str, value: dict, path: str, required: set[str], all
         raise _shape_error(provider, path, sorted(missing)[0], "required key missing")
 
 
+_GEMINI_SCHEMA_KEYS = {
+    "type",
+    "format",
+    "title",
+    "description",
+    "nullable",
+    "enum",
+    "items",
+    "properties",
+    "required",
+    "minItems",
+    "maxItems",
+    "minProperties",
+    "maxProperties",
+    "propertyOrdering",
+}
+
+
+def _sanitize_gemini_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    sanitized = {key: value for key, value in schema.items() if key in _GEMINI_SCHEMA_KEYS}
+    properties = sanitized.get("properties")
+    if isinstance(properties, dict):
+        sanitized["properties"] = {
+            name: _sanitize_gemini_schema(value) if isinstance(value, dict) else {"type": "string"}
+            for name, value in properties.items()
+        }
+    if isinstance(sanitized.get("items"), dict):
+        sanitized["items"] = _sanitize_gemini_schema(sanitized["items"])
+    if sanitized.get("type") == "array" and "items" not in sanitized:
+        sanitized["items"] = {"type": "string"}
+    return sanitized
+
+
+def _validate_gemini_schema(provider: str, schema: dict[str, Any], path: str) -> None:
+    if not isinstance(schema, dict):
+        raise _shape_error(provider, path, "schema", "must be an object")
+    unknown = set(schema) - _GEMINI_SCHEMA_KEYS
+    if unknown:
+        raise _shape_error(provider, path, sorted(unknown)[0])
+    if schema.get("type") == "array" and "items" not in schema:
+        raise _shape_error(provider, path, "items", "required for array schemas")
+    properties = schema.get("properties")
+    if properties is not None:
+        if not isinstance(properties, dict):
+            raise _shape_error(provider, f"{path}.properties", "properties", "must be an object")
+        for name, property_schema in properties.items():
+            _validate_gemini_schema(provider, property_schema, f"{path}.properties.{name}")
+    if "items" in schema:
+        _validate_gemini_schema(provider, schema["items"], f"{path}.items")
+
+
 def _validate_gemini_payload(payload: dict[str, Any]) -> None:
     provider = "gemini"
     _require_keys(provider, payload, "$", {"contents"}, {"contents", "systemInstruction", "tools"})
@@ -96,6 +147,7 @@ def _validate_gemini_payload(payload: dict[str, Any]) -> None:
                 _require_keys(provider, declaration, declaration_path, {"name", "description", "parameters"}, {"name", "description", "parameters"})
                 if not isinstance(declaration["parameters"], dict):
                     raise _shape_error(provider, declaration_path, "parameters", "must be an object")
+                _validate_gemini_schema(provider, declaration["parameters"], f"{declaration_path}.parameters")
 
 
 def _validate_openai_payload(payload: dict[str, Any]) -> None:
@@ -309,7 +361,7 @@ def to_gemini_payload(request: LLMRequest) -> dict[str, Any]:
             "functionDeclarations": [{
                 "name": tool["name"],
                 "description": tool.get("description", ""),
-                "parameters": tool.get("input_schema", {}),
+                "parameters": _sanitize_gemini_schema(tool.get("input_schema", {})),
             } for tool in request.tools]
         }]
     return payload

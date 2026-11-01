@@ -202,6 +202,49 @@ def test_gemini_contract_covers_all_history_shapes(history, tools):
     assert_payload_valid("gemini", payload)
 
 
+def test_gemini_contract_sanitizes_array_schema_without_items():
+    payload = to_gemini_payload(LLMRequest(
+        [{"role": "user", "content": "compress these files"}],
+        tools=[_tool("compress_files", {
+            "type": "object",
+            "properties": {
+                "filenames": {
+                    "type": "array",
+                    "description": "Files to compress.",
+                    "default": [],
+                },
+            },
+            "required": ["filenames"],
+            "additionalProperties": False,
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+        })],
+    ))
+
+    parameters = payload["tools"][0]["functionDeclarations"][0]["parameters"]
+    assert parameters == {
+        "type": "object",
+        "properties": {"filenames": {
+            "type": "array",
+            "description": "Files to compress.",
+            "items": {"type": "string"},
+        }},
+        "required": ["filenames"],
+    }
+    assert_payload_valid("gemini", payload)
+
+
+def test_gemini_contract_rejects_array_schema_without_items():
+    with pytest.raises(ValueError, match=r"gemini payload invalid at .*parameters.*'items'.*required for array schemas"):
+        assert_payload_valid("gemini", {
+            "contents": [],
+            "tools": [{"functionDeclarations": [{
+                "name": "compress_files",
+                "description": "Compress files.",
+                "parameters": {"type": "array"},
+            }]}],
+        })
+
+
 @pytest.mark.parametrize("history,tools", _contract_histories())
 def test_groq_contract_covers_all_history_shapes(history, tools):
     payload = to_openai_payload(LLMRequest(history, tools=tools, system="Be concise."), "llama")
