@@ -4,7 +4,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from .types import EventStream, LLMEvent, LLMRequest
+from .types import EventStream, LLMEvent, LLMRequest, to_plain_data
 
 
 class ProviderError(RuntimeError):
@@ -117,13 +117,14 @@ class GeminiProvider(JSONHTTPProvider):
         return headers
 
     def generate(self, request: LLMRequest) -> EventStream:
+        messages = to_plain_data(request.messages)
         payload: dict[str, Any] = {
             "contents": [
                 {
                     "role": "model" if message["role"] == "assistant" else message["role"],
-                    "parts": [{"text": message["content"]}],
+                    "parts": message["content"] if isinstance(message["content"], list) else [{"text": message["content"]}],
                 }
-                for message in request.messages
+                for message in messages
             ]
         }
         if request.system:
@@ -152,7 +153,7 @@ class OpenAICompatibleProvider(JSONHTTPProvider):
         self.name = name
 
     def generate(self, request: LLMRequest) -> EventStream:
-        messages = ([{"role": "system", "content": request.system}] if request.system else []) + request.messages
+        messages = ([{"role": "system", "content": request.system}] if request.system else []) + to_plain_data(request.messages)
         data = self._post({"model": self.model, "messages": messages, "tools": request.tools})
         choice = data.get("choices", [{}])[0]
         message = choice.get("message", {})

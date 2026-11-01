@@ -5,7 +5,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from agent.llm.providers import GeminiProvider, JSONHTTPProvider, ProviderError
+from agent.llm.providers import GeminiProvider, JSONHTTPProvider, OpenAICompatibleProvider, ProviderError
+from agent.llm_client import NormalizedBlock
 from agent.llm.router import LLMRouter
 from agent.llm.types import LLMEvent, LLMRequest
 
@@ -147,6 +148,42 @@ def test_gemini_sends_key_header_and_maps_roles_and_system_instruction():
     finally:
         server.shutdown()
         thread.join()
+
+
+@pytest.mark.parametrize("provider_kind", ["gemini", "groq"])
+def test_provider_payload_serializes_blocks_from_consecutive_turns(provider_kind, monkeypatch):
+    payloads = []
+
+    def capture_payload(payload):
+        payloads.append(payload)
+        json.dumps(payload)
+        if provider_kind == "gemini":
+            return {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
+        return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]}
+
+    if provider_kind == "gemini":
+        provider = GeminiProvider("test", "https://example.test", "secret")
+    else:
+        provider = OpenAICompatibleProvider("groq", "secret", "test", "https://example.test")
+    monkeypatch.setattr(provider, "_post", capture_payload)
+
+    history = [{"role": "user", "content": "first"}]
+    list(provider.generate(LLMRequest(history)))
+    history.append({"role": "assistant", "content": [NormalizedBlock(type="text", text="hello")]})
+    history.append({"role": "user", "content": "second"})
+    list(provider.generate(LLMRequest(history)))
+    history.append({
+        "role": "assistant",
+        "content": [NormalizedBlock(type="tool_use", name="search", input={"query": "news"}, id="call-1")],
+    })
+    history.append({
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "call-1", "content": "done"}],
+    })
+    list(provider.generate(LLMRequest(history)))
+
+    assert len(payloads) == 3
+    assert payloads[-1]["messages" if provider_kind == "groq" else "contents"]
 
 
 def test_provider_error_includes_status_body_and_redacts_api_key():

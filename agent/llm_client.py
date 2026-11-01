@@ -12,6 +12,26 @@ class NormalizedBlock:
     name: str = ""
     input: dict = None
     id: str = ""
+    content: str = ""
+    tool_use_id: str = ""
+
+    def to_dict(self) -> dict:
+        if self.type == "text":
+            return {"type": "text", "text": self.text}
+        if self.type == "tool_use":
+            return {
+                "type": "tool_use",
+                "id": self.id,
+                "name": self.name,
+                "input": self.input or {},
+            }
+        if self.type == "tool_result":
+            return {
+                "type": "tool_result",
+                "tool_use_id": self.tool_use_id or self.id,
+                "content": self.content or self.text,
+            }
+        return {"type": self.type, "text": self.text}
 
 
 @dataclass
