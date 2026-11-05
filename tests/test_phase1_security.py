@@ -11,12 +11,10 @@ import server
 from agent.security import safe_path
 
 
-def request(server_url: str, path: str, *, origin: str | None = None, token: str | None = None):
+def request(server_url: str, path: str, *, origin: str | None = None):
     headers = {}
     if origin:
         headers["Origin"] = origin
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(server_url + path, headers=headers)
     try:
         with urllib.request.urlopen(request) as response:
@@ -53,27 +51,38 @@ def test_api_rejects_foreign_origin():
     assert "Origin" in payload["error"]
 
 
-def test_api_requires_bearer_token(monkeypatch):
-    monkeypatch.setattr(server, "AUTH_TOKEN", "test-token")
+def test_api_accepts_local_requests_without_bearer_token():
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.HsxHandler)
     thread = threading.Thread(target=httpd.handle_request)
     thread.start()
     status, payload = request(f"http://127.0.0.1:{httpd.server_port}", "/api/skills")
     thread.join(timeout=2)
-    assert status == 401
-    assert "Authentication" in payload["error"]
+    assert status == 200
+    assert "skills" in payload
 
 
-def test_health_requires_api_auth():
+def test_health_accepts_requests_without_api_auth():
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.HsxHandler)
     thread = threading.Thread(target=httpd.handle_request)
     thread.start()
     status, payload = request(
-        f"http://127.0.0.1:{httpd.server_port}", "/health", token=server.AUTH_TOKEN
+        f"http://127.0.0.1:{httpd.server_port}", "/health"
     )
     thread.join(timeout=2)
     assert status == 200
     assert payload == {"status": "ok"}
+
+
+def test_non_loopback_requests_remain_blocked(monkeypatch):
+    monkeypatch.setattr(server, "is_loopback_host", lambda _host: False)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.HsxHandler)
+    thread = threading.Thread(target=httpd.handle_request)
+    thread.start()
+    status, payload = request(f"http://127.0.0.1:{httpd.server_port}", "/api/skills")
+    thread.join(timeout=2)
+    httpd.server_close()
+    assert status == 403
+    assert "local" in payload["error"].lower()
 
 
 def test_run_code_does_not_use_substring_blocklist(monkeypatch):

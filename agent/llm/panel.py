@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
 from .providers import Provider, ProviderError
 from .types import EventStream, LLMEvent, LLMRequest
@@ -12,10 +13,33 @@ class PanelRouter:
             raise ValueError("A panel requires at least two candidate providers.")
         self.candidates = candidates[:2]
         self.judge = judge
+        self.provider_result_callback = None
 
-    @staticmethod
-    def _text(provider: Provider, request: LLMRequest) -> str:
-        return "".join(event.text for event in provider.generate(request) if event.type == "text_delta")
+    def _text(self, provider: Provider, request: LLMRequest) -> str:
+        started = time.perf_counter()
+        try:
+            answer = "".join(
+                event.text
+                for event in provider.generate(request)
+                if event.type == "text_delta"
+            )
+        except Exception:
+            if self.provider_result_callback is not None:
+                self.provider_result_callback(
+                    provider.name,
+                    False,
+                    (time.perf_counter() - started) * 1000,
+                )
+            raise
+        if self.provider_result_callback is not None:
+            self.provider_result_callback(
+                provider.name,
+                bool(answer.strip()),
+                (time.perf_counter() - started) * 1000,
+            )
+        if not answer.strip():
+            raise ProviderError(f"{provider.name} returned an empty answer.")
+        return answer
 
     def generate(self, request: LLMRequest) -> EventStream:
         candidate_request = LLMRequest(request.messages, [], False, request.system)

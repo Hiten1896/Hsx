@@ -1,0 +1,12 @@
+{
+  "endpoints": {
+    "health": "/health",
+    "chat_stream": "/api/chat/stream",
+    "feedback": "/api/feedback",
+    "telemetry": "/api/telemetry",
+    "ask_answer": "/api/ask-jobs/{job_id}/answer",
+    "ask_job": "/api/ask-jobs/{job_id}",
+    "stop": "/api/stop"
+  },
+  "stream_events": ["job", "text_delta", "done", "error"]
+}

@@ -4,7 +4,6 @@ services:
     restart: unless-stopped
     environment:
       - HSX_HOST=0.0.0.0
-      - HSX_AUTH_TOKEN
     volumes:
       - ../outputs:/app/outputs
       - ../uploads:/app/uploads

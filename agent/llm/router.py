@@ -1,9 +1,11 @@
 import os
 import logging
+import time
 
 from .providers import (
     AnthropicProvider,
     GeminiProvider,
+    OllamaProvider,
     OpenAICompatibleProvider,
     Provider,
     ProviderError,
@@ -17,16 +19,35 @@ LOGGER = logging.getLogger("hsx.llm.router")
 class LLMRouter:
     def __init__(self, providers: list[Provider]):
         self.providers = providers
+        self.active_provider = "unknown"
+        self.active_model = "unknown"
+        self.provider_result_callback = None
 
     def generate(self, request: LLMRequest) -> EventStream:
         errors = []
         for provider in self.providers:
+            self.active_provider = provider.name
+            self.active_model = getattr(provider, "model", "unknown")
+            started = time.perf_counter()
             try:
                 yield from provider.generate(request)
-                return
             except Exception as error:
+                if self.provider_result_callback is not None:
+                    self.provider_result_callback(
+                        provider.name,
+                        False,
+                        (time.perf_counter() - started) * 1000,
+                    )
                 LOGGER.warning("LLM provider %s failed: %s", provider.name, error)
                 errors.append(f"{provider.name}: {error}")
+            else:
+                if self.provider_result_callback is not None:
+                    self.provider_result_callback(
+                        provider.name,
+                        True,
+                        (time.perf_counter() - started) * 1000,
+                    )
+                return
         raise ProviderError("No LLM provider succeeded: " + "; ".join(errors))
 
     def panel(self, provider_names: list[str]) -> PanelRouter | None:
@@ -55,11 +76,14 @@ def default_router() -> LLMRouter:
     }
     invalid_placeholders = {"your_key_here", "your_api_key", "changeme"}
     keys = {name: key for name, key in keys.items() if key and key.lower() not in invalid_placeholders}
-    if not keys:
-        raise RuntimeError("No valid API key found in .env. Please configure at least one provider key.")
+    ollama_model = value("OLLAMA_MODEL")
+    if not keys and not ollama_model:
+        raise RuntimeError(
+            "No LLM provider is configured. Set a Gemini/Groq API key or configure OLLAMA_MODEL."
+        )
 
     configured = [value("HSX_PROVIDER"), *value("HSX_FALLBACKS").split(",")]
-    discovered = ["gemini", "grok", "anthropic", "groq", "openrouter", "openai"]
+    discovered = ["gemini", "groq", "ollama", "grok", "anthropic", "openrouter", "openai"]
     names = list(dict.fromkeys(name.lower() for name in [*configured, *discovered] if name.strip()))
     providers: list[Provider] = []
     model = value("HSX_MODEL") or "claude-sonnet-4-6"
@@ -74,6 +98,10 @@ def default_router() -> LLMRouter:
             providers.append(OpenAICompatibleProvider("grok", keys["grok"], grok_model, "https://api.x.ai/v1/chat/completions"))
         elif name == "groq" and keys.get(name):
             providers.append(OpenAICompatibleProvider("groq", keys[name], value("GROQ_MODEL") or "llama-3.1-8b-instant", "https://api.groq.com/openai/v1/chat/completions"))
+        elif name == "ollama" and ollama_model:
+            from config import OLLAMA_URL
+
+            providers.append(OllamaProvider(ollama_model, f"{OLLAMA_URL.rstrip('/')}/v1/chat/completions"))
         elif name == "openrouter" and keys.get(name):
             providers.append(OpenAICompatibleProvider("openrouter", keys[name], value("OPENROUTER_MODEL") or "google/gemini-2.0-flash-exp:free", "https://openrouter.ai/api/v1/chat/completions"))
         elif name == "openai" and keys.get(name):

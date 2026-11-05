@@ -6,11 +6,11 @@ The policy broker is a separate root-owned service. Copy `policy.yaml` to
 installing the agent and creating the `hsx` user. The broker socket is
 `/run/hsx/broker.sock`; the agent never receives sudo or a root shell.
 
-On Debian/Ubuntu, install Python 3.11+, create a dedicated `hsx` user, create `/opt/hsx/venv`, install `requirements.txt`, and either set `HSX_AUTH_TOKEN` or securely capture the generated token from the first startup. Set `HSX_OWNER_PIN` during setup, or securely capture the generated owner PIN from the first startup. The PIN hash is stored outside the workspace and is required for self-improvement approval, promotion, and confirm-tier actions. Install Docker for the `run_code` sandbox; Docker is the only strong isolation mode.
+On Debian/Ubuntu, install Python 3.11+, create a dedicated `hsx` user, create `/opt/hsx/venv`, and install `requirements.txt`. The local server accepts loopback connections without an access token and rejects non-loopback HTTP requests; do not expose it through Tailscale Serve, a reverse proxy, or a public port. Set `HSX_OWNER_PIN` during setup, or securely capture the generated owner PIN from the first startup. The PIN hash is stored outside the workspace and is required for self-improvement approval, promotion, and confirm-tier actions. Install Docker for the `run_code` sandbox; Docker is the only strong isolation mode.
 
 Set `HSX_WORKSPACE=/home/hsxshare` and `HSX_WORK_DIR=Hsx Work` in `/opt/hsx/.env`. Create `Hsx Work` from the Samba owner account before starting Hsx so that it retains the intended ownership. Grant `hsx` read/traverse ACLs on the share and write ACLs only on `Hsx Work` (the README includes example `setfacl` commands). Verify with `getfacl`; do not solve write failures by granting the agent write access to the share root.
 
-Install `deploy/hsx.service` with systemd. To enable Web Push, run `sudo sh deploy/generate-vapid.sh` after installing the requirements. This creates `/etc/hsx/secrets.env` with VAPID keys and `root:hsx` ownership, mode `0640`; the service loads it as an optional environment file. Keep Hsx bound to loopback and expose HTTPS through Tailscale Serve; enable HTTPS certificates for the tailnet device in the Tailscale admin console. This adds no listening port. Brave requires **Use Google Services for push messaging** to receive Web Push; Chrome and Edge work by default.
+Install `deploy/hsx.service` with systemd. To enable Web Push, run `sudo sh deploy/generate-vapid.sh` after installing the requirements. This creates `/etc/hsx/secrets.env` with VAPID keys and `root:hsx` ownership, mode `0640`; the service loads it as an optional environment file. Keep Hsx bound to loopback. Brave requires **Use Google Services for push messaging** to receive Web Push; Chrome and Edge work by default.
 
 The boot installer also installs and enables the `hsx-update.timer`, which checks hourly.
 Updates are disabled unless `.env` sets `HSX_AUTO_UPDATE=1` and
@@ -25,4 +25,7 @@ updates it signals the running server to drain requests and re-exec. It does not
 Docker deployments. Review and test commits before signing; a trusted signature is the
 authorization to deploy code.
 
-For optional container deployment, run `docker compose -f deploy/docker-compose.yml up -d --build`. Back up `memory/`, `data/`, and the shared `Hsx Work/` results, then update by pulling the repository, reinstalling requirements, and restarting the service.
+The API enforces loopback client addresses. The included Docker Compose port
+mapping is not compatible with this local-only access policy; do not use it to
+publish the API. Back up `memory/`, `data/`, and the shared `Hsx Work/` results
+before updating the installation.

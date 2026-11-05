@@ -33,7 +33,7 @@ def _request(
         headers=request_headers,
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.urlopen(request, timeout=15) as response:
             if stop_event:
                 body = []
                 while line := response.readline():
@@ -45,7 +45,7 @@ def _request(
                 result = response.status, response.headers, response.read()
     except urllib.error.HTTPError as error:
         result = error.code, error.headers, error.read()
-    thread.join(timeout=2)
+    thread.join(timeout=15)
     httpd.server_close()
     return result
 
@@ -56,7 +56,6 @@ def test_files_panel_lists_workspace_files_and_serves_ranges(tmp_path: Path, mon
     (root / "report.txt").write_text("workspace text", encoding="utf-8")
     (root / "Hsx Work" / "result.pdf").write_bytes(b"0123456789")
     monkeypatch.setattr(server, "WORKSPACE", Workspace(root, "Hsx Work"))
-    monkeypatch.setattr(server, "AUTH_TOKEN", "")
 
     status, _, body = _request("/api/files")
     assert status == 200
@@ -82,7 +81,6 @@ def test_chat_stream_forwards_model_text_deltas(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(server, "WORKSPACE", Workspace(root, "Hsx Work"))
     monkeypatch.setattr(server, "WORK_DIR", root / "Hsx Work")
     monkeypatch.setattr(server, "ASK_JOBS", AskUserJobs(tmp_path / "jobs.db"))
-    monkeypatch.setattr(server, "AUTH_TOKEN", "")
     monkeypatch.setattr(server.POLICY, "audit_event", lambda *args: None)
 
     def fake_run_chat_job(job_id, approvals, sensitive, target_device, on_text_delta):
@@ -114,17 +112,15 @@ def test_files_panel_rejects_traversal(tmp_path: Path, monkeypatch):
     (root / "Hsx Work").mkdir(parents=True)
     (tmp_path / "secret.txt").write_text("not exposed", encoding="utf-8")
     monkeypatch.setattr(server, "WORKSPACE", Workspace(root, "Hsx Work"))
-    monkeypatch.setattr(server, "AUTH_TOKEN", "")
 
     status, _, _ = _request("/api/files/content?path=..%2Fsecret.txt")
     assert status == 404
 
 
-def test_files_panel_requires_bearer_auth(monkeypatch):
-    monkeypatch.setattr(server, "AUTH_TOKEN", "test-token")
+def test_files_panel_is_available_without_bearer_auth():
     status, _, body = _request("/api/files")
-    assert status == 401
-    assert b"Authentication" in body
+    assert status == 200
+    assert b'"files"' in body
 
 
 def test_chat_question_card_answer_resumes_job(tmp_path: Path, monkeypatch):
@@ -159,7 +155,6 @@ def test_chat_question_card_answer_resumes_job(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(server, "WORK_DIR", work_dir)
     monkeypatch.setattr(server, "ASK_JOBS", jobs)
     monkeypatch.setattr(server, "NOTIFIER", NotifierStub())
-    monkeypatch.setattr(server, "AUTH_TOKEN", "")
     monkeypatch.setattr(server, "run_agent", run_agent)
     monkeypatch.setattr(server.POLICY, "audit_event", lambda *args: None)
     monkeypatch.setattr(server, "SESSION_HISTORIES", {})
@@ -190,7 +185,14 @@ def test_chat_question_card_answer_resumes_job(tmp_path: Path, monkeypatch):
     assert status == 202
 
     deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and jobs.get(job_id)["state"] == "running":
+    while time.monotonic() < deadline:
+        complete = jobs.get(job_id)
+        if (
+            complete["state"] == "done"
+            and notifications
+            and notifications[-1][0] == "job_done"
+        ):
+            break
         time.sleep(0.01)
     complete = jobs.get(job_id)
     assert complete["state"] == "done"

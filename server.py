@@ -5,6 +5,7 @@ import os
 import queue
 import re
 import threading
+import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -19,16 +20,19 @@ from agent.ask_user import AskUserJobs, AskUserRequest
 from agent.jobs import JobQueue
 from agent.approval import ApprovalGuard
 from agent.devices import DeviceRegistry, system_body_state
+from agent.llm_client import PROVIDER_BANDIT, record_provider_feedback
+from agent.ml.forecaster import FORECASTER, classify_job
+from agent.ml.memory import EXPERIENCE_MEMORY
 from agent.memory import MemoryManager
 from agent.notifier import Notifier
 from agent.orchestrator import run_agent
 from agent.policy import POLICY
+from agent.router import INTENT_ROUTER, LLM_TELEMETRY, ROUTER_LOGGER
 from agent.self_improvement import SelfImprovement
 from agent.skill_loader import load_skills, set_runtime_registry
 from agent.workspace import Workspace, task_output_path, task_output_scope, workspace_search
 from config import (
     ALLOWED_ORIGINS,
-    AUTH_TOKEN,
     DATA_DIR,
     JOBS_DB,
     MEMORY_DB,
@@ -36,6 +40,7 @@ from config import (
     UPLOADS_DIR,
     WORKSPACE_DIR,
     WORK_DIR,
+    is_loopback_host,
 )
 from config import BASE_DIR, IMPROVEMENTS_DB
 from video_tools.pipeline import create_video_job, get_video_job, list_video_jobs
@@ -45,10 +50,15 @@ _ask_job_payload = ask_job_payload
 ROOT = Path(__file__).resolve().parent
 LOGGER = logging.getLogger("hsx.server")
 TOOLS, SKILL_MAP = load_skills(str(ROOT / "skills"))
+if INTENT_ROUTER.model_path.is_file():
+    INTENT_ROUTER.load()
+else:
+    INTENT_ROUTER.train_from_tools(TOOLS)
 set_runtime_registry(TOOLS, SKILL_MAP)
-AUTH_SERVICE = AuthService(AUTH_TOKEN, ALLOWED_ORIGINS)
+AUTH_SERVICE = AuthService(ALLOWED_ORIGINS)
 HISTORY = []
 SESSION_HISTORIES = {}
+SESSION_LAST_JOBS = {}
 SESSION_LOCKS = {}
 SESSION_LOCKS_GUARD = threading.Lock()
 CHAT_STREAMS = ChatStreamRegistry()
@@ -85,7 +95,6 @@ def _job_error(error: Exception) -> str:
         "GROQ_API_KEY",
         "OPENROUTER_API_KEY",
         "OPENAI_API_KEY",
-        "HSX_AUTH_TOKEN",
     ):
         value = os.getenv(name, "")
         if value:
@@ -93,10 +102,43 @@ def _job_error(error: Exception) -> str:
     return message[:1000]
 
 
-def _fail_job(job_id: str, job: dict, error: Exception, *, stream: bool = False) -> None:
+def _record_job_telemetry(
+    job: dict,
+    duration_seconds: float,
+    *,
+    succeeded: bool,
+    sensitive: bool = False,
+    response: str = "",
+) -> None:
+    try:
+        FORECASTER.record_job(
+            classify_job(job["request"]),
+            duration_seconds,
+            succeeded=succeeded,
+        )
+        if succeeded and not sensitive:
+            EXPERIENCE_MEMORY.record_success(job["request"], response)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        LOGGER.exception("Could not persist local ML task telemetry for job %s.", job["id"])
+
+
+def _fail_job(
+    job_id: str,
+    job: dict,
+    error: Exception,
+    *,
+    stream: bool = False,
+    started_at: float | None = None,
+) -> None:
     error_message = _job_error(error)
     LOGGER.exception("HSX job %s failed during agent execution: %s", job_id, error_message)
     failed = ASK_JOBS.fail(job_id, error_message)
+    if started_at is not None:
+        _record_job_telemetry(
+            job,
+            time.perf_counter() - started_at,
+            succeeded=False,
+        )
     if stream:
         _emit_chat_event(job_id, "job", _ask_job_payload(failed))
         _emit_chat_event(job_id, "error", {"message": error_message})
@@ -110,6 +152,7 @@ def _resume_ask_job(job_id: str) -> None:
     if job is None or job["state"] != "running":
         return
     lock = _session_lock(job["session_id"])
+    started_at = time.perf_counter()
     device_actions = list(job.get("device_actions") or [])
     try:
         with lock, task_output_scope(WORKSPACE, job["request"], job["task_dir"]):
@@ -119,12 +162,14 @@ def _resume_ask_job(job_id: str) -> None:
                 TOOLS,
                 SKILL_MAP,
                 session_id=job["session_id"],
+                sensitive=job.get("sensitive", False),
                 resume_tool_result={
                     "tool_call_id": job["tool_call_id"],
                     "answer": job["answers"][-1],
                 },
                 target_device=job.get("target_device", "client_browser"),
                 device_actions=device_actions,
+                job_id=job_id,
             )
     except AskUserRequest as question:
         updated = ASK_JOBS.pause(job_id, question)
@@ -142,13 +187,20 @@ def _resume_ask_job(job_id: str) -> None:
         NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
         return
     except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
-        _fail_job(job_id, job, error)
+        _fail_job(job_id, job, error, started_at=started_at)
         return
     except Exception as error:
-        _fail_job(job_id, job, error)
+        _fail_job(job_id, job, error, started_at=started_at)
         return
     SESSION_HISTORIES[job["session_id"]] = history
     ASK_JOBS.complete(job_id, response, device_actions)
+    _record_job_telemetry(
+        job,
+        time.perf_counter() - started_at,
+        succeeded=True,
+        sensitive=job.get("sensitive", False),
+        response=response,
+    )
     POLICY.audit_event("job_done", job["session_id"], job_id, "done")
     NOTIFIER.notify(
         "job_done",
@@ -189,6 +241,7 @@ def _run_chat_job(
     if job is None or job["state"] != "running":
         return
     lock = _session_lock(job["session_id"])
+    started_at = time.perf_counter()
     POLICY.audit_event("job_started", job["session_id"], job_id, "running")
     device_actions = list(job.get("device_actions") or [])
     try:
@@ -205,6 +258,7 @@ def _run_chat_job(
                 target_device=job.get("target_device", target_device),
                 device_actions=device_actions,
                 on_text_delta=on_text_delta,
+                job_id=job_id,
             )
     except AskUserRequest as question:
         updated = ASK_JOBS.pause(job_id, question)
@@ -224,13 +278,20 @@ def _run_chat_job(
             NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
         return
     except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
-        _fail_job(job_id, job, error, stream=True)
+        _fail_job(job_id, job, error, stream=True, started_at=started_at)
         return
     except Exception as error:
-        _fail_job(job_id, job, error, stream=True)
+        _fail_job(job_id, job, error, stream=True, started_at=started_at)
         return
     SESSION_HISTORIES[job["session_id"]] = updated_history
     ASK_JOBS.complete(job_id, response, device_actions)
+    _record_job_telemetry(
+        job,
+        time.perf_counter() - started_at,
+        succeeded=True,
+        sensitive=sensitive,
+        response=response,
+    )
     _emit_chat_event(job_id, "job", _ask_job_payload(ASK_JOBS.get(job_id)))
     _emit_chat_event(job_id, "done", {})
     POLICY.audit_event("job_done", job["session_id"], job_id, "done")
@@ -247,8 +308,9 @@ class HsxHandler(BaseHTTPRequestHandler):
         return urlsplit(self.path).path
 
     def _api_access_allowed(self) -> bool:
-        AUTH_SERVICE.token = AUTH_TOKEN
-        AUTH_SERVICE.origins = ALLOWED_ORIGINS
+        if not is_loopback_host(self.client_address[0]):
+            self._json({"error": "Only local HSX requests are allowed."}, 403)
+            return False
         return AUTH_SERVICE.allowed(self, self._json)
 
     def _json(self, payload: dict, status: int = 200) -> None:
@@ -260,7 +322,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         if origin in ALLOWED_ORIGINS:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.end_headers()
         self.wfile.write(data)
@@ -302,7 +364,7 @@ class HsxHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self._request_path()
-        if (path.startswith("/api/") or path == "/health") and not self._api_access_allowed():
+        if not self._api_access_allowed():
             return
         query = parse_qs(urlsplit(self.path).query)
         if path == "/health":
@@ -311,6 +373,10 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"skills": [tool["name"] for tool in TOOLS]})
         elif path == "/api/policy/status":
             self._json({"stopped": POLICY.is_stopped()})
+        elif path == "/api/telemetry":
+            telemetry = LLM_TELEMETRY.snapshot()
+            telemetry["provider_stats"] = PROVIDER_BANDIT.snapshot()["providers"]
+            self._json(telemetry)
         elif path == "/api/mode":
             self._json({"mode": MODE})
         elif path == "/api/jobs":
@@ -411,11 +477,36 @@ class HsxHandler(BaseHTTPRequestHandler):
         path = self._request_path()
         if not self._api_access_allowed():
             return
-        if path == "/api/chat":
+        if path == "/api/feedback":
+            payload = self._body()
+            job_id = str(payload.get("job_id", "")).strip()
+            feedback = str(payload.get("feedback", "")).strip().lower()
+            if not job_id or feedback not in {"good", "bad"}:
+                self._json({"error": "job_id and feedback (good or bad) are required."}, 400)
+                return
+            job = ASK_JOBS.get(job_id)
+            if job is None:
+                self._json({"error": "Chat job not found."}, 404)
+                return
+            ROUTER_LOGGER.log_feedback(job["session_id"], job_id, feedback)
+            record_provider_feedback(job_id, feedback)
+            self._json({"success": True, "job_id": job_id, "feedback": feedback}, 201)
+        elif path == "/api/chat":
             payload = self._body()
             message = str(payload.get("message", "")).strip()
             if not message:
                 self._json({"error": "Message is required."}, 400)
+                return
+            feedback = message.lower()
+            if feedback in {"/good", "/bad"}:
+                session_id = str(payload.get("session_id", "default"))[:100]
+                job_id = SESSION_LAST_JOBS.get(session_id)
+                if job_id is None:
+                    self._json({"error": "There is no recent task to rate."}, 404)
+                    return
+                ROUTER_LOGGER.log_feedback(session_id, job_id, feedback[1:])
+                record_provider_feedback(job_id, feedback[1:])
+                self._json({"response": "Thanks for the feedback.", "feedback": feedback[1:]})
                 return
             try:
                 target_device = resolve_target_device(
@@ -427,7 +518,15 @@ class HsxHandler(BaseHTTPRequestHandler):
                 return
             session_id = str(payload.get("session_id", "default"))[:100]
             task_directory = WORKSPACE.create_task_dir(message).relative_to(WORK_DIR).as_posix()
-            job = ASK_JOBS.create_running(message, session_id, task_directory, target_device)
+            job = ASK_JOBS.create_running(
+                message,
+                session_id,
+                task_directory,
+                target_device,
+                bool(payload.get("sensitive", False)),
+            )
+            SESSION_LAST_JOBS[session_id] = job["id"]
+            ROUTER_LOGGER.log_prompt(session_id, job["id"], message)
             POLICY.audit_event("job_created", session_id, job["id"], "queued")
             threading.Thread(
                 target=_run_chat_job,
@@ -594,6 +693,17 @@ class HsxHandler(BaseHTTPRequestHandler):
             if not message:
                 self._json({"error": "Message is required."}, 400)
                 return
+            feedback = message.lower()
+            if feedback in {"/good", "/bad"}:
+                session_id = str(payload.get("session_id", "default"))[:100]
+                job_id = SESSION_LAST_JOBS.get(session_id)
+                if job_id is None:
+                    self._json({"error": "There is no recent task to rate."}, 404)
+                    return
+                ROUTER_LOGGER.log_feedback(session_id, job_id, feedback[1:])
+                record_provider_feedback(job_id, feedback[1:])
+                self._json({"response": "Thanks for the feedback.", "feedback": feedback[1:]})
+                return
             try:
                 target_device = resolve_target_device(
                     str(payload.get("target_device", "client_browser")),
@@ -604,7 +714,15 @@ class HsxHandler(BaseHTTPRequestHandler):
                 return
             session_id = str(payload.get("session_id", "default"))[:100]
             task_directory = WORKSPACE.create_task_dir(message).relative_to(WORK_DIR).as_posix()
-            job = ASK_JOBS.create_running(message, session_id, task_directory, target_device)
+            job = ASK_JOBS.create_running(
+                message,
+                session_id,
+                task_directory,
+                target_device,
+                bool(payload.get("sensitive", False)),
+            )
+            SESSION_LAST_JOBS[session_id] = job["id"]
+            ROUTER_LOGGER.log_prompt(session_id, job["id"], message)
             POLICY.audit_event("job_created", session_id, job["id"], "queued")
             event_queue = CHAT_STREAMS.register(job["id"])
             threading.Thread(
@@ -734,6 +852,8 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"error": "Not found."}, 404)
 
     def do_OPTIONS(self) -> None:
+        if not self._api_access_allowed():
+            return
         if self._request_path().startswith("/api/"):
             origin = self.headers.get("Origin")
             if origin and origin not in ALLOWED_ORIGINS:
@@ -744,7 +864,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         if origin in ALLOWED_ORIGINS:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
 

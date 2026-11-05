@@ -8,9 +8,13 @@ PyYAML
 python-docx
 openpyxl
 rapidfuzz
+scikit-learn
+joblib
+psutil
 # PDF and presentation skills.
 pdfplumber
 reportlab
 python-pptx
 # Optional notification channel; used when Web Push is configured.
 pywebpush
+textual

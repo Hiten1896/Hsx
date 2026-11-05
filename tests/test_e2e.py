@@ -6,13 +6,12 @@ from agent.workspace import Workspace
 from tests.test_files_panel import _request
 
 
-def test_authenticated_stream_creates_workspace_artifact(tmp_path: Path, monkeypatch):
+def test_tokenless_stream_creates_workspace_artifact(tmp_path: Path, monkeypatch):
     root = tmp_path / "share"
     root.mkdir()
     monkeypatch.setattr(server, "WORKSPACE", Workspace(root, "Hsx Work"))
     monkeypatch.setattr(server, "WORK_DIR", root / "Hsx Work")
     monkeypatch.setattr(server, "ASK_JOBS", AskUserJobs(tmp_path / "jobs.db"))
-    monkeypatch.setattr(server, "AUTH_TOKEN", "e2e-token")
     monkeypatch.setattr(server.POLICY, "audit_event", lambda *args: None)
 
     def fake_run_chat_job(job_id, approvals, sensitive, target_device, on_text_delta):
@@ -29,7 +28,6 @@ def test_authenticated_stream_creates_workspace_artifact(tmp_path: Path, monkeyp
     status, headers, body = _request(
         "/api/chat/stream",
         method="POST",
-        headers={"Authorization": "Bearer e2e-token"},
         payload={"message": "create an answer", "target_device": "client_browser"},
         stop_event="done",
     )
@@ -39,11 +37,10 @@ def test_authenticated_stream_creates_workspace_artifact(tmp_path: Path, monkeyp
     assert (root / "Hsx Work" / "answer.txt").read_text(encoding="utf-8") == "e2e answer"
 
 
-def test_authentication_rejects_missing_token(monkeypatch):
-    monkeypatch.setattr(server, "AUTH_TOKEN", "e2e-token")
+def test_health_allows_requests_without_token():
     status, _, body = _request("/health")
-    assert status == 401
-    assert b"Authentication required" in body
+    assert status == 200
+    assert body == b'{"status": "ok"}'
 
 
 def test_doctor_report_does_not_print_key_values(monkeypatch, capsys):

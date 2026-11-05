@@ -9,7 +9,7 @@ import urllib.error
 from pathlib import Path
 import urllib.request
 
-from dotenv import dotenv_values, load_dotenv
+from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -19,15 +19,6 @@ SAMPLE_RATE = 16000
 FRAME_SAMPLES = 480
 WAKE_PHRASE = os.getenv("HSX_VOICE_WAKE_PHRASE", "hey hsx").strip().lower()
 BASE_URL = os.getenv("HSX_URL", "http://127.0.0.1:8000").rstrip("/")
-
-
-def _auth_token() -> str:
-    token = os.getenv("HSX_AUTH_TOKEN", "").strip()
-    if not token:
-        token = str(dotenv_values(ROOT / ".env").get("HSX_AUTH_TOKEN") or "").strip()
-    if not token:
-        raise RuntimeError("HSX_AUTH_TOKEN is missing from .env and the environment.")
-    return token
 
 
 def _send_command(message: str) -> dict:
@@ -40,7 +31,6 @@ def _send_command(message: str) -> dict:
         f"{BASE_URL}/api/chat",
         data=payload,
         headers={
-            "Authorization": f"Bearer {_auth_token()}",
             "Content-Type": "application/json",
         },
         method="POST",

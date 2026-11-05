@@ -1,5 +1,4 @@
 import threading
-import urllib.error
 import urllib.request
 import shutil
 from http.server import ThreadingHTTPServer
@@ -47,15 +46,15 @@ def test_run_code_docker():
     assert result["sandbox"] == "docker"
 
 
-def test_api_rejects_missing_token():
+def test_local_api_accepts_requests_without_token():
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.HsxHandler)
     thread = threading.Thread(target=httpd.handle_request)
     thread.start()
     request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_port}/api/skills")
-    with pytest.raises(urllib.error.HTTPError) as error:
-        urllib.request.urlopen(request)
+    with urllib.request.urlopen(request) as response:
+        assert response.status == 200
+        assert b'"skills"' in response.read()
     thread.join(timeout=2)
-    assert error.value.code == 401
 
 
 def test_sensitive_request_skips_panel(monkeypatch):

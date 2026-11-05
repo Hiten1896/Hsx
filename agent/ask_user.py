@@ -61,6 +61,7 @@ class AskUserJobs:
                 error TEXT NOT NULL DEFAULT '', task_dir TEXT NOT NULL DEFAULT '',
                 target_device TEXT NOT NULL DEFAULT 'client_browser',
                 device_actions TEXT NOT NULL DEFAULT '[]',
+                sensitive INTEGER NOT NULL DEFAULT 0,
                 created TEXT NOT NULL, updated TEXT NOT NULL,
                 expires_at TEXT NOT NULL)"""
             )
@@ -74,6 +75,10 @@ class AskUserJobs:
             if "device_actions" not in columns:
                 connection.execute(
                     "ALTER TABLE ask_jobs ADD COLUMN device_actions TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "sensitive" not in columns:
+                connection.execute(
+                    "ALTER TABLE ask_jobs ADD COLUMN sensitive INTEGER NOT NULL DEFAULT 0"
                 )
             connection.execute(
                 """UPDATE ask_jobs SET state = 'failed',
@@ -92,6 +97,7 @@ class AskUserJobs:
         for field in ("options", "answers", "checkpoint", "device_actions", "result"):
             job[field] = json.loads(job[field]) if job[field] else ([] if field in {"options", "answers", "checkpoint", "device_actions"} else None)
         job["allow_free_text"] = bool(job["allow_free_text"])
+        job["sensitive"] = bool(job["sensitive"])
         return job
 
     def create(
@@ -137,6 +143,7 @@ class AskUserJobs:
         session_id: str,
         task_dir: str = "",
         target_device: str = "client_browser",
+        sensitive: bool = False,
     ) -> dict:
         now = self._now().isoformat()
         job_id = uuid.uuid4().hex
@@ -145,9 +152,10 @@ class AskUserJobs:
             connection.execute(
                 """INSERT INTO ask_jobs(
                     id, request, session_id, question, options, allow_free_text, state,
-                    question_count, answers, checkpoint, tool_call_id, task_dir, target_device, created, updated, expires_at
-                ) VALUES (?, ?, ?, '', '[]', 1, 'running', 0, '[]', '[]', '', ?, ?, ?, ?, ?)""",
-                (job_id, request, session_id, task_dir, target_device, now, now, expires),
+                    question_count, answers, checkpoint, tool_call_id, task_dir, target_device,
+                    sensitive, created, updated, expires_at
+                ) VALUES (?, ?, ?, '', '[]', 1, 'running', 0, '[]', '[]', '', ?, ?, ?, ?, ?, ?)""",
+                (job_id, request, session_id, task_dir, target_device, int(sensitive), now, now, expires),
             )
         return self.get(job_id)
 

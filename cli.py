@@ -7,23 +7,9 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from pathlib import Path
 
-from dotenv import dotenv_values
-
-
-ROOT = Path(__file__).resolve().parent
 BASE_URL = os.getenv("HSX_URL", "http://127.0.0.1:8000").rstrip("/")
 SESSION_ID = f"tty-{uuid.uuid4().hex[:12]}"
-
-
-def _token() -> str:
-    token = os.getenv("HSX_AUTH_TOKEN", "").strip()
-    if not token:
-        token = str(dotenv_values(ROOT / ".env").get("HSX_AUTH_TOKEN") or "").strip()
-    if not token:
-        raise RuntimeError(f"No HSX_AUTH_TOKEN found in {ROOT / '.env'} or environment.")
-    return token
 
 
 def _request(path: str, payload: dict | None = None) -> dict:
@@ -32,7 +18,6 @@ def _request(path: str, payload: dict | None = None) -> dict:
         f"{BASE_URL}{path}",
         data=body,
         headers={
-            "Authorization": f"Bearer {_token()}",
             "Content-Type": "application/json",
         },
         method="POST" if body is not None else "GET",
@@ -52,7 +37,6 @@ def _request_stream(path: str, payload: dict) -> dict:
         f"{BASE_URL}{path}",
         data=json.dumps(payload).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {_token()}",
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
         },

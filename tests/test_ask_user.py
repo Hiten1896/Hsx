@@ -60,10 +60,11 @@ def test_ask_user_timeout_and_question_limit(tmp_path: Path):
 def test_target_device_survives_job_store_restart(tmp_path: Path):
     database = tmp_path / "jobs.db"
     job = AskUserJobs(database).create_running(
-        "Play a tone", "local-tty", target_device="local_host"
+        "Play a tone", "local-tty", target_device="local_host", sensitive=True
     )
     restored = AskUserJobs(database).get(job["id"])
     assert restored["target_device"] == "local_host"
+    assert restored["sensitive"] is True
     assert restored["device_actions"] == []
     AskUserJobs(database).complete(
         job["id"],

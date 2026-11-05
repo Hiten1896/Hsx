@@ -14,7 +14,7 @@ an untrusted decision-maker that must operate through bounded tools and policy c
 Hsx is a working local-first assistant platform rather than only a prompt-and-response
 demo. The implemented runtime currently provides:
 
-- An authenticated browser workspace with streaming chat, job history, file browsing,
+- A loopback-only browser workspace with streaming chat, job history, file browsing,
   previews, downloads, output retrieval, and an installable PWA shell.
 - A local TTY client with streamed responses, follow-up questions, job cancellation,
   and the same API and policy boundaries as the browser client.
@@ -43,6 +43,8 @@ demo. The implemented runtime currently provides:
   transient audio handling.
 - Guarded local media actions, including browser media routing and loopback-only host
   audio/camera routing.
+- Advisory Isolation Forest anomaly telemetry, resource and workload forecasting, and
+  untrusted retrieval of similar successful tasks for few-shot context.
 - A policy broker and audit trail for dangerous or administrative operations, plus
   Docker-first isolation for model-requested code execution.
 
@@ -56,7 +58,7 @@ panic/reflex controls are design directions, not claims about the current runtim
 Browser or local CLI
         |
         v
-Authenticated local API
+Loopback-only local API
         |
         +--> job queue and question/approval checkpoints
         +--> policy engine, audit log, and kill switch
@@ -84,7 +86,12 @@ you do not need to install a separate SDK for every provider.
 | OpenAI | `OPENAI_API_KEY`, `OPENAI_MODEL` | OpenAI-compatible HTTP API |
 | Custom endpoint | `OPENAI_API_KEY`, `OPENAI_COMPATIBLE_URL` | OpenAI-compatible HTTP API |
 | Anthropic | `ANTHROPIC_API_KEY`, `HSX_MODEL` | Anthropic SDK |
-| Ollama | `OLLAMA_URL` | Local Ollama HTTP API |
+| Ollama | `OLLAMA_URL`, `OLLAMA_MODEL` | Optional local provider; set a model name to include it in provider selection |
+
+Configured Gemini, Groq, and Ollama providers are dynamically ordered by a
+Thompson-sampling selector. Provider success, failure, latency, and response
+feedback are stored in `data/provider_bandit.json`; transient 503 and timeout
+errors fall through to the next configured provider.
 
 `HSX_PROVIDER` selects the preferred provider and `HSX_FALLBACKS` supplies an ordered
 fallback list. If they are empty, Hsx discovers providers in its built-in order and uses
@@ -117,8 +124,9 @@ cp .env.example .env
 python main.py
 ```
 
-Open <http://127.0.0.1:8000> after startup. Hsx creates or loads the authentication
-token from `.env`; keep that file private.
+Open <http://127.0.0.1:8000> after startup. The API accepts local loopback requests
+without a bearer token; keep the server bound to loopback unless you add an external
+authentication boundary.
 
 ### Dependency profiles
 
@@ -148,14 +156,15 @@ Copy `.env.example` to `.env` and fill only the settings you need. Important gro
 | --- | --- | --- |
 | Provider | `HSX_PROVIDER`, `HSX_FALLBACKS`, provider API keys and model names | Select and configure LLMs |
 | Server | `HSX_HOST`, `HSX_PORT`, `HSX_ALLOWED_ORIGINS` | Bind address, port, and browser origins |
-| Authentication | `HSX_AUTH_TOKEN`, `HSX_OWNER_PIN` | API access and owner approval |
+| Owner approval | `HSX_OWNER_PIN` | Approval for privileged actions |
 | Workspace | `HSX_WORKSPACE`, `HSX_WORK_DIR` | Source files and generated deliverables |
 | Execution | `HSX_SANDBOX`, `HSX_ALLOW_DANGEROUS`, `HSX_ALLOW_SYSTEM_CONTROL` | Code isolation and administrative controls |
 | Voice | `HSX_ENABLE_VOICE_LISTENER`, `HSX_VOICE_WAKE_PHRASE`, `HSX_VOICE_MODEL_PATH` | Opt-in local microphone input |
 | Notifications | `HSX_VAPID_*`, `HSX_NOTIFY_*`, `TELEGRAM_*` | Web Push, in-app, and Telegram routing |
 
-When `HSX_AUTH_TOKEN` is omitted, Hsx generates a token and stores it in `.env` on
-first startup. When `HSX_OWNER_PIN` is omitted, an owner PIN is generated and shown once.
+The local server accepts loopback connections without an access token and
+rejects non-loopback HTTP requests. Keep the server bound to localhost. When
+`HSX_OWNER_PIN` is omitted, an owner PIN is generated and shown once.
 The PIN is stored as a salted hash outside the agent context and is never placed in a
 prompt or memory record.
 
@@ -173,6 +182,11 @@ The workspace has separate roles:
 `HSX_WORK_DIR` must be a dedicated directory inside `HSX_WORKSPACE`. Generated work is
 placed in dated task folders and uses collision-safe names; existing files are not
 silently overwritten. Workspace path resolution rejects traversal and symlink escapes.
+Local ML telemetry stays under `data/`: `anomalies.jsonl` contains advisory-only
+outliers, `workload_history.jsonl` contains resource/job measurements, and
+`intent_logs.jsonl` contains bounded, redacted successful task examples. Explicitly
+sensitive tasks are excluded from experience retrieval; retrieved examples are passed
+to the model only as untrusted context.
 
 The workspace skill can list, search, describe, and read supported text and office files.
 The report skill can combine DOCX, PDF, CSV, and XLSX inputs into a PDF report. If a
@@ -181,8 +195,8 @@ bounded question in the web interface instead of guessing.
 
 ## Safety and security model
 
-- The API requires a bearer token and uses a CORS allowlist. Loopback binding is the
-  default.
+- The local API accepts loopback requests without a bearer token and rejects
+  non-loopback HTTP requests. Keep the service bound to localhost.
 - Skills have policy tiers such as safe, confirm, and dangerous. Decisions are recorded
   in an append-only audit log.
 - `POST /api/stop` provides a global kill switch for active work.
@@ -199,7 +213,7 @@ bounded question in the web interface instead of guessing.
   routing is limited to loopback-origin requests and cannot be selected by a remote
   browser request.
 - Notifications contain minimal metadata and do not include file contents or secrets.
-- Provider keys, authentication tokens, owner PINs, and notification secrets must remain
+- Provider keys, device tokens, owner PINs, and notification secrets must remain
   in local configuration and must never be committed.
 
 ## Optional voice and host media
@@ -249,14 +263,9 @@ In-app notifications work with the local web interface. Web Push requires VAPID 
 Telegram is an optional backup channel for selected health and heartbeat events. Routing,
 quiet hours, and target selection are configurable through `.env`.
 
-For private remote access, keep Hsx bound to loopback and expose it through a controlled
-overlay such as Tailscale Serve rather than opening the application port directly:
-
-```bash
-sudo tailscale serve --https=443 http://127.0.0.1:8000
-```
-
-Review the resulting HTTPS URL and allowed origins before connecting a remote device.
+The local interface is intentionally loopback-only and has no API access token.
+Do not expose it through Tailscale Serve, a reverse proxy, a container port, or
+a public port.
 
 ## Diagnostics and development
 
@@ -308,7 +317,7 @@ promotion is owner-approved.
 
 ```text
 agent/       orchestration, LLM routing, policy, memory, jobs, devices, notifications
-api/         authenticated API helpers and request/state boundaries
+api/         loopback API helpers and request/state boundaries
 broker/      typed policy-controlled host-action broker
 interfaces/  external notification and device interfaces
 skills/      discovered built-in skills

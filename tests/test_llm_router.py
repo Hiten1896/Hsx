@@ -1,11 +1,19 @@
 import json
+import random
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
 import pytest
 
-from agent.llm.providers import GeminiProvider, JSONHTTPProvider, OllamaProvider, OpenAICompatibleProvider, ProviderError
+from agent.llm.providers import (
+    GeminiProvider,
+    JSONHTTPProvider,
+    OllamaProvider,
+    OpenAICompatibleProvider,
+    ProviderError,
+)
 from agent.llm.router import LLMRouter
 from agent.llm.types import LLMEvent, LLMRequest
 
@@ -31,9 +39,14 @@ def test_router_falls_back_to_next_provider(caplog):
     assert "LLM provider primary failed: primary unavailable" in caplog.text
 
 
-def test_llm_client_forwards_text_deltas(monkeypatch):
+def test_llm_client_forwards_text_deltas(monkeypatch, tmp_path):
     from agent import llm_client
 
+    monkeypatch.setattr(
+        llm_client,
+        "PROVIDER_BANDIT",
+        llm_client.ProviderBandit(tmp_path / "bandit.json", random.Random(1)),
+    )
     monkeypatch.setattr(llm_client, "default_router", lambda: LLMRouter([WorkingProvider()]))
     streamed = []
 
@@ -43,19 +56,120 @@ def test_llm_client_forwards_text_deltas(monkeypatch):
     assert "".join(block.text for block in response.content) == "fallback answer"
 
 
-def test_llm_client_propagates_provider_failure_instead_of_using_local_fallback(monkeypatch):
+def test_llm_client_propagates_provider_failure_instead_of_using_local_fallback(monkeypatch, tmp_path):
     from agent import llm_client
 
+    monkeypatch.setattr(
+        llm_client,
+        "PROVIDER_BANDIT",
+        llm_client.ProviderBandit(tmp_path / "bandit.json", random.Random(1)),
+    )
     monkeypatch.setattr(llm_client, "default_router", lambda: LLMRouter([FailingProvider()]))
 
     with pytest.raises(ProviderError, match="primary unavailable"):
         llm_client.call_llm([], [], sensitive=True)
 
 
+def test_provider_bandit_persists_attempts_latency_and_idempotent_feedback(tmp_path):
+    from agent.llm_client import ProviderBandit
+
+    bandit = ProviderBandit(tmp_path / "provider-bandit.json", random.Random(7))
+    bandit.record_attempt("gemini", True, 120)
+    bandit.record_attempt("groq", False, 650)
+    bandit.remember_job_provider("job-1", "gemini")
+    bandit.record_feedback("job-1", "good")
+    bandit.record_feedback("job-1", "good")
+
+    saved = bandit.snapshot()["providers"]
+    assert saved["gemini"] == {
+        "successes": 1,
+        "failures": 0,
+        "success_rate": 1.0,
+        "latency_samples": 1,
+        "latency_ms_avg": 120,
+        "thumbs_up": 1,
+        "thumbs_down": 0,
+    }
+    assert saved["groq"]["failures"] == 1
+    assert saved["groq"]["latency_ms_avg"] == 650
+
+    class MeanPosterior:
+        def betavariate(self, alpha, beta):
+            return alpha / (alpha + beta)
+
+    bandit._rng = MeanPosterior()
+    providers = [SimpleNamespace(name="groq"), SimpleNamespace(name="gemini")]
+    assert [provider.name for provider in bandit.rank(providers)] == ["gemini", "groq"]
+
+    reloaded = ProviderBandit(bandit.state_path, random.Random(7))
+    reloaded.record_feedback("job-1", "bad")
+    assert reloaded.snapshot()["providers"]["gemini"]["thumbs_up"] == 0
+    assert reloaded.snapshot()["providers"]["gemini"]["thumbs_down"] == 1
+
+
+def test_llm_client_records_provider_attempts_and_links_user_feedback(monkeypatch, tmp_path):
+    from agent import llm_client
+
+    bandit = llm_client.ProviderBandit(tmp_path / "bandit.json", random.Random(2))
+    monkeypatch.setattr(llm_client, "PROVIDER_BANDIT", bandit)
+    monkeypatch.setattr(
+        llm_client,
+        "default_router",
+        lambda: LLMRouter([FailingProvider(), WorkingProvider()]),
+    )
+
+    response = llm_client.call_llm([], [], sensitive=True, job_id="job-2")
+    bandit.record_feedback("job-2", "good")
+
+    stats = bandit.snapshot()["providers"]
+    assert "".join(block.text for block in response.content) == "fallback answer"
+    assert stats["primary"]["failures"] == 1
+    assert stats["secondary"]["successes"] == 1
+    assert stats["secondary"]["thumbs_up"] == 1
+
+
+def test_router_falls_back_after_http_503():
+    class UnavailableHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(503)
+            self.end_headers()
+            self.wfile.write(b"service unavailable")
+
+        def log_message(self, *_args):
+            pass
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), UnavailableHandler)
+    thread = threading.Thread(target=httpd.handle_request)
+    thread.start()
+    primary = OpenAICompatibleProvider(
+        "groq",
+        "",
+        "test",
+        f"http://127.0.0.1:{httpd.server_port}/chat/completions",
+    )
+    try:
+        events = list(LLMRouter([primary, WorkingProvider()]).generate(LLMRequest([])))
+    finally:
+        thread.join(timeout=2)
+        httpd.server_close()
+
+    assert [event.text for event in events if event.type == "text_delta"] == ["fallback answer"]
+
+
+def test_router_falls_back_after_http_timeout(monkeypatch):
+    def timeout(*_args, **_kwargs):
+        raise TimeoutError("provider timed out")
+
+    monkeypatch.setattr("agent.llm.providers.urllib.request.urlopen", timeout)
+    timed_out = OpenAICompatibleProvider("groq", "", "test", "http://127.0.0.1:8000/chat")
+    events = list(LLMRouter([timed_out, WorkingProvider()]).generate(LLMRequest([])))
+    assert [event.text for event in events if event.type == "text_delta"] == ["fallback answer"]
+
+
 def test_default_router_discovers_configured_providers(monkeypatch):
     from agent.llm.router import default_router
 
-    for key in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROK_API_KEY", "XAI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"):
+    for key in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROK_API_KEY", "XAI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY", "OLLAMA_MODEL"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test")
     monkeypatch.setenv("XAI_API_KEY", "xai-test")
@@ -73,15 +187,32 @@ def test_default_router_discovers_configured_providers(monkeypatch):
 def test_default_router_requires_a_valid_api_key(monkeypatch):
     from agent.llm.router import default_router
 
-    for key in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROK_API_KEY", "XAI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"):
+    for key in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROK_API_KEY", "XAI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY", "OLLAMA_MODEL"):
         monkeypatch.delenv(key, raising=False)
 
     try:
         default_router()
     except RuntimeError as error:
-        assert str(error) == "No valid API key found in .env. Please configure at least one provider key."
+        assert "No LLM provider is configured" in str(error)
     else:
         raise AssertionError("default_router should reject an empty provider configuration")
+
+
+def test_default_router_registers_ollama_when_model_is_configured(monkeypatch):
+    from agent.llm.router import default_router
+
+    for key in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROK_API_KEY", "XAI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5")
+    monkeypatch.setenv("OLLAMA_URL", "http://127.0.0.1:11434")
+    monkeypatch.delenv("HSX_PROVIDER", raising=False)
+    monkeypatch.delenv("HSX_FALLBACKS", raising=False)
+
+    router = default_router()
+
+    assert [provider.name for provider in router.providers] == ["ollama"]
+    assert router.providers[0].model == "qwen2.5"
+    assert router.providers[0].endpoint == "http://127.0.0.1:11434/v1/chat/completions"
 
 
 def test_json_http_provider_sends_user_agent():

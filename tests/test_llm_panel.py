@@ -26,3 +26,19 @@ def test_panel_debates_two_drafts_with_judge():
     ).generate(LLMRequest([{"role": "user", "content": "question"}])))
     assert events[0].text == "polished answer"
     assert events[-1].stop_reason == "panel_complete"
+
+
+def test_panel_reports_provider_success_and_latency():
+    outcomes = []
+    panel = PanelRouter(
+        [DraftProvider("gemini", "draft one"), DraftProvider("groq", "draft two")],
+        DraftProvider("ollama", "final answer"),
+    )
+    panel.provider_result_callback = lambda name, succeeded, latency: outcomes.append(
+        (name, succeeded, latency)
+    )
+
+    list(panel.generate(LLMRequest([{"role": "user", "content": "question"}])))
+
+    assert {name for name, _, _ in outcomes} == {"gemini", "groq", "ollama"}
+    assert all(succeeded and latency >= 0 for _, succeeded, latency in outcomes)

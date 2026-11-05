@@ -1,6 +1,5 @@
 import ipaddress
 import os
-import secrets
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -58,28 +57,6 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 MODE = os.getenv("HSX_MODE", "jarvis").strip().lower()
 HOST = os.getenv("HSX_HOST", "127.0.0.1").strip() or "127.0.0.1"
 PORT = int(os.getenv("HSX_PORT", "8000"))
-AUTH_TOKEN_FILE = DATA_DIR / "auth.token"
-
-
-def _load_or_create_auth_token() -> str:
-    global AUTH_TOKEN_GENERATED
-    configured = os.getenv("HSX_AUTH_TOKEN", "").strip()
-    if configured:
-        AUTH_TOKEN_GENERATED = False
-        return configured
-    token = secrets.token_urlsafe(32)
-    AUTH_TOKEN_GENERATED = True
-    existing = ENV_FILE.read_text(encoding="utf-8") if ENV_FILE.exists() else ""
-    lines = [line for line in existing.splitlines() if not line.startswith("HSX_AUTH_TOKEN=")]
-    ENV_FILE.write_text("\n".join([*lines, f"HSX_AUTH_TOKEN={token}"]) + "\n", encoding="utf-8")
-    try:
-        ENV_FILE.chmod(0o600)
-    except OSError:
-        pass
-    return token
-
-
-AUTH_TOKEN = _load_or_create_auth_token()
 ALLOWED_ORIGINS = tuple(
     origin.strip()
     for origin in os.getenv(

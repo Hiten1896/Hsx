@@ -1,5 +1,13 @@
-const CACHE_NAME = 'hsx-shell-v1';
-const SHELL = ['/web/', '/web/app.js', '/web/manifest.webmanifest', '/web/icon.svg'];
+const CACHE_NAME = 'hsx-shell-v3';
+const SHELL = [
+  '/web/',
+  '/web/chat.css',
+  '/web/chat.js',
+  '/web/design-tokens.json',
+  '/web/api-contract.json',
+  '/web/manifest.webmanifest',
+  '/web/icon.svg',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL)));
