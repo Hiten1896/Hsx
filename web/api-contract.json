@@ -2,6 +2,8 @@
   "endpoints": {
     "health": "/health",
     "chat_stream": "/api/chat/stream",
+    "camera_stream": "/api/camera/stream",
+    "camera_status": "/api/camera/status",
     "feedback": "/api/feedback",
     "telemetry": "/api/telemetry",
     "ask_answer": "/api/ask-jobs/{job_id}/answer",

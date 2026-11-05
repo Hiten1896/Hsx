@@ -7,10 +7,11 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from agent.hardware.camera import CAMERA, MAX_FRAME_BYTES, MAX_FRAME_AGE_SECONDS
 from config import DATA_DIR
 
 LOGGER = logging.getLogger("hsx.tools.vision_capture")
-MAX_JPEG_BYTES = 2 * 1024 * 1024
+MAX_JPEG_BYTES = MAX_FRAME_BYTES
 
 
 def enabled() -> bool:
@@ -35,6 +36,20 @@ def capture_frame(
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(destination.parent, 0o700)
+    if CAMERA.is_started():
+        try:
+            latest = CAMERA.latest_frame()
+            frame = CAMERA.wait_for_frame(
+                latest.version if latest else -1,
+                timeout=min(timeout_seconds, MAX_FRAME_AGE_SECONDS),
+            )
+            if frame is None:
+                raise RuntimeError("The live camera has no recent frame available.")
+            _store_frame(frame.data, destination)
+            return destination
+        except (OSError, RuntimeError, ValueError):
+            LOGGER.exception("Could not save a frame from the live camera service.")
+            raise
     ffmpeg = shutil.which("ffmpeg")
     fswebcam = shutil.which("fswebcam")
     if ffmpeg is None and fswebcam is None:
@@ -110,6 +125,29 @@ def capture_frame(
     except (OSError, RuntimeError, ValueError):
         LOGGER.exception("Local vision frame capture failed.")
         raise
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _store_frame(data: bytes, destination: Path) -> None:
+    if (
+        len(data) < 4
+        or len(data) > MAX_JPEG_BYTES
+        or not data.startswith(b"\xff\xd8")
+        or not data.endswith(b"\xff\xd9")
+    ):
+        raise RuntimeError("The live camera returned an invalid or oversized JPEG frame.")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".latest-",
+        suffix=".jpg",
+        dir=destination.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as target:
+            target.write(data)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)
 

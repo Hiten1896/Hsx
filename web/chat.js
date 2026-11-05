@@ -13,7 +13,29 @@ const elements = {
   activityTemplate: document.getElementById('activity-template'),
   welcome: document.getElementById('welcome-card'),
   connection: document.getElementById('connection-label'),
+  camera: document.getElementById('live-camera'),
+  cameraStatus: document.getElementById('camera-status'),
 };
+
+function initializeCameraFeed() {
+  if (!elements.camera) return;
+  let retryTimer;
+  const connect = () => {
+    const streamUrl = new URL(apiContract.endpoints.camera_stream, window.location.origin);
+    streamUrl.searchParams.set('retry', Date.now());
+    elements.camera.src = streamUrl.toString();
+  };
+  elements.camera.addEventListener('load', () => {
+    elements.cameraStatus.textContent = 'Camera connected';
+    window.clearTimeout(retryTimer);
+  });
+  elements.camera.addEventListener('error', () => {
+    elements.cameraStatus.textContent = 'Camera unavailable; retrying…';
+    window.clearTimeout(retryTimer);
+    retryTimer = window.setTimeout(connect, 5000);
+  });
+  connect();
+}
 
 function updateDesignTokens(tokens) {
   const root = document.documentElement;
@@ -321,6 +343,7 @@ async function initialize() {
     elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 180)}px`;
   });
   elements.stop.addEventListener('click', stopTask);
+  initializeCameraFeed();
   document.querySelectorAll('[data-prompt]').forEach((button) => {
     button.addEventListener('click', () => {
       elements.prompt.value = button.dataset.prompt;

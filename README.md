@@ -179,14 +179,19 @@ rejects non-loopback HTTP requests. Keep the server bound to localhost. When
 
 ### Headless Debian hardware (optional)
 
-Hardware access is disabled by default. Grant the HSX service account only the
-necessary `video` and/or `audio` device permissions, then opt in through `.env`.
-`HSX_CAMERA_DEVICE` defaults to `/dev/video0`. Enable either
+Grant the HSX service account only the necessary `video` and/or `audio` device
+permissions. When the web server starts, its standalone camera service begins
+capturing `/dev/video0` at 640x480 and 15 fps, independent of chat jobs. The
+dashboard uses the loopback-only `GET /api/camera/stream` MJPEG endpoint; the
+service keeps only the latest bounded JPEG frame in memory and returns 503 while
+the camera or FFmpeg is unavailable. `HSX_CAMERA_DEVICE` defaults to `/dev/video0`.
+Enable either
 `HSX_ENABLE_CAMERA_STREAM=1` with a private-network `HSX_RTSP_URL`, or
 `HSX_ENABLE_MOTION_MONITOR=1`; these two camera daemons are mutually exclusive by
 default because many webcams cannot be opened by both at once. The FFmpeg publisher
 pushes to an already-running RTSP server (for example, MediaMTX); FFmpeg itself does
-not host the RTSP endpoint. Motion snapshots are bounded to 500 files under
+not host the RTSP endpoint. These optional direct-device modes take precedence over
+the dashboard capture process to avoid competing webcam handles. Motion snapshots are bounded to 500 files under
 `data/snapshots/motion/`, with event metadata in `data/motion_events.json`.
 
 Install `ffmpeg` or `fswebcam` for still captures. Set
@@ -204,6 +209,12 @@ utilities and backs up an existing Shairport configuration before replacing it.
 Set `HSX_AIRPLAY_NAME` in the installer environment to customize the advertised
 receiver name. Keep the server bound to localhost. When
 `HSX_OWNER_PIN` is omitted, an owner PIN is generated and shown once.
+
+Runtime Python logs and structured router/job events are batched into
+`data/datasets/agent_logs.jsonl`, with one bounded rotated file. Successful,
+non-sensitive ShareGPT training examples and tool trajectories are stored in
+`data/datasets/sft_dataset.jsonl`; log messages and structured events redact
+credential fields, and sensitive jobs are excluded from training records.
 The PIN is stored as a salted hash outside the agent context and is never placed in a
 prompt or memory record.
 
@@ -350,7 +361,7 @@ permanent promotion requires an explicit request and owner approval.
 
 The separate `create_dynamic_tool` meta-tool registers declarations backed only by
 vetted pure text operations. It does not import or execute arbitrary model-generated
-Python. Successful, non-sensitive jobs are exported to `data/sft_dataset.jsonl` with
+Python. Successful, non-sensitive jobs are exported to `data/datasets/sft_dataset.jsonl` with
 credential-like strings redacted; sensitive jobs are excluded. The optional local RAG
 index uses hashed features instead of external embedding APIs and excludes hidden,
 generated, dependency, and data directories from its streaming workspace scan.

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent.hardware.audio_alerts import AudioAlerts
+from agent.hardware.camera import CameraFrame, CameraService
 from agent.hardware.camera_stream import CameraStream, _validate_rtsp_url
 from agent.hardware.motion_monitor import MotionMonitor
 from agent.hardware.speaker import Speaker
@@ -30,6 +31,70 @@ def test_camera_stream_is_low_resolution_and_requires_local_rtsp_target():
         _validate_rtsp_url("rtsp://198.51.100.10:8554/cam")
     with pytest.raises(ValueError, match="credentials"):
         _validate_rtsp_url("rtsp://user:password@192.168.1.2/cam")
+
+
+def test_active_dashboard_contains_camera_panel():
+    root = Path(__file__).resolve().parents[1]
+    page = (root / "web" / "index.html").read_text(encoding="utf-8")
+    client = (root / "web" / "chat.js").read_text(encoding="utf-8")
+    contract = json.loads((root / "web" / "api-contract.json").read_text(encoding="utf-8"))
+
+    assert 'id="live-camera"' in page
+    assert 'id="camera-status"' in page
+    assert "apiContract.endpoints.camera_stream" in client
+    assert contract["endpoints"]["camera_stream"] == "/api/camera/stream"
+    assert contract["endpoints"]["camera_status"] == "/api/camera/status"
+
+
+def test_standalone_camera_buffers_bounded_mjpeg_frames():
+    camera = CameraService(device="/dev/video0")
+    first = b"\xff\xd8first\xff\xd9"
+    second = b"\xff\xd8second\xff\xd9"
+    camera._consume_mjpeg(io.BytesIO(b"noise" + first + second))
+    frame = camera.latest_frame()
+
+    assert camera.command("ffmpeg")[camera.command("ffmpeg").index("-framerate") + 1] == "15"
+    assert frame is not None
+    assert frame.version == 2
+    assert frame.data == second
+    assert camera.wait_for_frame(1, timeout=0.1) == frame
+
+
+def test_mjpeg_api_streams_without_an_agent_job(monkeypatch):
+    import threading
+    from http.server import ThreadingHTTPServer
+    from time import monotonic
+    from urllib.request import urlopen
+
+    import server
+
+    jpeg = b"\xff\xd8dashboard-frame\xff\xd9"
+
+    class FakeCamera:
+        def latest_frame(self):
+            return CameraFrame(1, jpeg, monotonic())
+
+        def wait_for_frame(self, _version, timeout=3.0):
+            return None
+
+        def health_check(self):
+            return {"running": True}
+
+    monkeypatch.setattr(server, "CAMERA", FakeCamera())
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.HsxHandler)
+    thread = threading.Thread(target=httpd.serve_forever)
+    thread.start()
+    try:
+        with urlopen(f"http://127.0.0.1:{httpd.server_port}/api/camera/stream", timeout=3) as response:
+            body = response.read()
+            assert response.status == 200
+            assert response.headers["Content-Type"] == "multipart/x-mixed-replace; boundary=frame"
+        assert b"--frame\r\n" in body
+        assert jpeg in body
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=3)
+        httpd.server_close()
 
 
 def test_motion_monitor_writes_headless_config_and_bounds_snapshots(tmp_path):
@@ -91,6 +156,23 @@ def test_vision_capture_rejects_disabled_or_invalid_output(tmp_path, monkeypatch
     monkeypatch.setattr(vision_capture.subprocess, "run", fake_run)
     with pytest.raises(RuntimeError, match="JPEG"):
         vision_capture.capture_frame(output_path=tmp_path / "latest.jpg")
+
+
+def test_vision_capture_uses_shared_camera_without_reopening_device(tmp_path, monkeypatch):
+    monkeypatch.setenv("HSX_ENABLE_VISION_CAPTURE", "1")
+    frame = CameraFrame(2, b"\xff\xd8shared-frame\xff\xd9", 0.0)
+    monkeypatch.setattr(vision_capture.CAMERA, "is_started", lambda: True)
+    monkeypatch.setattr(vision_capture.CAMERA, "latest_frame", lambda: CameraFrame(1, b"", 0.0))
+    monkeypatch.setattr(vision_capture.CAMERA, "wait_for_frame", lambda *_args, **_kwargs: frame)
+    monkeypatch.setattr(
+        vision_capture.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("shared camera capture must not reopen /dev/video0"),
+    )
+
+    destination = tmp_path / "snapshots" / "latest.jpg"
+    assert vision_capture.capture_frame(output_path=destination) == destination
+    assert destination.read_bytes() == frame.data
 
 
 def test_speaker_and_alert_tones_use_bounded_alsa_payloads(tmp_path, monkeypatch):

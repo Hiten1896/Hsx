@@ -10,6 +10,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 
+from agent.ml.log_recorder import LOG_RECORDER
 
 _FAST_PATH_EXAMPLES = {
     "list_files": (
@@ -73,10 +74,24 @@ class RouterEventLogger:
             **fields,
         }
         self._write_to(self.log_path, entry)
+        if LOG_RECORDER.is_installed:
+            LOG_RECORDER.record_event("router_event", entry)
         return entry
 
-    def log_prompt(self, session_id: str, job_id: str, prompt: str) -> None:
-        self._write("user_prompt", session_id, job_id, prompt=prompt)
+    def log_prompt(
+        self,
+        session_id: str,
+        job_id: str,
+        prompt: str,
+        *,
+        sensitive: bool = False,
+    ) -> None:
+        self._write(
+            "user_prompt",
+            session_id,
+            job_id,
+            prompt="[REDACTED]" if sensitive else prompt,
+        )
 
     def log_tool_prediction(
         self,

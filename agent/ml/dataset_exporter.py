@@ -95,7 +95,7 @@ class DatasetExporter:
     """Append redacted successful traces in a ShareGPT-compatible JSONL format."""
 
     def __init__(self, path: Path | None = None):
-        self.path = path or DATA_DIR / "sft_dataset.jsonl"
+        self.path = path or DATA_DIR / "datasets" / "sft_dataset.jsonl"
         self._lock = threading.Lock()
 
     def record_success(

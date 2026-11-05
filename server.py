@@ -20,11 +20,13 @@ from agent.ask_user import AskUserJobs, AskUserRequest
 from agent.jobs import JobQueue
 from agent.approval import ApprovalGuard
 from agent.devices import DeviceRegistry, system_body_state
-from agent.hardware import AUDIO_ALERTS
+from agent.hardware import AUDIO_ALERTS, CAMERA
+from agent.hardware.camera import MAX_FRAME_AGE_SECONDS
 from agent.llm_client import PROVIDER_BANDIT, record_provider_feedback
 from agent.ml.forecaster import FORECASTER, classify_job
 from agent.ml.dataset_exporter import SFT_DATASET
 from agent.ml.intent_learning import UNCERTAIN_INTENTS
+from agent.ml.log_recorder import LOG_RECORDER
 from agent.ml.memory import EXPERIENCE_MEMORY
 from agent.memory import MemoryManager
 from agent.notifier import Notifier
@@ -131,6 +133,16 @@ def _record_job_telemetry(
     history: list | None = None,
 ) -> None:
     try:
+        if LOG_RECORDER.is_installed:
+            LOG_RECORDER.record_event(
+                "job_telemetry",
+                {
+                    "job_id": job.get("id", ""),
+                    "duration_seconds": round(duration_seconds, 3),
+                    "succeeded": succeeded,
+                },
+                sensitive=sensitive,
+            )
         FORECASTER.record_job(
             classify_job(job["request"]),
             duration_seconds,
@@ -340,6 +352,9 @@ def _run_chat_job(
 
 
 class HsxHandler(BaseHTTPRequestHandler):
+    def log_message(self, format: str, *args) -> None:
+        LOGGER.info("HTTP %s %s", self.client_address[0], format % args)
+
     def _request_path(self) -> str:
         return urlsplit(self.path).path
 
@@ -398,6 +413,42 @@ class HsxHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             return
 
+    def _stream_camera(self) -> None:
+        frame = CAMERA.latest_frame()
+        if frame is None:
+            frame = CAMERA.wait_for_frame(-1, timeout=5.0)
+        if frame is None:
+            self._json(
+                {"error": "Camera frame is unavailable.", "camera": CAMERA.health_check()},
+                503,
+            )
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Connection", "close")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        version = -1
+        try:
+            self.connection.settimeout(5.0)
+            while True:
+                self.wfile.write(
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    + f"Content-Length: {len(frame.data)}\r\n\r\n".encode("ascii")
+                    + frame.data
+                    + b"\r\n"
+                )
+                self.wfile.flush()
+                version = frame.version
+                frame = CAMERA.wait_for_frame(version, timeout=MAX_FRAME_AGE_SECONDS)
+                if frame is None:
+                    return
+        except (OSError, TimeoutError):
+            return
+
     def do_GET(self) -> None:
         path = self._request_path()
         if not self._api_access_allowed():
@@ -413,6 +464,11 @@ class HsxHandler(BaseHTTPRequestHandler):
             telemetry = LLM_TELEMETRY.snapshot()
             telemetry["provider_stats"] = PROVIDER_BANDIT.snapshot()["providers"]
             self._json(telemetry)
+        elif path == "/api/camera/status":
+            self._json(CAMERA.health_check())
+        elif path == "/api/camera/stream":
+            self._stream_camera()
+            return
         elif path == "/api/mode":
             self._json({"mode": MODE})
         elif path == "/api/jobs":
@@ -562,7 +618,12 @@ class HsxHandler(BaseHTTPRequestHandler):
                 bool(payload.get("sensitive", False)),
             )
             SESSION_LAST_JOBS[session_id] = job["id"]
-            ROUTER_LOGGER.log_prompt(session_id, job["id"], message)
+            ROUTER_LOGGER.log_prompt(
+                session_id,
+                job["id"],
+                message,
+                sensitive=bool(payload.get("sensitive", False)),
+            )
             POLICY.audit_event("job_created", session_id, job["id"], "queued")
             threading.Thread(
                 target=_run_chat_job,
@@ -758,7 +819,12 @@ class HsxHandler(BaseHTTPRequestHandler):
                 bool(payload.get("sensitive", False)),
             )
             SESSION_LAST_JOBS[session_id] = job["id"]
-            ROUTER_LOGGER.log_prompt(session_id, job["id"], message)
+            ROUTER_LOGGER.log_prompt(
+                session_id,
+                job["id"],
+                message,
+                sensitive=bool(payload.get("sensitive", False)),
+            )
             POLICY.audit_event("job_created", session_id, job["id"], "queued")
             event_queue = CHAT_STREAMS.register(job["id"])
             threading.Thread(

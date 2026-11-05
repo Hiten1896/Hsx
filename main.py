@@ -6,9 +6,10 @@ import sys
 import threading
 from http.server import ThreadingHTTPServer
 
-from agent.hardware import AUDIO_ALERTS, CAMERA_STREAM, MOTION_MONITOR, SPEAKER
+from agent.hardware import AUDIO_ALERTS, CAMERA, CAMERA_STREAM, MOTION_MONITOR, SPEAKER
 from agent.ml.anomaly import ANOMALY_MONITOR, SystemMetrics
 from agent.ml.forecaster import FORECASTER
+from agent.ml.log_recorder import LOG_RECORDER
 from config import DATA_DIR, HOST, PORT
 from server import APPROVAL_GUARD, TOOLS, HsxHandler
 
@@ -44,6 +45,11 @@ def _start_hardware_services() -> None:
             "unless the camera explicitly supports concurrent capture."
         )
         return
+    if not camera_enabled and not motion_enabled:
+        try:
+            CAMERA.start()
+        except (OSError, RuntimeError, ValueError):
+            LOGGER.exception("Could not start the live camera service.")
     for service in (CAMERA_STREAM, MOTION_MONITOR):
         if not service.enabled():
             continue
@@ -58,6 +64,7 @@ if __name__ == "__main__":
     if APPROVAL_GUARD.generated_pin:
         print(f"Generated owner PIN (save it; it is only shown once): {APPROVAL_GUARD.generated_pin}")
     http_server = ThreadingHTTPServer((HOST, PORT), HsxHandler)
+    LOG_RECORDER.install()
 
     if hasattr(signal, "SIGUSR1"):
         def reload_after_update(_signum, _frame):
@@ -73,10 +80,12 @@ if __name__ == "__main__":
         http_server.serve_forever()
     finally:
         ANOMALY_MONITOR.stop(timeout=5)
+        CAMERA.stop(timeout=5)
         CAMERA_STREAM.stop(timeout=5)
         MOTION_MONITOR.stop(timeout=5)
         SPEAKER.stop(timeout=3)
         AUDIO_ALERTS.stop(timeout=3)
         http_server.server_close()
+        LOG_RECORDER.stop(timeout=5)
     if hasattr(signal, "SIGUSR1"):
         os.execv(sys.executable, [sys.executable, *sys.argv])

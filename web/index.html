@@ -28,6 +28,20 @@
         </div>
       </header>
       <main class="conversation-layout">
+        <aside class="camera-panel" aria-label="Live camera">
+          <div class="camera-heading">
+            <div>
+              <strong>Live camera</strong>
+              <span id="camera-status" role="status">Connecting…</span>
+            </div>
+            <span class="camera-live"><span class="status-dot"></span> LIVE</span>
+          </div>
+          <img
+            id="live-camera"
+            class="camera-frame"
+            alt="Live 640 by 480 camera feed"
+          >
+        </aside>
         <section class="conversation-panel" aria-label="Conversation">
           <div id="chat-stream" class="message-stream" role="log" aria-live="polite" aria-relevant="additions text">
             <section class="welcome-card" id="welcome-card">
