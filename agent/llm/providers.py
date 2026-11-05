@@ -1,4 +1,6 @@
 import json
+import base64
+import binascii
 import os
 import re
 import urllib.error
@@ -102,7 +104,7 @@ def _validate_gemini_payload(payload: dict[str, Any]) -> None:
             part_path = f"{path}.parts[{part_index}]"
             if not isinstance(part, dict):
                 raise _shape_error(provider, part_path, "part", "must contain exactly one native part")
-            unknown = set(part) - {"text", "functionCall", "functionResponse"}
+            unknown = set(part) - {"text", "functionCall", "functionResponse", "inlineData"}
             if unknown:
                 raise _shape_error(provider, part_path, sorted(unknown)[0])
             if len(part) != 1:
@@ -111,6 +113,27 @@ def _validate_gemini_payload(payload: dict[str, Any]) -> None:
             if kind == "text":
                 if not isinstance(part["text"], str):
                     raise _shape_error(provider, part_path, "text", "must be a string")
+            elif kind == "inlineData":
+                image = part[kind]
+                if not isinstance(image, dict):
+                    raise _shape_error(provider, part_path, kind, "must be an object")
+                _require_keys(
+                    provider,
+                    image,
+                    f"{part_path}.inlineData",
+                    {"mimeType", "data"},
+                    {"mimeType", "data"},
+                )
+                if image["mimeType"] not in {"image/jpeg", "image/png"}:
+                    raise _shape_error(provider, part_path, kind, "unsupported image mime type")
+                if not isinstance(image["data"], str) or len(image["data"]) > 3_000_000:
+                    raise _shape_error(provider, part_path, kind, "image data exceeds the 2 MiB limit")
+                try:
+                    decoded = base64.b64decode(image["data"], validate=True)
+                except (binascii.Error, ValueError) as error:
+                    raise _shape_error(provider, part_path, kind, "image data must be valid base64") from error
+                if len(decoded) > 2 * 1024 * 1024:
+                    raise _shape_error(provider, part_path, kind, "image data exceeds the 2 MiB limit")
             elif kind == "functionCall":
                 function = part[kind]
                 if not isinstance(function, dict):
@@ -333,6 +356,13 @@ def to_gemini_payload(request: LLMRequest) -> dict[str, Any]:
             block_type = block.get("type")
             if block_type == "text":
                 parts.append({"text": block.get("text", "")})
+            elif block_type == "image":
+                parts.append({
+                    "inlineData": {
+                        "mimeType": block.get("mime_type", ""),
+                        "data": block.get("data", ""),
+                    }
+                })
             elif block_type == "tool_use":
                 tool_names[block.get("id", "")] = block.get("name", "")
                 parts.append({
@@ -403,6 +433,8 @@ def to_openai_payload(request: LLMRequest, model: str = "") -> dict[str, Any]:
             block_type = block.get("type")
             if block_type == "text":
                 text_parts.append(block.get("text", ""))
+            elif block_type == "image":
+                raise ProviderError("Image input is supported only by the Gemini provider.")
             elif block_type == "tool_use":
                 tool_calls.append({
                     "id": block.get("id", ""),

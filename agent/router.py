@@ -179,6 +179,13 @@ class IntentRouter:
 
         if feedback_log is not None:
             examples.extend(self._feedback_examples(feedback_log, tool_names))
+        from agent.ml.intent_learning import UNCERTAIN_INTENTS
+
+        examples.extend(
+            (prompt, intent)
+            for prompt, intent in UNCERTAIN_INTENTS.offline_examples()
+            if intent in tool_names
+        )
         return self.train(examples)
 
     @staticmethod

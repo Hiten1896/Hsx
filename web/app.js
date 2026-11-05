@@ -249,9 +249,9 @@ async function submitPrompt() {
   aiPrompt.value = '';
   appendChatMessage('user', message);
   const approvals = {};
-  if (/\b(camera|webcam|snapshot|photo|record|play|audio|music)\b/i.test(message)) {
+  if (/\b(camera|webcam|snapshot|photo|picture|record|play|audio|music|what do you see|look at the room|describe the room)\b/i.test(message)) {
     const pin = window.prompt('Owner PIN for requested local media actions (leave blank to skip):');
-    if (pin) approvals.audio_play = approvals.camera_record = pin;
+    if (pin) approvals.audio_play = approvals.camera_record = approvals.vision_capture = pin;
   }
   try {
     const response = await fetch('/api/chat', {

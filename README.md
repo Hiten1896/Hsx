@@ -45,6 +45,17 @@ demo. The implemented runtime currently provides:
   audio/camera routing.
 - Advisory Isolation Forest anomaly telemetry, resource and workload forecasting, and
   untrusted retrieval of similar successful tasks for few-shot context.
+- Low-footprint Markov intent prefetching, MinHash/LSH semantic caching for safe
+  tool-free replies, uncertainty-triggered cloud routing, and hierarchical planning
+  with policy-checked step execution and bounded reflection retries.
+- A streaming, SQLite-backed workspace RAG index using local hashed n-gram vectors,
+  redacted `.py`/`.md`/`.json` chunks, and bounded untrusted context retrieval.
+- A Planner/Coder/Critic flow for non-sensitive complex plans; proposals are reviewed
+  before the normal policy-gated executor handles any tools.
+- Successful non-sensitive execution traces exported as redacted ShareGPT JSONL, plus
+  a persistent dynamic-tool registry limited to syntax-checked, vetted pure operations.
+- Opt-in, low-resolution camera/RTSP and headless Motion process wrappers, confirmation-
+  gated Gemini still-image context, and asynchronous Piper/ALSA notification cues.
 - A policy broker and audit trail for dangerous or administrative operations, plus
   Docker-first isolation for model-requested code execution.
 
@@ -160,10 +171,38 @@ Copy `.env.example` to `.env` and fill only the settings you need. Important gro
 | Workspace | `HSX_WORKSPACE`, `HSX_WORK_DIR` | Source files and generated deliverables |
 | Execution | `HSX_SANDBOX`, `HSX_ALLOW_DANGEROUS`, `HSX_ALLOW_SYSTEM_CONTROL` | Code isolation and administrative controls |
 | Voice | `HSX_ENABLE_VOICE_LISTENER`, `HSX_VOICE_WAKE_PHRASE`, `HSX_VOICE_MODEL_PATH` | Opt-in local microphone input |
+| Hardware | `HSX_ENABLE_CAMERA_STREAM`, `HSX_ENABLE_MOTION_MONITOR`, `HSX_ENABLE_VISION_CAPTURE`, `HSX_ENABLE_AUDIO_ALERTS`, `HSX_ENABLE_VOICE_ALERTS` | Opt-in camera, motion, and speaker services |
 | Notifications | `HSX_VAPID_*`, `HSX_NOTIFY_*`, `TELEGRAM_*` | Web Push, in-app, and Telegram routing |
 
 The local server accepts loopback connections without an access token and
 rejects non-loopback HTTP requests. Keep the server bound to localhost. When
+
+### Headless Debian hardware (optional)
+
+Hardware access is disabled by default. Grant the HSX service account only the
+necessary `video` and/or `audio` device permissions, then opt in through `.env`.
+`HSX_CAMERA_DEVICE` defaults to `/dev/video0`. Enable either
+`HSX_ENABLE_CAMERA_STREAM=1` with a private-network `HSX_RTSP_URL`, or
+`HSX_ENABLE_MOTION_MONITOR=1`; these two camera daemons are mutually exclusive by
+default because many webcams cannot be opened by both at once. The FFmpeg publisher
+pushes to an already-running RTSP server (for example, MediaMTX); FFmpeg itself does
+not host the RTSP endpoint. Motion snapshots are bounded to 500 files under
+`data/snapshots/motion/`, with event metadata in `data/motion_events.json`.
+
+Install `ffmpeg` or `fswebcam` for still captures. Set
+`HSX_ENABLE_VISION_CAPTURE=1` to allow a user-requested live camera frame to be sent
+to the configured Gemini provider. Local camera access still requires the existing
+owner confirmation; captured frame bytes are omitted from conversation history and
+the latest JPEG is stored with owner-only permissions at `data/snapshots/latest.jpg`.
+Voice alerts require `HSX_ENABLE_VOICE_ALERTS=1`, a local Piper model path in
+`HSX_PIPER_MODEL`, and `piper` plus `aplay`. Lightweight `aplay` tones require
+`HSX_ENABLE_AUDIO_ALERTS=1`.
+
+To install the optional AirPlay receiver on Debian, run
+`sudo bash deploy/setup_airplay.sh`. It installs Shairport Sync, Avahi, and ALSA
+utilities and backs up an existing Shairport configuration before replacing it.
+Set `HSX_AIRPLAY_NAME` in the installer environment to customize the advertised
+receiver name. Keep the server bound to localhost. When
 `HSX_OWNER_PIN` is omitted, an owner PIN is generated and shown once.
 The PIN is stored as a salted hash outside the agent context and is never placed in a
 prompt or memory record.
@@ -308,6 +347,13 @@ The `tool_creator` skill can generate a temporary skill when an approved request
 missing capability. Generated code is checked for syntax, imports, paths, filesystem
 writes, and risk metadata. It is placed in controlled scratch storage by default;
 permanent promotion requires an explicit request and owner approval.
+
+The separate `create_dynamic_tool` meta-tool registers declarations backed only by
+vetted pure text operations. It does not import or execute arbitrary model-generated
+Python. Successful, non-sensitive jobs are exported to `data/sft_dataset.jsonl` with
+credential-like strings redacted; sensitive jobs are excluded. The optional local RAG
+index uses hashed features instead of external embedding APIs and excludes hidden,
+generated, dependency, and data directories from its streaming workspace scan.
 
 The self-improvement workflow is proposal-only: prototypes remain isolated, production
 files and dependencies are not changed automatically, strict tests are required, and

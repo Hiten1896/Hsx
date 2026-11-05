@@ -20,8 +20,11 @@ from agent.ask_user import AskUserJobs, AskUserRequest
 from agent.jobs import JobQueue
 from agent.approval import ApprovalGuard
 from agent.devices import DeviceRegistry, system_body_state
+from agent.hardware import AUDIO_ALERTS
 from agent.llm_client import PROVIDER_BANDIT, record_provider_feedback
 from agent.ml.forecaster import FORECASTER, classify_job
+from agent.ml.dataset_exporter import SFT_DATASET
+from agent.ml.intent_learning import UNCERTAIN_INTENTS
 from agent.ml.memory import EXPERIENCE_MEMORY
 from agent.memory import MemoryManager
 from agent.notifier import Notifier
@@ -30,6 +33,7 @@ from agent.policy import POLICY
 from agent.router import INTENT_ROUTER, LLM_TELEMETRY, ROUTER_LOGGER
 from agent.self_improvement import SelfImprovement
 from agent.skill_loader import load_skills, set_runtime_registry
+from agent.tools.dynamic_registry import DYNAMIC_TOOLS, register_meta_tool
 from agent.workspace import Workspace, task_output_path, task_output_scope, workspace_search
 from config import (
     ALLOWED_ORIGINS,
@@ -50,6 +54,11 @@ _ask_job_payload = ask_job_payload
 ROOT = Path(__file__).resolve().parent
 LOGGER = logging.getLogger("hsx.server")
 TOOLS, SKILL_MAP = load_skills(str(ROOT / "skills"))
+try:
+    DYNAMIC_TOOLS.restore(TOOLS, SKILL_MAP)
+    register_meta_tool(TOOLS, SKILL_MAP)
+except (OSError, RuntimeError, TypeError, ValueError):
+    LOGGER.exception("Could not restore the constrained dynamic tool registry.")
 if INTENT_ROUTER.model_path.is_file():
     INTENT_ROUTER.load()
 else:
@@ -78,6 +87,16 @@ IMPROVEMENTS = SelfImprovement(
 DEVICES = DeviceRegistry(approval_guard=APPROVAL_GUARD)
 WORKSPACE = Workspace(WORKSPACE_DIR, WORK_DIR)
 NOTIFIER = Notifier(DATA_DIR / "notifications.db")
+
+
+def _hardware_audio_alert(*, succeeded: bool, message: str = "") -> None:
+    try:
+        if succeeded:
+            AUDIO_ALERTS.notify_success(message or "Hsx task completed successfully.")
+        else:
+            AUDIO_ALERTS.play_async("warning")
+    except (OSError, RuntimeError, ValueError):
+        LOGGER.exception("Could not queue a hardware audio alert.")
 
 
 def _emit_chat_event(job_id: str, event: str, payload: dict) -> None:
@@ -109,6 +128,7 @@ def _record_job_telemetry(
     succeeded: bool,
     sensitive: bool = False,
     response: str = "",
+    history: list | None = None,
 ) -> None:
     try:
         FORECASTER.record_job(
@@ -118,6 +138,13 @@ def _record_job_telemetry(
         )
         if succeeded and not sensitive:
             EXPERIENCE_MEMORY.record_success(job["request"], response)
+            SFT_DATASET.record_success(
+                job["request"],
+                response,
+                job_id=job["id"],
+                history=history,
+                sensitive=sensitive,
+            )
     except (OSError, RuntimeError, TypeError, ValueError):
         LOGGER.exception("Could not persist local ML task telemetry for job %s.", job["id"])
 
@@ -131,6 +158,10 @@ def _fail_job(
     started_at: float | None = None,
 ) -> None:
     error_message = _job_error(error)
+    try:
+        UNCERTAIN_INTENTS.resolve(job_id, succeeded=False)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        LOGGER.exception("Could not save uncertain intent failure for job %s.", job_id)
     LOGGER.exception("HSX job %s failed during agent execution: %s", job_id, error_message)
     failed = ASK_JOBS.fail(job_id, error_message)
     if started_at is not None:
@@ -144,6 +175,7 @@ def _fail_job(
         _emit_chat_event(job_id, "error", {"message": error_message})
         _emit_chat_event(job_id, "done", {})
     POLICY.audit_event("job_failed", job["session_id"], job_id, "failed")
+    _hardware_audio_alert(succeeded=False)
     NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
 
 
@@ -200,8 +232,10 @@ def _resume_ask_job(job_id: str) -> None:
         succeeded=True,
         sensitive=job.get("sensitive", False),
         response=response,
+        history=history,
     )
     POLICY.audit_event("job_done", job["session_id"], job_id, "done")
+    _hardware_audio_alert(succeeded=True)
     NOTIFIER.notify(
         "job_done",
         "Your Hsx task is complete",
@@ -291,10 +325,12 @@ def _run_chat_job(
         succeeded=True,
         sensitive=sensitive,
         response=response,
+        history=updated_history,
     )
     _emit_chat_event(job_id, "job", _ask_job_payload(ASK_JOBS.get(job_id)))
     _emit_chat_event(job_id, "done", {})
     POLICY.audit_event("job_done", job["session_id"], job_id, "done")
+    _hardware_audio_alert(succeeded=True)
     NOTIFIER.notify(
         "job_done",
         "Your Hsx task is complete",

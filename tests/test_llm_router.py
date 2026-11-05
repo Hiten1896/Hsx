@@ -107,6 +107,23 @@ def test_provider_bandit_persists_attempts_latency_and_idempotent_feedback(tmp_p
     assert reloaded.snapshot()["providers"]["gemini"]["thumbs_down"] == 1
 
 
+def test_provider_bandit_prioritizes_cloud_providers_for_uncertain_intent(tmp_path):
+    from agent.llm_client import ProviderBandit
+
+    bandit = ProviderBandit(tmp_path / "provider-bandit.json", random.Random(7))
+    providers = [
+        SimpleNamespace(name="ollama"),
+        SimpleNamespace(name="groq"),
+        SimpleNamespace(name="openai"),
+    ]
+
+    assert [item.name for item in bandit.rank(providers, prefer_cloud=True)] == [
+        "openai",
+        "groq",
+        "ollama",
+    ]
+
+
 def test_llm_client_records_provider_attempts_and_links_user_feedback(monkeypatch, tmp_path):
     from agent import llm_client
 

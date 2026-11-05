@@ -83,3 +83,6 @@ def test_server_bootstrap_registers_tool_creator():
 
     assert "tool_creator" in server.SKILL_MAP
     assert any(tool["name"] == "tool_creator" for tool in server.TOOLS)
+    dynamic_meta = next(tool for tool in server.TOOLS if tool["name"] == "create_dynamic_tool")
+    assert dynamic_meta["risk"] == "confirm"
+    assert server.SKILL_MAP["create_dynamic_tool"]

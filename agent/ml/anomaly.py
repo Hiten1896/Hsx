@@ -209,6 +209,7 @@ class AnomalyMonitor:
         collector: SystemMetricsCollector | None = None,
         interval_seconds: float = 10.0,
         on_sample: Callable[[SystemMetrics], None] | None = None,
+        on_anomaly: Callable[[dict], None] | None = None,
     ):
         if interval_seconds <= 0:
             raise ValueError("interval_seconds must be positive.")
@@ -216,6 +217,7 @@ class AnomalyMonitor:
         self.collector = collector or SystemMetricsCollector()
         self.interval_seconds = interval_seconds
         self.on_sample = on_sample
+        self.on_anomaly = on_anomaly
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -239,7 +241,9 @@ class AnomalyMonitor:
         while not self._stop.is_set():
             try:
                 metrics = self.collector.sample()
-                self.detector.observe(metrics)
+                anomaly = self.detector.observe(metrics)
+                if anomaly is not None and self.on_anomaly is not None:
+                    self.on_anomaly(anomaly)
                 if self.on_sample is not None:
                     self.on_sample(metrics)
             except (OSError, RuntimeError, ValueError, psutil.Error):
