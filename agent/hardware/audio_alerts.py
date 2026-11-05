@@ -31,7 +31,7 @@ class AudioAlerts:
         self._queue: queue.Queue[str | None] = queue.Queue(maxsize=MAX_ALERTS)
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
-        self._last_warning = 0.0
+        self._last_warning = -WARNING_COOLDOWN_SECONDS
         self._closed = False
 
     @staticmethod

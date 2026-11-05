@@ -1,15 +1,16 @@
 import threading
 import urllib.request
-import shutil
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import server
 from agent.approval import ApprovalGuard
 from agent.llm_client import call_llm
-from skills.run_code.skill import run
+from skills.run_code import skill as run_code
+from skills.run_code.skill import _docker_available, run
 
 
 def test_wrong_pin_locks_out(tmp_path: Path):
@@ -38,12 +39,22 @@ def test_run_code_subprocess_is_deterministic(monkeypatch):
     assert result["sandbox"] == "subprocess"
 
 
-@pytest.mark.skipif(shutil.which("docker") is None, reason="Docker is unavailable")
+@pytest.mark.skipif(not _docker_available(), reason="Docker daemon is unavailable")
 def test_run_code_docker():
     result = run("print(1 + 1)")
-    assert result["success"]
+    assert result["success"], result
     assert result["stdout"].strip() == "2"
     assert result["sandbox"] == "docker"
+
+
+def test_docker_availability_requires_an_responding_daemon(monkeypatch):
+    monkeypatch.setattr(run_code.shutil, "which", lambda _: "docker")
+    monkeypatch.setattr(
+        run_code.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1),
+    )
+    assert not _docker_available()
 
 
 def test_local_api_accepts_requests_without_token():

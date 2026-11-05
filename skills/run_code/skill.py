@@ -29,7 +29,21 @@ def _safe_environment() -> dict[str, str]:
 
 
 def _docker_available() -> bool:
-    return shutil.which("docker") is not None
+    docker = shutil.which("docker")
+    if docker is None:
+        return False
+    try:
+        result = subprocess.run(
+            [docker, "info"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
 
 
 def _run_docker(code: str, workdir: Path) -> subprocess.CompletedProcess[str]:
