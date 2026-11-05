@@ -63,6 +63,8 @@ def test_tui_has_native_feedback_buttons_with_shared_layout():
         app = HsxTUI("http://127.0.0.1:1")
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
+            await app.refresh_telemetry()
+            assert "Could not reach HSX server" in app.query_one("#connection").render().plain
             app._new_message("assistant", "Hello **there**.", "test-job")
             await pilot.pause()
             assert app.query_one("#status-header")

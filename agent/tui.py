@@ -222,6 +222,12 @@ class HsxTUI(App):
         self.set_interval(2.5, self.refresh_telemetry)
         self.run_worker(self.refresh_telemetry(), name="initial-telemetry")
 
+    def _fetch_telemetry(self) -> dict:
+        try:
+            return self._api_request(_API["endpoints"]["telemetry"])
+        except (RuntimeError, ValueError, LookupError) as error:
+            return {"error": str(error)}
+
     def _api_request(self, endpoint: str, payload: dict | None = None) -> dict:
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
         request = urllib.request.Request(
@@ -249,13 +255,18 @@ class HsxTUI(App):
     async def refresh_telemetry(self) -> None:
         try:
             worker = self.run_worker(
-                lambda: self._api_request(_API["endpoints"]["telemetry"]),
+                self._fetch_telemetry,
                 thread=True,
                 name="telemetry",
                 exit_on_error=False,
             )
             telemetry = await worker.wait()
             if telemetry is None:
+                return
+            if telemetry.get("error"):
+                self.query_one("#connection", Static).update(
+                    f"●  {str(telemetry['error'])[:28]}"
+                )
                 return
             self.query_one("#metric-provider", Static).update(
                 f"MODEL  {telemetry.get('model', '—')} · {telemetry.get('provider', '—')}"
