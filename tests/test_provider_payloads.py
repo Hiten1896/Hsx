@@ -4,7 +4,6 @@ import pytest
 
 from agent.llm.providers import OpenAICompatibleProvider, assert_payload_valid, to_gemini_payload, to_openai_payload
 from agent.llm.types import LLMRequest
-from agent.llm_client import NormalizedBlock
 
 
 def test_gemini_payload_uses_native_parts_for_text_turns():
@@ -16,7 +15,7 @@ def test_gemini_payload_uses_native_parts_for_text_turns():
 
     assert to_gemini_payload(LLMRequest([
         {"role": "user", "content": "hello"},
-        {"role": "assistant", "content": [NormalizedBlock(type="text", text="hi")]},
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
         {"role": "user", "content": "next"},
     ])) == {
         "contents": [
@@ -30,9 +29,9 @@ def test_gemini_payload_uses_native_parts_for_text_turns():
 def test_gemini_payload_uses_function_call_and_response_parts():
     payload = to_gemini_payload(LLMRequest([
         {"role": "user", "content": "search"},
-        {"role": "assistant", "content": [NormalizedBlock(
-            type="tool_use", name="search", input={"query": "cats"}, id="call-1"
-        )]},
+        {"role": "assistant", "content": [{
+            "type": "tool_use", "name": "search", "input": {"query": "cats"}, "id": "call-1"
+        }]},
         {"role": "user", "content": [{
             "type": "tool_result",
             "tool_use_id": "call-1",
@@ -47,7 +46,7 @@ def test_gemini_payload_uses_function_call_and_response_parts():
             {"role": "model", "parts": [{
                 "functionCall": {"name": "search", "args": {"query": "cats"}}
             }]},
-            {"role": "user", "parts": [{
+            {"role": "function", "parts": [{
                 "functionResponse": {
                     "name": "search",
                     "response": {"items": ["cat"]},
@@ -83,7 +82,7 @@ def test_groq_payload_uses_openai_text_and_tool_schemas():
 
     assert to_openai_payload(LLMRequest([
         {"role": "user", "content": "hello"},
-        {"role": "assistant", "content": [NormalizedBlock(type="text", text="hi")]},
+        {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
         {"role": "user", "content": "next"},
     ]), "llama")["messages"] == [
         {"role": "user", "content": "hello"},
@@ -95,9 +94,9 @@ def test_groq_payload_uses_openai_text_and_tool_schemas():
 def test_groq_payload_uses_tool_calls_and_tool_results():
     payload = to_openai_payload(LLMRequest([
         {"role": "user", "content": "search"},
-        {"role": "assistant", "content": [NormalizedBlock(
-            type="tool_use", name="search", input={"query": "cats"}, id="call-1"
-        )]},
+        {"role": "assistant", "content": [{
+            "type": "tool_use", "name": "search", "input": {"query": "cats"}, "id": "call-1"
+        }]},
         {"role": "user", "content": [{
             "type": "tool_result",
             "tool_use_id": "call-1",

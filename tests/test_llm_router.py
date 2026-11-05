@@ -5,8 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from agent.llm.providers import GeminiProvider, JSONHTTPProvider, OpenAICompatibleProvider, ProviderError
-from agent.llm_client import NormalizedBlock
+from agent.llm.providers import GeminiProvider, JSONHTTPProvider, OllamaProvider, OpenAICompatibleProvider, ProviderError
 from agent.llm.router import LLMRouter
 from agent.llm.types import LLMEvent, LLMRequest
 
@@ -151,45 +150,124 @@ def test_gemini_sends_key_header_and_maps_roles_and_system_instruction():
         thread.join()
 
 
-@pytest.mark.parametrize("provider_kind", ["gemini", "groq"])
-def test_provider_payload_serializes_blocks_from_consecutive_turns(provider_kind, monkeypatch):
-    payloads = []
+@pytest.mark.parametrize("provider_kind", ["gemini", "groq", "ollama"])
+def test_provider_completes_tool_call_loop_with_local_http_server(provider_kind):
+    received = []
+    responses = {
+        "gemini": [
+            {"candidates": [{"content": {"parts": [{"functionCall": {"name": "search", "args": {"query": "news"}}}]}}]},
+            {"candidates": [{"content": {"parts": [{"text": "Here is the result."}]}}]},
+        ],
+        "groq": [
+            {"choices": [{"message": {"tool_calls": [{
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "search", "arguments": '{"query":"news"}'},
+            }]}, "finish_reason": "tool_calls"}]},
+            {"choices": [{"message": {"content": "Here is the result."}, "finish_reason": "stop"}]},
+        ],
+        "ollama": [
+            {"message": {"tool_calls": [{
+                "id": "call-1",
+                "function": {"name": "search", "arguments": {"query": "news"}},
+            }]}},
+            {"message": {"content": "Here is the result."}},
+        ],
+    }
 
-    def capture_payload(payload):
-        payloads.append(payload)
-        json.dumps(payload)
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            received.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            body = json.dumps(responses[provider_kind][len(received) - 1]).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        endpoint = f"http://127.0.0.1:{server.server_port}"
         if provider_kind == "gemini":
-            return {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
-        return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]}
+            provider = GeminiProvider("test", endpoint, "secret")
+        elif provider_kind == "ollama":
+            provider = OllamaProvider("test", endpoint)
+        else:
+            provider = OpenAICompatibleProvider("groq", "secret", "test", endpoint)
 
-    if provider_kind == "gemini":
-        provider = GeminiProvider("test", "https://example.test", "secret")
-    else:
-        provider = OpenAICompatibleProvider("groq", "secret", "test", "https://example.test")
-    monkeypatch.setattr(provider, "_post", capture_payload)
+        history = [{"role": "user", "content": "Find recent news."}]
+        first_events = list(provider.generate(LLMRequest(history, tools=[{
+            "name": "search",
+            "description": "Search the web",
+            "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+        }])))
+        tool_call = next(event for event in first_events if event.type == "tool_call")
+        history.append({
+            "role": "assistant",
+            "content": [{
+                "type": "tool_use",
+                "id": tool_call.tool_call_id,
+                "name": tool_call.tool_name,
+                "input": tool_call.tool_input,
+            }],
+        })
+        history.append({
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": tool_call.tool_call_id,
+                "content": '{"results":["A news story"]}',
+            }],
+        })
+        final_events = list(provider.generate(LLMRequest(history, tools=[{
+            "name": "search",
+            "description": "Search the web",
+            "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+        }])))
 
-    history = [{"role": "user", "content": "first"}]
-    list(provider.generate(LLMRequest(history)))
-    history.append({"role": "assistant", "content": [NormalizedBlock(type="text", text="hello")]})
-    history.append({"role": "user", "content": "second"})
-    list(provider.generate(LLMRequest(history)))
-    history.append({
-        "role": "assistant",
-        "content": [NormalizedBlock(type="tool_use", name="search", input={"query": "news"}, id="call-1")],
-    })
-    history.append({
-        "role": "user",
-        "content": [{"type": "tool_result", "tool_use_id": "call-1", "content": "done"}],
-    })
-    list(provider.generate(LLMRequest(history)))
-
-    assert len(payloads) == 3
-    assert payloads[-1]["messages" if provider_kind == "groq" else "contents"]
+        assert [event.text for event in final_events if event.type == "text_delta"] == ["Here is the result."]
+        assert len(received) == 2
+        json.dumps(history)
+        if provider_kind == "gemini":
+            contents = received[1]["contents"]
+            assert contents[1] == {
+                "role": "model",
+                "parts": [{"functionCall": {"name": "search", "args": {"query": "news"}}}],
+            }
+            assert contents[2] == {
+                "role": "function",
+                "parts": [{"functionResponse": {"name": "search", "response": {"results": ["A news story"]}}}],
+            }
+        else:
+            messages = received[1]["messages"]
+            assistant = next(message for message in messages if message.get("tool_calls"))
+            tool_result = next(message for message in messages if message["role"] == "tool")
+            assert assistant["tool_calls"][0] == {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "search", "arguments": '{"query": "news"}'},
+            }
+            assert tool_result == {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": '{"results":["A news story"]}',
+            }
+            if provider_kind == "ollama":
+                assert received[1]["stream"] is False
+    finally:
+        server.shutdown()
+        thread.join()
 
 
 def test_provider_error_includes_status_body_and_redacts_api_key():
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
             self.send_response(403)
             self.end_headers()
             self.wfile.write(b'{"error":"bad secret-key and Bearer secret-key"}')

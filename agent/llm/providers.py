@@ -94,8 +94,8 @@ def _validate_gemini_payload(payload: dict[str, Any]) -> None:
         if not isinstance(content, dict):
             raise _shape_error(provider, path, "content", "must be an object")
         _require_keys(provider, content, path, {"role", "parts"}, {"role", "parts"})
-        if content["role"] not in {"user", "model"}:
-            raise _shape_error(provider, f"{path}.role", "role", "must be user or model")
+        if content["role"] not in {"user", "model", "function"}:
+            raise _shape_error(provider, f"{path}.role", "role", "must be user, model, or function")
         if not isinstance(content["parts"], list):
             raise _shape_error(provider, f"{path}.parts", "parts", "must be a list")
         for part_index, part in enumerate(content["parts"]):
@@ -348,10 +348,9 @@ def to_gemini_payload(request: LLMRequest) -> dict[str, Any]:
                         "response": _gemini_response_value(block.get("content", "")),
                     }
                 })
-        contents.append({
-            "role": "model" if message.get("role") == "assistant" else "user",
-            "parts": parts,
-        })
+        has_function_response = any("functionResponse" in part for part in parts)
+        role = "function" if has_function_response else "model" if message.get("role") == "assistant" else "user"
+        contents.append({"role": role, "parts": parts})
 
     payload: dict[str, Any] = {"contents": contents}
     if request.system:
@@ -371,6 +370,20 @@ def _openai_tool_result_content(content: Any) -> str:
     if isinstance(content, str):
         return content
     return json.dumps(content)
+
+
+def _tool_arguments(arguments: Any, provider: str) -> dict[str, Any]:
+    if isinstance(arguments, dict):
+        return arguments
+    if not isinstance(arguments, str):
+        raise ProviderError(f"{provider} returned invalid tool arguments: expected an object or JSON string")
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError as error:
+        raise ProviderError(f"{provider} returned invalid tool arguments: {error}") from error
+    if not isinstance(parsed, dict):
+        raise ProviderError(f"{provider} returned invalid tool arguments: expected a JSON object")
+    return parsed
 
 
 def to_openai_payload(request: LLMRequest, model: str = "") -> dict[str, Any]:
@@ -466,9 +479,21 @@ class OllamaProvider(JSONHTTPProvider):
     name = "ollama"
 
     def generate(self, request: LLMRequest) -> EventStream:
-        data = self._post({"model": self.model, "messages": request.messages, "stream": False})
+        payload = to_openai_payload(request, self.model)
+        payload["stream"] = False
+        data = self._post(payload)
         message = data.get("message", {})
-        yield LLMEvent(type="text_delta", text=message.get("content", ""))
+        content = message.get("content") or ""
+        if content:
+            yield LLMEvent(type="text_delta", text=content)
+        for tool_call in message.get("tool_calls", []):
+            function = tool_call.get("function", {})
+            yield LLMEvent(
+                type="tool_call",
+                tool_name=function.get("name", ""),
+                tool_input=_tool_arguments(function.get("arguments", {}), self.name),
+                tool_call_id=tool_call.get("id", ""),
+            )
         yield LLMEvent(type="stop", stop_reason="stop")
 
 
@@ -488,14 +513,10 @@ class OpenAICompatibleProvider(JSONHTTPProvider):
             yield LLMEvent(type="text_delta", text=content)
         for tool_call in message.get("tool_calls", []):
             function = tool_call.get("function", {})
-            try:
-                tool_input = json.loads(function.get("arguments", "{}"))
-            except json.JSONDecodeError as error:
-                raise ProviderError(f"{self.name} returned invalid tool arguments: {error}") from error
             yield LLMEvent(
                 type="tool_call",
                 tool_name=function.get("name", ""),
-                tool_input=tool_input,
+                tool_input=_tool_arguments(function.get("arguments", "{}"), self.name),
                 tool_call_id=tool_call.get("id", ""),
             )
         yield LLMEvent(type="stop", stop_reason=choice.get("finish_reason", "stop"))
