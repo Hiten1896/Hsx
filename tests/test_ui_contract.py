@@ -21,6 +21,8 @@ def test_web_and_tui_load_the_same_design_and_api_contract():
     assert web_api["endpoints"]["feedback"] == "/api/feedback"
     assert web_api["endpoints"]["telemetry"] == "/api/telemetry"
     assert web_api["endpoints"]["activity"] == "/api/activity"
+    assert web_api["endpoints"]["notifications"] == "/api/notifications"
+    assert web_api["endpoints"]["notifications_read"] == "/api/notifications/read"
 
 
 def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
@@ -38,10 +40,19 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert 'id="artifacts-list"' in html
     assert 'id="agent-activity-list"' in html
     assert 'id="camera-retry"' in html
+    assert 'id="notifications-toggle"' in html
+    assert 'id="notifications-panel"' in html
     assert 'id="camera-clock"' in html
     assert 'id="camera-latency"' in html
     assert 'id="camera-clip-time"' in html
     assert 'id="file-input"' in html
+    assert 'id="file-input" class="sr-only" type="file" multiple>' in html
+    assert 'class="chat-header"' not in html
+    assert 'class="camera-info"' not in html
+    assert 'class="camera-caption"' not in html
+    assert 'id="browse-files-button"' not in html
+    assert html.index('id="new-chat-button"') < html.index('class="activity-panel sidebar-activity"') < html.index('class="connections"')
+    assert html.count('id="agent-activity-list"') == 1
     assert 'data-feedback="good"' in html
     assert 'data-feedback="bad"' in html
     assert "marked.parse" in script
@@ -52,6 +63,10 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert "hsx-bearer-token" in script
     assert "elements.composer.addEventListener('submit'" in script
     assert "elements.stop.addEventListener('click', stopTask)" in script
+    assert "new AbortController()" in script
+    assert "controller.abort()" in script
+    assert "receivedDone" in script
+    assert "The connection ended before Hsx finished. Your draft was kept." in script
     assert "submitFeedback(article, button.dataset.feedback)" in script
     assert "apiContract.endpoints.chat_stream" in script
     assert "apiContract.endpoints.feedback" in script
@@ -61,6 +76,9 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert "apiContract.endpoints.outputs" in script
     assert "apiContract.endpoints.activity" in script
     assert "function retryCamera" in script
+    assert "target_device: 'local_host'" in script
+    assert "apiContract.endpoints.notifications" in script
+    assert "apiContract.endpoints.notifications_read" in script
     assert "function openMobilePanel" in script
     assert "X-Hsx-Captured-At" in script
     assert "WORKSPACE</span>" not in html
@@ -71,6 +89,8 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert ".camera-sidebar.is-open" in css
     assert ".artifacts-panel" in css
     assert ".activity-panel" in css
+    assert "grid-template-rows: minmax(0, 1fr) auto" in css
+    assert "aspect-ratio: 16 / 9" in css
     assert html.index('class="sidebar-bottom"') < html.index('class="connections"')
 
     service_worker = (BASE_DIR / "web" / "service-worker.js").read_text(encoding="utf-8")

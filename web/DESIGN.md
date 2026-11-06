@@ -18,6 +18,12 @@ for shared design and server contracts.
   Sensitive task prompts are not shown; other summaries are redacted and bounded.
 - The connection panel is at the bottom of the navigation rail/drawer. The camera
   heading's refresh button requests a fresh host-camera stream.
+- Browser chat commands target the Hsx host, not the phone or laptop. Remote
+  local-host execution requires the existing authenticated access path; dangerous
+  actions still pause for approval in the page.
+- The notification bell is available on desktop and mobile. It reads Hsx's persisted
+  in-app notifications, shows unread counts, and opens approval/job notifications in
+  the page.
 
 Only features backed by the current API are shown. Workspace attachments are supported
 for text, Markdown, CSV, JSON, log, and code/text files up to 1 MB. They upload through

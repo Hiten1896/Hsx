@@ -81,6 +81,13 @@ remain bearer-protected. The Tailnet indicator describes whether the page is cur
 hostname; the browser network indicator uses `navigator.onLine` and is not a host-side
 internet reachability test.
 
+Browser chat requests explicitly target `local_host`, so tools execute on the Hsx
+server. Remote callers must first pass the existing Tailscale bearer or mesh
+authorization; action policy and approval gates are still enforced server-side. The
+desktop/mobile notification bell reads the persisted in-app notification feed,
+displays unread items, and opens related pending approval or task cards without
+exposing raw event payloads.
+
 ## Approval and prompts
 
 Approvals and ask-user prompts use plain English and do not expose raw JSON or internal

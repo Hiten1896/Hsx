@@ -38,7 +38,12 @@ ALLOWED_CAPABILITIES = frozenset({
 })
 
 
-def resolve_target_device(target_device: str, peer_host: str) -> str:
+def resolve_target_device(
+    target_device: str,
+    peer_host: str,
+    *,
+    allow_remote_local_host: bool = False,
+) -> str:
     if target_device not in {"local_host", "client_browser"}:
         raise ValueError("target_device must be local_host or client_browser.")
     if target_device == "local_host":
@@ -51,7 +56,7 @@ def resolve_target_device(target_device: str, peer_host: str) -> str:
             )
         except ValueError:
             is_local = peer_host.lower() == "localhost"
-        if not is_local:
+        if not is_local and not allow_remote_local_host:
             raise PermissionError("local_host routing is only available to requests from this machine.")
     return target_device
 

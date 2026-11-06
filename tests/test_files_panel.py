@@ -1,3 +1,4 @@
+import base64
 import json
 import threading
 import time
@@ -8,6 +9,7 @@ from pathlib import Path
 
 import server
 from agent.ask_user import AskUserJobs, AskUserRequest
+from agent.notifier import Notifier
 from agent.workspace import Workspace
 
 
@@ -109,6 +111,27 @@ def test_activity_endpoint_lists_only_the_session_and_hides_sensitive_prompts(tm
     assert all(item["state"] == "running" for item in tasks)
 
 
+def test_web_notifications_list_approval_and_mark_it_read(tmp_path: Path, monkeypatch):
+    notifier = Notifier(tmp_path / "notifications.db")
+    notifier.notify("needs_approval", "Hsx needs approval", job_id="approval-job")
+    monkeypatch.setattr(server, "NOTIFIER", notifier)
+
+    status, _, body = _request("/api/notifications")
+    assert status == 200
+    result = json.loads(body)
+    assert result["unread"] == 1
+    assert result["notifications"][0]["event"] == "needs_approval"
+    assert result["notifications"][0]["job_id"] == "approval-job"
+
+    status, _, body = _request(
+        "/api/notifications/read",
+        method="POST",
+        payload={"id": result["notifications"][0]["id"]},
+    )
+    assert status == 200
+    assert json.loads(body)["unread"] == 0
+
+
 def test_text_upload_returns_workspace_path_for_chat_attachment(tmp_path: Path, monkeypatch):
     root = tmp_path / "share"
     root.mkdir()
@@ -127,6 +150,30 @@ def test_text_upload_returns_workspace_path_for_chat_attachment(tmp_path: Path, 
     assert uploaded.read_text(encoding="utf-8") == "local attachment content"
 
 
+def test_binary_upload_preserves_bytes_and_rejects_invalid_base64(tmp_path: Path, monkeypatch):
+    root = tmp_path / "share"
+    root.mkdir()
+    monkeypatch.setattr(server, "WORKSPACE", Workspace(root, "Hsx Work"))
+    content = b"\x00\xff\x10binary\x80data"
+
+    status, _, body = _request(
+        "/api/upload",
+        method="POST",
+        payload={"filename": "archive.bin", "content_base64": base64.b64encode(content).decode("ascii")},
+    )
+    result = json.loads(body)
+    assert status == 200
+    assert server.WORKSPACE.resolve_read(result["path"]).read_bytes() == content
+
+    status, _, body = _request(
+        "/api/upload",
+        method="POST",
+        payload={"filename": "broken.bin", "content_base64": "not-base64!"},
+    )
+    assert status == 400
+    assert json.loads(body)["error"] == "File data is invalid."
+
+
 def test_chat_stream_forwards_model_text_deltas(tmp_path: Path, monkeypatch):
     root = tmp_path / "share"
     root.mkdir()
@@ -135,7 +182,10 @@ def test_chat_stream_forwards_model_text_deltas(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(server, "ASK_JOBS", AskUserJobs(tmp_path / "jobs.db"))
     monkeypatch.setattr(server.POLICY, "audit_event", lambda *args: None)
 
+    observed_targets = []
+
     def fake_run_chat_job(job_id, approvals, sensitive, target_device, on_text_delta):
+        observed_targets.append(target_device)
         on_text_delta("Streaming ")
         on_text_delta("answer")
         completed = server.ASK_JOBS.complete(job_id, "Streaming answer", [])
@@ -146,7 +196,7 @@ def test_chat_stream_forwards_model_text_deltas(tmp_path: Path, monkeypatch):
     status, headers, body = _request(
         "/api/chat/stream",
         method="POST",
-        payload={"message": "Say hello", "target_device": "client_browser"},
+        payload={"message": "Say hello", "target_device": "local_host"},
         stop_event="done",
     )
 
@@ -157,6 +207,7 @@ def test_chat_stream_forwards_model_text_deltas(tmp_path: Path, monkeypatch):
     assert "event: text_delta\ndata: {\"text\":\"Streaming \"}" in text
     assert "event: text_delta\ndata: {\"text\":\"answer\"}" in text
     assert '"result":"Streaming answer"' in text
+    assert observed_targets == ["local_host"]
 
 
 def test_files_panel_rejects_traversal(tmp_path: Path, monkeypatch):

@@ -34,6 +34,11 @@ def test_local_host_routing_is_limited_to_loopback():
     assert resolve_target_device("client_browser", "203.0.113.10") == "client_browser"
     with pytest.raises(PermissionError):
         resolve_target_device("local_host", "203.0.113.10")
+    assert resolve_target_device(
+        "local_host",
+        "203.0.113.10",
+        allow_remote_local_host=True,
+    ) == "local_host"
     with pytest.raises(ValueError):
         resolve_target_device("unknown", "127.0.0.1")
 

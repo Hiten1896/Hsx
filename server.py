@@ -1,5 +1,7 @@
 import hmac
 import ipaddress
+import base64
+import binascii
 import json
 import logging
 import mimetypes
@@ -587,6 +589,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                 ):
                     self._json({"error": "Valid Tailscale bearer authentication is required."}, 401)
                     return False
+                self._authorized_remote_control = True
                 return True
             if MESH_GATEWAY is not None:
                 allowed, status, message = MESH_GATEWAY.authorize(
@@ -596,6 +599,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                     self.client_address[0],
                 )
                 if allowed:
+                    self._authorized_remote_control = True
                     return True
                 self._json({"error": message}, status)
                 return False
@@ -879,6 +883,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                 target_device = resolve_target_device(
                     str(payload.get("target_device", "client_browser")),
                     self.client_address[0],
+                    allow_remote_local_host=getattr(self, "_authorized_remote_control", False),
                 )
             except (ValueError, PermissionError) as error:
                 self._json({"error": str(error)}, 400 if isinstance(error, ValueError) else 403)
@@ -1106,6 +1111,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                 target_device = resolve_target_device(
                     str(payload.get("target_device", "client_browser")),
                     self.client_address[0],
+                    allow_remote_local_host=getattr(self, "_authorized_remote_control", False),
                 )
             except (ValueError, PermissionError) as error:
                 self._json({"error": str(error)}, 400 if isinstance(error, ValueError) else 403)
@@ -1198,17 +1204,31 @@ class HsxHandler(BaseHTTPRequestHandler):
                 self._json({"error": "Upload size is invalid."}, 400)
                 return
             if body_length <= 0 or body_length > 6 * 1024 * 1024:
-                self._json({"error": "Text file uploads must be 1 MB or smaller."}, 413)
+                self._json({"error": "Files must be 1 MB or smaller."}, 413)
                 return
             payload = self._body()
             filename = Path(str(payload.get("filename", "upload.txt"))).name
-            content = str(payload.get("content", ""))
-            if not content or not filename:
+            if "content_base64" in payload:
+                encoded = payload["content_base64"]
+                if not isinstance(encoded, str):
+                    self._json({"error": "File data is invalid."}, 400)
+                    return
+                try:
+                    content = base64.b64decode(encoded, validate=True)
+                except (ValueError, binascii.Error):
+                    self._json({"error": "File data is invalid."}, 400)
+                    return
+            else:
+                content = str(payload.get("content", "")).encode("utf-8")
+            if len(content) > 1024 * 1024:
+                self._json({"error": "Files must be 1 MB or smaller."}, 413)
+                return
+            if not filename:
                 self._json({"error": "A file is required."}, 400)
                 return
             try:
                 destination = task_output_path(WORKSPACE, filename, "Uploads")
-                with destination.open("x", encoding="utf-8") as uploaded_file:
+                with destination.open("xb") as uploaded_file:
                     uploaded_file.write(content)
             except (OSError, ValueError) as error:
                 self._json({"error": str(error)}, 400)

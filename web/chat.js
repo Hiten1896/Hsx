@@ -2,6 +2,12 @@ let sessionId = loadSessionId();
 let apiContract;
 let pendingQuestion = null;
 let submitting = false;
+let activeChatController = null;
+let voiceRecognition = null;
+let voiceIsListening = false;
+let voiceDraft = '';
+let voiceFinalText = '';
+let voiceStatusMessage = 'Files up to 1 MB each';
 let bearerToken = loadBearerToken();
 let uploadedAttachments = [];
 let cameraObjectUrl = '';
@@ -22,6 +28,9 @@ const elements = {
   template: document.getElementById('message-template'),
   activityTemplate: document.getElementById('activity-template'),
   welcome: document.getElementById('welcome-card'),
+  greeting: document.getElementById('greeting-title'),
+  conversationLayout: document.getElementById('conversation-layout'),
+  composerDock: document.querySelector('.composer-dock'),
   connection: document.getElementById('connection-label'),
   camera: document.getElementById('live-camera'),
   cameraStatus: document.getElementById('camera-status'),
@@ -38,6 +47,10 @@ const elements = {
   panelBackdrop: document.getElementById('panel-backdrop'),
   artifactsList: document.getElementById('artifacts-list'),
   activityList: document.getElementById('agent-activity-list'),
+  notificationPanel: document.getElementById('notifications-panel'),
+  notificationsList: document.getElementById('notifications-list'),
+  voiceButton: document.getElementById('voice-button'),
+  voiceIndicator: document.getElementById('voice-indicator'),
 };
 
 function safeStorageGet(storage, key) {
@@ -109,6 +122,36 @@ function scrollToLatest() {
   elements.stream.scrollTo({ top: elements.stream.scrollHeight, behavior: 'smooth' });
 }
 
+function updateGreeting() {
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  elements.greeting.textContent = `${greeting}, Sir`;
+}
+
+function setConversationEmpty(isEmpty) {
+  const wasEmpty = elements.conversationLayout.classList.contains('is-empty');
+  if (wasEmpty === isEmpty) return;
+  const before = elements.composerDock.getBoundingClientRect();
+  elements.conversationLayout.classList.toggle('is-empty', isEmpty);
+  elements.conversationLayout.classList.toggle('is-active', !isEmpty);
+  const after = elements.composerDock.getBoundingClientRect();
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || !elements.composerDock.animate) return;
+  const offsetX = before.left - after.left;
+  const offsetY = before.top - after.top;
+  elements.composerDock.animate(
+    [{ transform: `translate(${offsetX}px, ${offsetY}px)` }, { transform: 'translate(0, 0)' }],
+    { duration: 360, easing: 'cubic-bezier(.2,.8,.2,1)' },
+  );
+}
+
+function hasComposerContent() {
+  return Boolean(elements.prompt.value.trim() || uploadedAttachments.some((item) => item.status === 'ready'));
+}
+
+function updateSendButton() {
+  elements.send.hidden = submitting || !hasComposerContent();
+}
+
 function setConnection(id, labelId, value, state) {
   const dot = document.getElementById(id);
   const label = document.getElementById(labelId);
@@ -118,18 +161,13 @@ function setConnection(id, labelId, value, state) {
 
 function appendMessage(role, text, jobId = '', options = {}) {
   elements.welcome.hidden = true;
+  setConversationEmpty(false);
   const fragment = elements.template.content.cloneNode(true);
   const article = fragment.querySelector('.message-card');
   const content = fragment.querySelector('.message-content');
   article.dataset.role = role;
   article.dataset.response = String(text || '');
   if (jobId) article.dataset.jobId = jobId;
-  fragment.querySelector('.avatar').textContent = role === 'assistant' ? 'H' : 'Y';
-  fragment.querySelector('.message-author').textContent = role === 'assistant' ? 'Hsx' : 'You';
-  fragment.querySelector('.message-time').textContent = new Date().toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
   renderMarkdown(text, content);
 
   const copyButton = fragment.querySelector('.copy-button');
@@ -215,6 +253,7 @@ async function readStream(response, onEvent) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let receivedDone = false;
   while (true) {
     const { value, done } = await reader.read();
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
@@ -222,19 +261,26 @@ async function readStream(response, onEvent) {
     buffer = blocks.pop() || '';
     for (const block of blocks) {
       const event = parseSseBlock(block);
-      if (event) onEvent(event);
+      if (event) {
+        if (event.event === 'done') receivedDone = true;
+        onEvent(event);
+      }
     }
     if (done) break;
   }
   if (buffer.trim()) {
     const event = parseSseBlock(buffer);
-    if (event) onEvent(event);
+    if (event) {
+      if (event.event === 'done') receivedDone = true;
+      onEvent(event);
+    }
   }
+  if (!receivedDone) throw new Error('The connection ended before Hsx finished. Your draft was kept.');
 }
 
 function setBusy(isBusy) {
   submitting = isBusy;
-  elements.send.hidden = isBusy;
+  updateSendButton();
   elements.stop.hidden = !isBusy;
 }
 
@@ -264,6 +310,7 @@ function renderAttachments() {
     chip.append(name, size, remove);
     elements.attachmentList.appendChild(chip);
   }
+  updateSendButton();
 }
 
 function formatBytes(bytes) {
@@ -271,7 +318,6 @@ function formatBytes(bytes) {
 }
 
 async function uploadFiles(files) {
-  const supported = /\.(txt|md|csv|json|log|py|html|xml|yaml|yml|toml)$/i;
   for (const file of files) {
     const attachment = {
       id: makeSessionId(),
@@ -280,10 +326,6 @@ async function uploadFiles(files) {
       status: 'uploading',
       path: '',
     };
-    if (!supported.test(file.name)) {
-      elements.composerStatus.textContent = `${file.name}: use a text, Markdown, CSV, JSON, or code file.`;
-      continue;
-    }
     if (file.size > 1024 * 1024) {
       elements.composerStatus.textContent = `${file.name}: files must be 1 MB or smaller.`;
       continue;
@@ -291,10 +333,15 @@ async function uploadFiles(files) {
     uploadedAttachments.push(attachment);
     renderAttachments();
     try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = '';
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+      }
       const response = await apiFetch('/api/upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: file.name, content: await file.text() }),
+        body: JSON.stringify({ filename: file.name, content_base64: btoa(binary) }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Upload failed.');
@@ -309,6 +356,109 @@ async function uploadFiles(files) {
     persistAttachments();
     renderAttachments();
   }
+}
+
+function stopVoiceInput() {
+  if (voiceRecognition && voiceIsListening) voiceRecognition.stop();
+}
+
+function setupVoiceInput() {
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Recognition || !window.isSecureContext) {
+    elements.voiceButton.hidden = true;
+    return;
+  }
+  elements.voiceButton.addEventListener('click', () => {
+    if (voiceIsListening) {
+      stopVoiceInput();
+      return;
+    }
+    const recognition = new Recognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = navigator.language || 'en-US';
+    voiceDraft = elements.prompt.value;
+    voiceFinalText = '';
+    recognition.onstart = () => {
+      voiceIsListening = true;
+      voiceStatusMessage = 'Files up to 1 MB each';
+      elements.voiceButton.setAttribute('aria-label', 'Stop voice input');
+      elements.voiceButton.title = 'Stop voice input';
+      elements.voiceIndicator.hidden = false;
+      elements.composerStatus.textContent = 'Listening…';
+    };
+    recognition.onresult = (event) => {
+      const finalParts = [];
+      const interimParts = [];
+      for (let index = 0; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        (result.isFinal ? finalParts : interimParts).push(result[0].transcript);
+      }
+      voiceFinalText = finalParts.join(' ').trim();
+      const separator = voiceDraft && voiceFinalText && !/\s$/.test(voiceDraft) ? ' ' : '';
+      elements.prompt.value = `${voiceDraft}${separator}${voiceFinalText}`;
+      elements.prompt.style.height = 'auto';
+      elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 180)}px`;
+      voiceStatusMessage = 'Voice text added. Review it before sending.';
+      elements.composerStatus.textContent = interimParts.length
+        ? `Listening… ${interimParts.join(' ')}`
+        : voiceStatusMessage;
+      persistDraft();
+      updateSendButton();
+    };
+    recognition.onerror = (event) => {
+      const messages = {
+        'not-allowed': 'Microphone permission was denied.',
+        'service-not-allowed': 'Voice input is blocked by the browser.',
+        'no-speech': 'No speech was detected.',
+        'audio-capture': 'No microphone is available.',
+        network: 'Voice input is unavailable because of a network error.',
+      };
+      voiceStatusMessage = messages[event.error] || 'Voice input could not start.';
+      elements.composerStatus.textContent = voiceStatusMessage;
+    };
+    recognition.onend = () => {
+      voiceIsListening = false;
+      elements.voiceButton.setAttribute('aria-label', 'Start voice input');
+      elements.voiceButton.title = 'Dictate a message';
+      elements.voiceIndicator.hidden = true;
+      elements.composerStatus.textContent = voiceStatusMessage;
+      persistDraft();
+      updateSendButton();
+      voiceRecognition = null;
+    };
+    voiceRecognition = recognition;
+    try {
+      recognition.start();
+    } catch (error) {
+      voiceRecognition = null;
+      voiceIsListening = false;
+      voiceStatusMessage = error.message || 'Voice input could not start.';
+      elements.composerStatus.textContent = voiceStatusMessage;
+    }
+  });
+}
+
+function setupComposerOptions() {
+  const button = document.getElementById('composer-options-button');
+  const menu = document.getElementById('composer-options-menu');
+  const closeMenu = () => {
+    menu.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+  };
+  button.addEventListener('click', () => {
+    menu.hidden = !menu.hidden;
+    button.setAttribute('aria-expanded', String(!menu.hidden));
+  });
+  menu.addEventListener('click', (event) => {
+    const action = event.target.closest('[data-composer-action]')?.dataset.composerAction;
+    if (action === 'attach') elements.fileInput.click();
+    if (action === 'camera') document.getElementById('camera-toggle').click();
+    closeMenu();
+  });
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest('.composer-options')) closeMenu();
+  });
 }
 
 async function answerPendingQuestion(message) {
@@ -451,6 +601,8 @@ async function submitPrompt() {
     return;
   }
 
+  const controller = new AbortController();
+  activeChatController = controller;
   let assistantCard = null;
   let assistantContent = '';
   let currentJob = null;
@@ -459,10 +611,11 @@ async function submitPrompt() {
     const response = await apiFetch(apiContract.endpoints.chat_stream, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
       body: JSON.stringify({
         message: requestMessage,
         session_id: sessionId,
-        target_device: 'client_browser',
+        target_device: 'local_host',
       }),
     });
     if (!response.ok) {
@@ -518,14 +671,22 @@ async function submitPrompt() {
     safeStorageSet('sessionStorage', `hsx-draft-${sessionId}`, '');
   } catch (error) {
     activity?.remove();
-    appendMessage('assistant', error.message || 'The request could not be completed.', currentJob?.id || '');
+    if (controller.signal.aborted) {
+      appendMessage('assistant', 'Task stopped. Your draft was kept.');
+      elements.composerStatus.textContent = 'Task stopped. Your draft was kept.';
+    } else {
+      appendMessage('assistant', error.message || 'The request could not be completed.', currentJob?.id || '');
+      elements.composerStatus.textContent = 'The request did not complete. Your draft was kept.';
+    }
     if (!elements.prompt.value) elements.prompt.value = typedMessage;
     persistDraft();
-    elements.composerStatus.textContent = 'The request did not complete. Your draft was kept.';
   } finally {
-    setBusy(false);
-    elements.send.disabled = false;
-    elements.prompt.focus();
+    if (activeChatController === controller) {
+      activeChatController = null;
+      setBusy(false);
+      elements.send.disabled = false;
+      elements.prompt.focus();
+    }
     refreshArtifacts();
     refreshConnections();
   }
@@ -838,6 +999,95 @@ function openMobilePanel(panel) {
     .setAttribute('aria-expanded', 'true');
 }
 
+async function refreshNotifications() {
+  const badge = document.getElementById('notification-count');
+  try {
+    const response = await apiFetch(apiContract.endpoints.notifications);
+    if (!response.ok) throw new Error('Notifications are unavailable.');
+    const data = await response.json();
+    const notifications = Array.isArray(data.notifications) ? data.notifications : [];
+    const unread = Number(data.unread) || 0;
+    badge.textContent = unread > 99 ? '99+' : String(unread);
+    badge.hidden = unread === 0;
+    if (!notifications.length) {
+      const empty = document.createElement('p');
+      empty.className = 'artifacts-empty';
+      empty.textContent = 'No notifications yet.';
+      elements.notificationsList.replaceChildren(empty);
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    for (const notification of notifications) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'notification-item';
+      item.dataset.unread = String(!notification.read);
+      item.dataset.notificationId = String(notification.id);
+      item.dataset.jobId = String(notification.job_id || '');
+      const title = document.createElement('span');
+      title.className = 'notification-title';
+      title.textContent = String(notification.title || 'Hsx update');
+      const meta = document.createElement('span');
+      meta.className = 'notification-meta';
+      const created = new Date(notification.created);
+      meta.textContent = `${String(notification.event || 'update').replaceAll('_', ' ')} · ${
+        Number.isNaN(created.getTime()) ? '' : created.toLocaleString()
+      }`;
+      item.append(title, meta);
+      item.addEventListener('click', () => openNotification(notification));
+      fragment.append(item);
+    }
+    elements.notificationsList.replaceChildren(fragment);
+  } catch {
+    const error = document.createElement('p');
+    error.className = 'artifacts-empty';
+    error.textContent = 'Notifications are unavailable right now.';
+    elements.notificationsList.replaceChildren(error);
+  }
+}
+
+async function openNotification(notification) {
+  const notificationId = Number(notification.id);
+  if (Number.isInteger(notificationId)) {
+    try {
+      await apiFetch(apiContract.endpoints.notifications_read, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: notificationId }),
+      });
+    } catch {
+      // The notification remains visible and can be opened again if marking it read fails.
+    }
+  }
+  elements.notificationPanel.hidden = true;
+  document.getElementById('notifications-toggle').setAttribute('aria-expanded', 'false');
+  await refreshNotifications();
+  if (!notification.job_id) return;
+  const endpoint = apiContract.endpoints.ask_job.replace(
+    '{job_id}',
+    encodeURIComponent(notification.job_id),
+  );
+  try {
+    const response = await apiFetch(endpoint);
+    const data = await response.json();
+    const job = data.job;
+    if (!response.ok || !job) return;
+    if (job.state === 'waiting_for_approval') {
+      pendingQuestion = job;
+      if (!elements.stream.querySelector(`[data-approval-job="${CSS.escape(job.id)}"]`)) {
+        appendApprovalCard(job);
+      }
+    } else if (job.state === 'waiting_for_user') {
+      pendingQuestion = job;
+      appendMessage('assistant', job.question || 'I need a little more information.', job.id);
+    } else if (job.state === 'done' || job.state === 'failed') {
+      appendMessage('assistant', job.result || job.error || notification.title, job.id);
+    }
+  } catch {
+    appendMessage('assistant', 'That notification could not be opened. Check the task status and try again.');
+  }
+}
+
 async function refreshArtifacts() {
   const empty = document.createElement('p');
   empty.className = 'artifacts-empty';
@@ -951,6 +1201,17 @@ async function retryCamera() {
 }
 
 async function stopTask() {
+  const controller = activeChatController;
+  if (controller) {
+    activeChatController = null;
+    controller.abort();
+    if (!elements.prompt.value) {
+      elements.prompt.value = safeStorageGet('sessionStorage', `hsx-draft-${sessionId}`);
+      persistDraft();
+    }
+    setBusy(false);
+    elements.send.disabled = false;
+  }
   try {
     await apiFetch(apiContract.endpoints.stop, { method: 'POST' });
   } catch {
@@ -965,8 +1226,12 @@ function resetConversation() {
   uploadedAttachments = [];
   elements.stream.querySelectorAll('.message-card, .approval-card, .activity-card').forEach((item) => item.remove());
   elements.welcome.hidden = false;
+  updateGreeting();
   elements.prompt.value = '';
+  elements.prompt.style.height = 'auto';
   renderAttachments();
+  setConversationEmpty(true);
+  updateSendButton();
   persistDraft();
   elements.prompt.focus();
 }
@@ -1005,6 +1270,9 @@ async function initialize() {
   ]);
   if (!tokensResponse.ok || !contractResponse.ok) throw new Error('Could not load the Hsx interface contract.');
   apiContract = await contractResponse.json();
+  updateGreeting();
+  setupVoiceInput();
+  setupComposerOptions();
   document.getElementById('sidebar-toggle').addEventListener('click', () => {
     if (elements.sidebar.classList.contains('is-open')) closeMobilePanels();
     else openMobilePanel(elements.sidebar);
@@ -1022,8 +1290,30 @@ async function initialize() {
   elements.panelBackdrop.addEventListener('click', closeMobilePanels);
   document.getElementById('refresh-artifacts').addEventListener('click', refreshArtifacts);
   document.getElementById('camera-retry').addEventListener('click', retryCamera);
+  document.getElementById('notifications-toggle').addEventListener('click', async () => {
+    const opening = elements.notificationPanel.hidden;
+    elements.notificationPanel.hidden = !opening;
+    document.getElementById('notifications-toggle').setAttribute('aria-expanded', String(opening));
+    if (opening) await refreshNotifications();
+  });
+  document.getElementById('mark-notifications-read').addEventListener('click', async () => {
+    try {
+      await apiFetch(apiContract.endpoints.notifications_read, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      await refreshNotifications();
+    } catch {
+      elements.notificationsList.textContent = 'Could not mark notifications as read.';
+    }
+  });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') closeMobilePanels();
+    if (event.key === 'Escape') {
+      closeMobilePanels();
+      elements.notificationPanel.hidden = true;
+      document.getElementById('notifications-toggle').setAttribute('aria-expanded', 'false');
+    }
   });
   persistSessionId();
   setupTokenControls();
@@ -1040,6 +1330,7 @@ async function initialize() {
     }
   }
   if (draft) elements.prompt.value = draft;
+  updateSendButton();
 
   const pendingResponse = await apiFetch(
     `${apiContract.endpoints.ask_pending}?session_id=${encodeURIComponent(sessionId)}`,
@@ -1056,6 +1347,7 @@ async function initialize() {
   }
   elements.composer.addEventListener('submit', (event) => {
     event.preventDefault();
+    stopVoiceInput();
     submitPrompt();
   });
   elements.prompt.addEventListener('keydown', (event) => {
@@ -1068,10 +1360,10 @@ async function initialize() {
     elements.prompt.style.height = 'auto';
     elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 180)}px`;
     persistDraft();
+    updateSendButton();
   });
   elements.stop.addEventListener('click', stopTask);
   document.getElementById('attach-button').addEventListener('click', () => elements.fileInput.click());
-  document.getElementById('browse-files-button').addEventListener('click', () => elements.fileInput.click());
   elements.fileInput.addEventListener('change', async () => {
     await uploadFiles([...elements.fileInput.files]);
     elements.fileInput.value = '';
@@ -1119,8 +1411,10 @@ async function initialize() {
   await refreshConnections();
   refreshArtifacts();
   refreshAgentActivity();
+  refreshNotifications();
   window.setInterval(refreshConnections, 15000);
   window.setInterval(refreshAgentActivity, 5000);
+  window.setInterval(refreshNotifications, 5000);
   updateCameraClock();
   window.setInterval(updateCameraClock, 1000);
 }

@@ -11,6 +11,8 @@
     "ask_pending": "/api/ask-jobs/pending",
     "outputs": "/api/outputs",
     "activity": "/api/activity",
+    "notifications": "/api/notifications",
+    "notifications_read": "/api/notifications/read",
     "stop": "/api/stop"
   },
   "stream_events": ["job", "text_delta", "done", "error"]

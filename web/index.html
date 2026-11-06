@@ -25,14 +25,24 @@
           <span aria-hidden="true">＋</span> New chat
         </button>
 
+        <section class="activity-panel sidebar-activity" aria-labelledby="agent-activity-title">
+          <div class="artifacts-heading">
+            <div>
+              <p class="panel-eyebrow">CURRENT SESSION</p>
+              <h2 id="agent-activity-title">Agent activity</h2>
+            </div>
+            <span id="activity-count" class="connection-summary">Checking</span>
+          </div>
+          <div id="agent-activity-list" class="artifacts-list" aria-live="polite">
+            <p class="artifacts-empty">Checking for agent tasks…</p>
+          </div>
+        </section>
+
         <div class="sidebar-caption">WORKSPACE</div>
         <div class="sidebar-nav" aria-label="Workspace sections">
           <a class="nav-item nav-item-active" href="#chat-stream" aria-current="page">
             <span class="nav-icon" aria-hidden="true">◌</span> Chat
           </a>
-          <button id="browse-files-button" class="nav-item" type="button">
-            <span class="nav-icon" aria-hidden="true">▤</span> Attach a text file
-          </button>
         </div>
 
         <div class="sidebar-bottom">
@@ -66,59 +76,74 @@
       </aside>
 
       <main class="chat-area">
-        <header class="chat-header">
-          <div>
-            <div class="chat-heading">
-              <button id="sidebar-toggle" class="header-icon-button sidebar-toggle" type="button" aria-label="Open connections and navigation" aria-controls="app-sidebar" aria-expanded="false" title="Open menu">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>
-              </button>
-              <div class="chat-title">Chat</div>
+        <div class="chat-controls" aria-label="Chat controls">
+          <button id="sidebar-toggle" class="header-icon-button sidebar-toggle" type="button" aria-label="Open connections and navigation" aria-controls="app-sidebar" aria-expanded="false" title="Open menu">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>
+          </button>
+          <span class="chat-controls-spacer"></span>
+          <button id="notifications-toggle" class="header-icon-button notification-toggle" type="button" aria-label="Notifications" aria-controls="notifications-panel" aria-expanded="false" title="Notifications">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"></path></svg>
+            <span id="notification-count" class="notification-count" hidden>0</span>
+          </button>
+          <button id="camera-toggle" class="header-icon-button camera-toggle" type="button" aria-label="Open host camera and artifacts" aria-controls="camera-sidebar" aria-expanded="false" title="Open camera and artifacts">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5h11.5a2 2 0 0 1 2 2v1l3-2v7l-3-2v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"></path></svg>
+          </button>
+          <span id="connection-label" class="connection-label" hidden></span>
+          <section id="notifications-panel" class="notifications-panel" aria-label="Notifications" hidden>
+            <div class="notifications-heading">
+              <h2>Notifications</h2>
+              <button id="mark-notifications-read" type="button">Mark all read</button>
             </div>
-            <div id="chat-subtitle" class="chat-subtitle">A private workspace assistant</div>
-          </div>
-          <div class="header-right">
-            <button id="camera-toggle" class="header-icon-button camera-toggle" type="button" aria-label="Open host camera and artifacts" aria-controls="camera-sidebar" aria-expanded="false" title="Open camera and artifacts">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5h11.5a2 2 0 0 1 2 2v1l3-2v7l-3-2v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"></path></svg>
-            </button>
-            <span id="connection-label" class="connection-label"><span class="connection-dot"></span> Connecting</span>
-          </div>
-        </header>
-
-        <section id="chat-stream" class="message-stream" aria-label="Conversation" role="log" aria-live="polite" aria-relevant="additions text">
-          <section class="welcome-card" id="welcome-card">
-            <div class="welcome-mark"><img src="/web/icon.svg" width="48" height="48" alt=""></div>
-            <p class="welcome-eyebrow">YOUR LOCAL WORKSPACE</p>
-            <h1>What would you like to work on?</h1>
-            <p class="welcome-description">Ask a question, explore a file, or create something useful.</p>
-            <div class="suggestions" aria-label="Suggested prompts">
-              <button class="suggestion" type="button" data-prompt="What is on this machine?">What is on this machine?</button>
-              <button class="suggestion" type="button" data-prompt="Search my workspace for recent reports">Search my workspace</button>
-              <button class="suggestion" type="button" data-prompt="Summarize a file in my workspace">Summarize a file</button>
-              <button class="suggestion" type="button" data-prompt="Make a report from my files">Make a report</button>
+            <div id="notifications-list" class="notifications-list" aria-live="polite">
+              <p class="artifacts-empty">Loading notifications…</p>
             </div>
           </section>
-        </section>
+        </div>
 
-        <div class="composer-dock">
-          <div id="drop-hint" class="drop-hint" hidden>Drop a supported text file to attach it</div>
-          <div id="attachment-list" class="attachment-list" aria-live="polite"></div>
-          <form id="composer-form" class="composer">
-            <div class="composer-input-row">
-              <button id="attach-button" class="icon-button attach-button" type="button" aria-label="Attach a text file" title="Attach a text file">＋</button>
-              <label class="sr-only" for="prompt-input">Message Hsx</label>
-              <textarea id="prompt-input" rows="1" placeholder="Message Hsx…" autocomplete="off"></textarea>
-              <button id="send-button" class="send-button" type="submit" aria-label="Send message" title="Send message">
-                <span class="send-label">Send</span><span aria-hidden="true">↑</span>
-              </button>
-              <button id="stop-button" class="stop-button" type="button" title="Stop the current task" hidden>Stop</button>
-            </div>
-            <div class="composer-footer">
-              <span><kbd>Enter</kbd> to send <span class="footer-divider">·</span> <kbd>Shift</kbd> + <kbd>Enter</kbd> for a new line</span>
-              <span id="composer-status" role="status">Text files up to 1 MB</span>
-            </div>
-          </form>
-          <input id="file-input" class="sr-only" type="file" multiple accept=".txt,.md,.csv,.json,.log,.py,.html,.xml,.yaml,.yml,.toml">
-          <p class="privacy-note">Hsx runs on your host. Files are saved in its workspace before use.</p>
+        <div id="conversation-layout" class="conversation-layout is-empty">
+          <section id="chat-stream" class="message-stream" aria-label="Conversation" role="log" aria-live="polite" aria-relevant="additions text">
+            <section class="welcome-card" id="welcome-card">
+              <h1 id="greeting-title">Good day, Sir</h1>
+              <p class="welcome-description">What would you like to work on?</p>
+            </section>
+          </section>
+
+          <div class="composer-dock">
+            <div id="drop-hint" class="drop-hint" hidden>Drop files here to attach them</div>
+            <div id="attachment-list" class="attachment-list" aria-live="polite"></div>
+            <form id="composer-form" class="composer">
+              <div class="composer-input-row">
+                <button id="attach-button" class="composer-icon-button attach-button" type="button" aria-label="Attach files" title="Attach files">＋</button>
+                <label class="sr-only" for="prompt-input">Message Hsx</label>
+                <textarea id="prompt-input" rows="1" placeholder="Type / for skills" autocomplete="off"></textarea>
+                <div class="composer-actions">
+                  <button id="voice-button" class="composer-icon-button voice-button" type="button" aria-label="Start voice input" title="Dictate a message">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2.5" width="6" height="12" rx="3"></rect><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3.5M9 21.5h6"></path></svg>
+                  </button>
+                  <span id="voice-indicator" class="voice-indicator" aria-hidden="true" hidden><i></i><i></i><i></i></span>
+                  <div class="composer-options">
+                    <button id="composer-options-button" class="composer-icon-button" type="button" aria-label="More message options" aria-controls="composer-options-menu" aria-expanded="false" title="More options">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"></circle><circle cx="12" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle></svg>
+                    </button>
+                    <div id="composer-options-menu" class="composer-options-menu" role="menu" hidden>
+                      <button type="button" role="menuitem" data-composer-action="attach">Attach files</button>
+                      <button type="button" role="menuitem" data-composer-action="camera">Open host camera</button>
+                    </div>
+                  </div>
+                  <button id="send-button" class="send-button" type="submit" aria-label="Send message" title="Send message" hidden>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg>
+                  </button>
+                  <button id="stop-button" class="stop-button" type="button" aria-label="Stop response" title="Stop the current task" hidden>Stop</button>
+                </div>
+              </div>
+              <div class="composer-footer">
+                <span><kbd>Enter</kbd> to send <span class="footer-divider">·</span> <kbd>Shift</kbd> + <kbd>Enter</kbd> for a new line</span>
+                <span id="composer-status" role="status">Files up to 1 MB each</span>
+              </div>
+            </form>
+            <input id="file-input" class="sr-only" type="file" multiple>
+            <p class="privacy-note">Hsx runs on your host. Files are saved in its workspace before use.</p>
+          </div>
         </div>
       </main>
 
@@ -150,11 +175,6 @@
             <div><span>Current time</span><strong id="camera-clock">—</strong></div>
             <div><span>Video delay</span><strong id="camera-latency">Waiting</strong></div>
           </div>
-          <p class="camera-caption">This is the camera attached to the Hsx host, not your phone or laptop camera.</p>
-        </div>
-        <div class="camera-info">
-          <span class="info-icon" aria-hidden="true">i</span>
-          <p>Camera access is managed by the host. A missing device or disabled capture service will show as offline.</p>
         </div>
         <section class="artifacts-panel" aria-labelledby="artifacts-title">
           <div class="artifacts-heading">
@@ -168,25 +188,12 @@
             <p class="artifacts-empty">Generated files will appear here.</p>
           </div>
         </section>
-        <section class="activity-panel" aria-labelledby="agent-activity-title">
-          <div class="artifacts-heading">
-            <div>
-              <p class="panel-eyebrow">CURRENT SESSION</p>
-              <h2 id="agent-activity-title">Agent activity</h2>
-            </div>
-            <span id="activity-count" class="connection-summary">Checking</span>
-          </div>
-          <div id="agent-activity-list" class="artifacts-list" aria-live="polite">
-            <p class="artifacts-empty">Checking for active tasks…</p>
-          </div>
-        </section>
       </aside>
       <button id="panel-backdrop" class="panel-backdrop" type="button" aria-label="Close open panel" hidden></button>
     </div>
 
     <template id="message-template">
       <article class="message-card">
-        <div class="message-heading"><span class="avatar" aria-hidden="true"></span><strong class="message-author"></strong><span class="message-time"></span></div>
         <div class="message-content markdown-body"></div>
         <div class="message-actions">
           <button type="button" class="copy-button" aria-label="Copy response">Copy</button>
