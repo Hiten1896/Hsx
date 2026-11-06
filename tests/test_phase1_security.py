@@ -4,17 +4,21 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from http.server import ThreadingHTTPServer
+from types import SimpleNamespace
 
 import pytest
 
 import server
+from api.auth import AuthService
 from agent.security import safe_path
 
 
-def request(server_url: str, path: str, *, origin: str | None = None):
+def request(server_url: str, path: str, *, origin: str | None = None, authorization: str | None = None):
     headers = {}
     if origin:
         headers["Origin"] = origin
+    if authorization:
+        headers["Authorization"] = authorization
     request = urllib.request.Request(server_url + path, headers=headers)
     try:
         with urllib.request.urlopen(request) as response:
@@ -38,8 +42,17 @@ def test_safe_path_rejects_traversal_and_symlink(tmp_path: Path):
         safe_path(root, "link/file.txt")
 
 
-def test_api_rejects_foreign_origin():
+def test_api_rejects_foreign_origin(monkeypatch):
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.HsxHandler)
+    monkeypatch.setattr(
+        server,
+        "AUTH_SERVICE",
+        AuthService(
+            (f"http://127.0.0.1:{httpd.server_port}",),
+            (f"127.0.0.1:{httpd.server_port}",),
+            "test-token",
+        ),
+    )
     thread = threading.Thread(target=httpd.handle_request)
     thread.start()
     status, payload = request(
@@ -48,21 +61,58 @@ def test_api_rejects_foreign_origin():
     )
     thread.join(timeout=2)
     assert status == 403
-    assert "Origin" in payload["error"]
+    assert "origin" in payload["error"].lower()
 
 
-def test_api_accepts_local_requests_without_bearer_token():
+def test_api_requires_token_when_origin_is_missing(monkeypatch):
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.HsxHandler)
+    token = "test-token"
+    monkeypatch.setattr(
+        server,
+        "AUTH_SERVICE",
+        AuthService(
+            (f"http://127.0.0.1:{httpd.server_port}",),
+            (f"127.0.0.1:{httpd.server_port}",),
+            token,
+        ),
+    )
     thread = threading.Thread(target=httpd.handle_request)
     thread.start()
     status, payload = request(f"http://127.0.0.1:{httpd.server_port}", "/api/skills")
     thread.join(timeout=2)
+    assert status == 401
+    httpd.server_close()
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.HsxHandler)
+    monkeypatch.setattr(
+        server,
+        "AUTH_SERVICE",
+        AuthService(
+            (f"http://127.0.0.1:{httpd.server_port}",),
+            (f"127.0.0.1:{httpd.server_port}",),
+            token,
+        ),
+    )
+    thread = threading.Thread(target=httpd.handle_request)
+    thread.start()
+    status, payload = request(
+        f"http://127.0.0.1:{httpd.server_port}",
+        "/api/skills",
+        authorization=f"Bearer {token}",
+    )
+    thread.join(timeout=2)
     assert status == 200
     assert "skills" in payload
+    httpd.server_close()
 
 
-def test_health_accepts_requests_without_api_auth():
+def test_health_accepts_requests_without_api_auth(monkeypatch):
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.HsxHandler)
+    monkeypatch.setattr(
+        server,
+        "AUTH_SERVICE",
+        AuthService((), (f"127.0.0.1:{httpd.server_port}",)),
+    )
     thread = threading.Thread(target=httpd.handle_request)
     thread.start()
     status, payload = request(
@@ -90,6 +140,7 @@ def test_tailscale_peer_requires_and_accepts_bearer_token(monkeypatch, peer):
     token = "test-remote-access-token-value-long-enough"
     monkeypatch.setattr(server, "REMOTE_ACCESS_TOKEN", token)
     monkeypatch.setattr(server, "MESH_GATEWAY", None)
+    monkeypatch.setattr(server, "AUTH_SERVICE", SimpleNamespace(allowed=lambda *_args: True))
     handler = server.HsxHandler.__new__(server.HsxHandler)
     handler.client_address = (peer, 1234)
     handler.command = "GET"
@@ -116,6 +167,7 @@ def test_tailscale_peer_rejects_missing_or_invalid_bearer_token(monkeypatch):
     token = "test-remote-access-token-value-long-enough"
     monkeypatch.setattr(server, "REMOTE_ACCESS_TOKEN", token)
     monkeypatch.setattr(server, "MESH_GATEWAY", None)
+    monkeypatch.setattr(server, "AUTH_SERVICE", SimpleNamespace(allowed=lambda *_args: True))
     handler = server.HsxHandler.__new__(server.HsxHandler)
     handler.client_address = ("100.64.0.2", 1234)
     handler.command = "GET"
@@ -131,6 +183,7 @@ def test_tailscale_peer_rejects_missing_or_invalid_bearer_token(monkeypatch):
 def test_tailscale_peer_remains_blocked_when_remote_token_is_unset(monkeypatch):
     monkeypatch.setattr(server, "REMOTE_ACCESS_TOKEN", "")
     monkeypatch.setattr(server, "MESH_GATEWAY", None)
+    monkeypatch.setattr(server, "AUTH_SERVICE", SimpleNamespace(allowed=lambda *_args: True))
     handler = server.HsxHandler.__new__(server.HsxHandler)
     handler.client_address = ("100.64.0.3", 1234)
     handler.command = "GET"

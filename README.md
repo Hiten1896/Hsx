@@ -106,9 +106,20 @@ terminal client over SSH for keyboard-first work on the HP itself.
   target and the same approval language as the web client.
 - Access rules: same-origin requests are allowed only for configured hosts; no-origin
   requests require a bearer token, and all browser traffic keeps credentials out of the
-  URL and logs.
+  URL and logs. Set `HSX_REMOTE_TOKEN` in the CLI/TTY environment when connecting
+  without a browser Origin header.
 - Data stays local by default: feedback is stored on this computer only unless the user
   opts in to a broader export.
+
+### Feedback and local export
+
+Ratings and optional notes are stored in the Hsx data directory on this computer only. The web Settings panel shows the saved count, can disable saving, and can delete all saved feedback after confirmation. Exports redact secrets, email addresses, phone numbers, and long tokens by default:
+
+```sh
+python tools/export_feedback.py --format jsonl --since 2025-01-01
+```
+
+By default, each export contains only the last user prompt and assistant response. Full-conversation export and file-content export require their respective Settings opt-ins; file contents additionally require `--include-file-contents`. Feedback is never sent to an external service.
 
 ## Web vs terminal at a glance
 
@@ -214,7 +225,7 @@ Copy `.env.example` to `.env` and fill only the settings you need. Important gro
 | Group | Variables | Purpose |
 | --- | --- | --- |
 | Provider | `HSX_PROVIDER`, `HSX_FALLBACKS`, provider API keys and model names | Select and configure LLMs |
-| Server | `HSX_HOST`, `HSX_PORT`, `HSX_ALLOWED_ORIGINS`, `HSX_REMOTE_TOKEN` | Bind address, port, browser origins, and optional Tailscale bearer auth |
+| Server | `HSX_HOST`, `HSX_PORT`, `HSX_ALLOWED_ORIGINS`, `HSX_ALLOWED_HOSTS`, `HSX_REMOTE_TOKEN` | Bind address, exact browser origins and hosts, and bearer auth for requests without an Origin |
 | Mesh | `HSX_MESH_HOST`, `HSX_MESH_PORT`, `HSX_MESH_TOKEN`, `HSX_MESH_TLS_CERT`, `HSX_MESH_TLS_KEY` | Optional private-LAN HTTPS node API |
 | Owner approval | `HSX_OWNER_PIN` | Approval for privileged actions |
 | Workspace | `HSX_WORKSPACE`, `HSX_WORK_DIR` | Source files and generated deliverables |
@@ -223,14 +234,18 @@ Copy `.env.example` to `.env` and fill only the settings you need. Important gro
 | Hardware | `HSX_ENABLE_CAMERA_STREAM`, `HSX_ENABLE_MOTION_MONITOR`, `HSX_ENABLE_VISION_CAPTURE`, `HSX_ENABLE_AUDIO_ALERTS`, `HSX_ENABLE_VOICE_ALERTS` | Opt-in camera, motion, and speaker services |
 | Notifications | `HSX_VAPID_*`, `HSX_NOTIFY_*`, `TELEGRAM_*` | Web Push, in-app, and Telegram routing |
 
-The primary API defaults to loopback and accepts local requests without a token.
+The primary API defaults to loopback. Requests with an `Origin` must match
+`HSX_ALLOWED_ORIGINS`, and every request's exact `Host` value must match
+`HSX_ALLOWED_HOSTS`. API requests without an `Origin` require a valid bearer token.
 For direct Tailscale access, bind `HSX_HOST` to the server's Tailscale address
 (preferred) or `0.0.0.0`, then set `HSX_REMOTE_TOKEN` to a random value of at
 least 32 characters. Remote API requests are accepted only from Tailscale IPv4
 (`100.64.0.0/10`) or IPv6 (`fd7a:115c:a1e0::/48`) peers and must include
 `Authorization: Bearer <HSX_REMOTE_TOKEN>`; an unset token keeps remote access
 disabled. Remote browser origins must also be listed exactly in
-`HSX_ALLOWED_ORIGINS`. The restricted TLS mesh listener remains separate.
+`HSX_ALLOWED_ORIGINS`; add their exact host values to `HSX_ALLOWED_HOSTS` as well.
+The same token can be entered in the browser's access-token control for API
+requests without an Origin. The restricted TLS mesh listener remains separate.
 
 ### Headless Debian hardware (optional)
 

@@ -1,4 +1,5 @@
 import threading
+import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -7,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import server
+from api.auth import AuthService
 from agent.approval import ApprovalGuard
 from agent.llm_client import call_llm
 from agent.sandbox import linux_network_sandbox_available
@@ -60,14 +62,21 @@ def test_docker_availability_requires_an_responding_daemon(monkeypatch):
     assert not _docker_available()
 
 
-def test_local_api_accepts_requests_without_token():
+def test_local_api_requires_token_when_origin_is_missing(monkeypatch):
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.HsxHandler)
+    host = f"127.0.0.1:{httpd.server_port}"
+    monkeypatch.setattr(
+        server,
+        "AUTH_SERVICE",
+        AuthService((), (host,), "test-local-token"),
+    )
     thread = threading.Thread(target=httpd.handle_request)
     thread.start()
     request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_port}/api/skills")
-    with urllib.request.urlopen(request) as response:
-        assert response.status == 200
-        assert b'"skills"' in response.read()
+    try:
+        urllib.request.urlopen(request)
+    except urllib.error.HTTPError as error:
+        assert error.code == 401
     thread.join(timeout=2)
 
 

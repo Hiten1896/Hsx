@@ -199,7 +199,12 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert "controller.abort()" in script
     assert "receivedDone" in script
     assert "The connection ended before Hsx finished. Your draft was kept." in script
-    assert "submitFeedback(article, button.dataset.feedback)" in script
+    assert "pendingFeedback = { article, rating: button.dataset.feedback }" in script
+    assert 'class="feedback-settings"' in html
+    assert 'id="save-feedback-setting"' in html
+    assert 'id="full-conversation-setting"' in html
+    assert 'id="file-contents-setting"' in html
+    assert 'id="delete-feedback-button"' in html
     assert "apiContract.endpoints.chat_stream" in script
     assert "apiContract.endpoints.feedback" in script
     assert "apiContract.endpoints.telemetry" in script
@@ -292,7 +297,7 @@ def test_tui_composer_stop_and_feedback_buttons_are_wired():
 
         def fake_api_request(endpoint, payload=None):
             api_calls.append((endpoint, payload))
-            return {"success": True}
+            return {"success": True, "saved": True}
 
         async def fake_submit_prompt(prompt):
             prompts.append(prompt)
@@ -313,9 +318,12 @@ def test_tui_composer_stop_and_feedback_buttons_are_wired():
             await pilot.pause()
             assert api_calls[-1] == (
                 "/api/feedback",
-                {"job_id": "feedback-job", "feedback": "good"},
+                {"job_id": "feedback-job", "feedback": "good", "client": "cli"},
             )
             assert "Thanks!" in app.query_one(".feedback-status").render().plain
+            await pilot.click(f"#bad-{feedback_id}")
+            await pilot.pause()
+            assert api_calls[-1][1]["feedback"] == "bad"
 
             await pilot.click("#stop-button")
             await pilot.pause()
@@ -324,8 +332,9 @@ def test_tui_composer_stop_and_feedback_buttons_are_wired():
     asyncio.run(verify())
 
 
-def test_tui_api_requests_do_not_send_authentication_headers(monkeypatch):
+def test_tui_api_requests_send_configured_bearer_auth(monkeypatch):
     seen_requests = []
+    monkeypatch.setenv("HSX_REMOTE_TOKEN", "test-token")
 
     class Response:
         def __enter__(self):
@@ -344,11 +353,15 @@ def test_tui_api_requests_do_not_send_authentication_headers(monkeypatch):
     monkeypatch.setattr("agent.tui.urllib.request.urlopen", fake_urlopen)
     HsxTUI("http://127.0.0.1:8000")._api_request("/api/telemetry")
 
-    assert seen_requests[0].get_header("Authorization") is None
+    assert seen_requests[0].get_header("Authorization") == "Bearer test-token"
 
 
 def test_feedback_and_telemetry_api_contract(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "ASK_JOBS", AskUserJobs(tmp_path / "jobs.db"))
+    from agent.feedback import FeedbackStore
+
+    feedback_store = FeedbackStore(tmp_path / "feedback.db")
+    monkeypatch.setattr(server, "FEEDBACK_STORE", feedback_store)
     monkeypatch.setattr(server, "LLM_TELEMETRY", type("Telemetry", (), {
         "snapshot": lambda self: {"provider": "groq", "router_confidence": 0.9, "latency_ms": 12.0},
     })())
@@ -363,6 +376,7 @@ def test_feedback_and_telemetry_api_contract(tmp_path, monkeypatch):
         lambda job_id, rating: provider_feedback.append((job_id, rating)),
     )
     job = server.ASK_JOBS.create_running("Prompt", "shared-session")
+    server.ASK_JOBS.complete(job["id"], "Response", [])
 
     status, _, body = _request("/api/telemetry")
     assert status == 200
@@ -372,12 +386,24 @@ def test_feedback_and_telemetry_api_contract(tmp_path, monkeypatch):
     status, _, body = _request(
         "/api/feedback",
         method="POST",
-        payload={"job_id": job["id"], "feedback": "good"},
+        payload={
+            "job_id": job["id"],
+            "feedback": "down",
+            "client": "cli",
+            "reason": "Not useful",
+            "note": "Try a shorter response",
+        },
     )
     assert status == 201
     assert json.loads(body)["success"] is True
-    assert feedback == [("shared-session", job["id"], "good")]
-    assert provider_feedback == [(job["id"], "good")]
+    assert feedback == [("shared-session", job["id"], "bad")]
+    assert provider_feedback == [(job["id"], "bad")]
+    saved_feedback = feedback_store.export_records()[0]
+    assert saved_feedback["rating"] == "down"
+    assert saved_feedback["reason"] == "Not useful"
+    assert saved_feedback["note"] == "Try a shorter response"
+    assert saved_feedback["metadata"]["client"] == "cli"
+    assert saved_feedback["response"] == "Response"
 
     stopped = []
     monkeypatch.setattr(server.POLICY, "stop_all", lambda: stopped.append(True))

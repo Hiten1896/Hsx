@@ -9,6 +9,7 @@ let notificationInitialized = false;
 let notificationReconnectTimer = null;
 let notificationRetryDelay = 500;
 let notificationToastTimer = null;
+let pendingFeedback = null;
 let voiceRecognition = null;
 let voiceIsListening = false;
 let voiceDraft = '';
@@ -279,7 +280,12 @@ function appendMessage(role, text, jobId = '', options = {}) {
     feedback.querySelectorAll('[data-feedback]').forEach((button) => {
       button.disabled = !jobId;
       if (jobId) {
-        button.addEventListener('click', () => submitFeedback(article, button.dataset.feedback));
+        button.addEventListener('click', () => {
+          pendingFeedback = { article, rating: button.dataset.feedback };
+          document.getElementById('feedback-reason').value = '';
+          document.getElementById('feedback-note').value = '';
+          document.getElementById('feedback-dialog').showModal();
+        });
       } else {
         button.title = 'Feedback is unavailable for this message';
       }
@@ -314,11 +320,28 @@ async function submitFeedback(article, feedback) {
     const response = await apiFetch(apiContract.endpoints.feedback, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ job_id: article.dataset.jobId, feedback }),
+      body: JSON.stringify({
+        job_id: article.dataset.jobId,
+        conversation_id: sessionId,
+        message_id: article.dataset.jobId,
+        feedback: feedback === 'good' ? 'up' : 'down',
+        reason: document.getElementById('feedback-reason').value,
+        note: document.getElementById('feedback-note').value,
+        prompt_messages: [{ role: 'user', content: article.dataset.prompt || '' }],
+        response: article.dataset.response || '',
+        client: 'web',
+      }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Could not save feedback.');
-    status.textContent = 'Thanks for your feedback.';
+    status.textContent = result.saved
+      ? 'Thanks for your feedback.'
+      : 'Feedback saving is off; nothing was stored.';
+    buttons.forEach((button) => {
+      button.disabled = false;
+    });
+    document.getElementById('feedback-dialog').close();
+    refreshFeedbackSettings();
   } catch {
     buttons.forEach((button) => {
       button.disabled = false;
@@ -326,6 +349,36 @@ async function submitFeedback(article, feedback) {
     });
     status.textContent = 'Feedback could not be saved.';
   }
+}
+
+async function refreshFeedbackSettings() {
+  try {
+    const response = await apiFetch(apiContract.endpoints.feedback_settings);
+    if (!response.ok) throw new Error('Feedback settings are unavailable.');
+    const settings = await response.json();
+    document.getElementById('save-feedback-setting').checked = Boolean(settings.save_feedback);
+    document.getElementById('full-conversation-setting').checked = Boolean(settings.include_full_conversation);
+    document.getElementById('file-contents-setting').checked = Boolean(settings.include_file_contents);
+    document.getElementById('feedback-count').textContent =
+      `${Number(settings.count) || 0} feedback entr${Number(settings.count) === 1 ? 'y' : 'ies'}`;
+    document.getElementById('feedback-storage-note').textContent = settings.storage;
+  } catch {
+    document.getElementById('feedback-count').textContent = 'Feedback settings unavailable';
+  }
+}
+
+async function updateFeedbackSettings() {
+  const response = await apiFetch(apiContract.endpoints.feedback_settings, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      save_feedback: document.getElementById('save-feedback-setting').checked,
+      include_full_conversation: document.getElementById('full-conversation-setting').checked,
+      include_file_contents: document.getElementById('file-contents-setting').checked,
+    }),
+  });
+  if (!response.ok) throw new Error('Feedback settings could not be saved.');
+  await refreshFeedbackSettings();
 }
 
 function parseSseBlock(block) {
@@ -1489,6 +1542,37 @@ async function initialize() {
     button.title = expanded ? 'Expand agent activity' : 'Collapse agent activity';
     elements.activityList.hidden = expanded;
   });
+  document.getElementById('feedback-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!pendingFeedback) return;
+    submitFeedback(pendingFeedback.article, pendingFeedback.rating);
+    pendingFeedback = null;
+  });
+  document.getElementById('feedback-cancel').addEventListener('click', () => {
+    document.getElementById('feedback-dialog').close();
+    pendingFeedback = null;
+  });
+  for (const id of ['save-feedback-setting', 'full-conversation-setting', 'file-contents-setting']) {
+    document.getElementById(id).addEventListener('change', () => {
+      updateFeedbackSettings().catch(() => {
+        document.getElementById('feedback-count').textContent = 'Feedback settings could not be saved.';
+      });
+    });
+  }
+  document.getElementById('delete-feedback-button').addEventListener('click', async () => {
+    if (!window.confirm('Delete all saved feedback from this computer? This cannot be undone.')) return;
+    try {
+      const response = await apiFetch(apiContract.endpoints.feedback_delete, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: true }),
+      });
+      if (!response.ok) throw new Error('Feedback could not be deleted.');
+      await refreshFeedbackSettings();
+    } catch {
+      document.getElementById('feedback-count').textContent = 'Feedback could not be deleted.';
+    }
+  });
   document.getElementById('notifications-toggle').addEventListener('click', async () => {
     const opening = elements.notificationPanel.hidden;
     elements.notificationPanel.hidden = !opening;
@@ -1619,6 +1703,7 @@ async function initialize() {
     }
   });
   await refreshConnections();
+  refreshFeedbackSettings();
   refreshGreeting();
   refreshArtifacts();
   refreshAgentActivity();

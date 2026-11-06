@@ -6,6 +6,8 @@
     "camera_stream": "/api/camera/stream",
     "camera_status": "/api/camera/status",
     "feedback": "/api/feedback",
+    "feedback_settings": "/api/feedback/settings",
+    "feedback_delete": "/api/feedback/delete",
     "telemetry": "/api/telemetry",
     "ask_answer": "/api/ask-jobs/{job_id}/answer",
     "ask_job": "/api/ask-jobs/{job_id}",

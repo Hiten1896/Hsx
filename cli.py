@@ -178,7 +178,7 @@ def _submit(
     target_device: str = "local_host",
     approvals: dict | None = None,
     session_id: str | None = None,
-) -> None:
+) -> str | None:
     session_id = session_id or _session_id()
     pending = _request(
         f"/api/ask-jobs/pending?session_id={quote(session_id)}"
@@ -201,7 +201,7 @@ def _submit(
         job_id = (response.get("job") or {}).get("id")
     if not job_id:
         print(response.get("response", "Request accepted."))
-        return
+        return None
 
     while True:
         time.sleep(1)
@@ -229,10 +229,10 @@ def _submit(
             result = job.get("result") or "Task completed."
             if not response.get("streamed_text", ""):
                 print(f"HSX > {result}")
-            return
+            return job_id
         elif job["state"] in {"failed", "cancelled"}:
             print(f"HSX > {job.get('error') or 'Task did not complete.'}")
-            return
+            return None
 
 
 def _show_activity(session_id: str | None = None) -> None:
@@ -269,6 +269,7 @@ def main(argv: list[str] | None = None) -> None:
 
         raise SystemExit(print_report(run_doctor()))
     target_device = {"local": "local_host"}[args.target]
+    last_job_id = None
     deadline = time.monotonic() + 30
     while True:
         try:
@@ -299,8 +300,27 @@ def main(argv: list[str] | None = None) -> None:
             except (RuntimeError, ValueError) as error:
                 print(f"HSX > {error}")
             continue
+        if message.lower() in {"/good", "/bad"}:
+            if not last_job_id:
+                print("HSX > There is no completed task to rate yet.")
+                continue
+            try:
+                _request(
+                    "/api/feedback",
+                    {
+                        "job_id": last_job_id,
+                        "conversation_id": _session_id(),
+                        "message_id": last_job_id,
+                        "feedback": "up" if message.lower() == "/good" else "down",
+                        "client": "cli",
+                    },
+                )
+                print("HSX > Thanks for your feedback.")
+            except (RuntimeError, ValueError) as error:
+                print(f"HSX > {error}")
+            continue
         try:
-            _submit(message, target_device=target_device)
+            last_job_id = _submit(message, target_device=target_device)
         except (RuntimeError, ValueError) as error:
             print(f"HSX > {error}")
 

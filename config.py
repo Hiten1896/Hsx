@@ -94,6 +94,14 @@ ALLOWED_ORIGINS = tuple(
     ).split(",")
     if origin.strip()
 )
+ALLOWED_HOSTS = tuple(
+    host.strip().lower()
+    for host in os.getenv(
+        "HSX_ALLOWED_HOSTS",
+        "127.0.0.1:8000,localhost:8000,hsx-server.tail4237ae.ts.net,hsx-server.tail4237ae.ts.net:8000",
+    ).split(",")
+    if host.strip()
+)
 SANDBOX = os.getenv("HSX_SANDBOX", "auto").strip().lower()
 
 

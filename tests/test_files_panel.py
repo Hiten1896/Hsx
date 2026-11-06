@@ -8,6 +8,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import server
+from api.auth import AuthService
 from agent.ask_user import AskUserJobs, AskUserRequest
 from agent.notifier import Notifier
 from agent.workspace import Workspace
@@ -19,11 +20,18 @@ def _request(
     headers: dict | None = None,
     payload: dict | None = None,
     stop_event: str | None = None,
+    tokenless: bool = False,
 ):
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.HsxHandler)
+    host = f"127.0.0.1:{httpd.server_port}"
+    token = "test-integration-token"
+    previous_auth_service = server.AUTH_SERVICE
+    server.AUTH_SERVICE = AuthService((f"http://{host}",), (host,), token)
     thread = threading.Thread(target=httpd.handle_request)
     thread.start()
     request_headers = headers or {}
+    if not tokenless:
+        request_headers = {**request_headers, "Authorization": f"Bearer {token}"}
     data = None
     if payload is not None:
         request_headers = {**request_headers, "Content-Type": "application/json"}
@@ -49,6 +57,7 @@ def _request(
         result = error.code, error.headers, error.read()
     thread.join(timeout=15)
     httpd.server_close()
+    server.AUTH_SERVICE = previous_auth_service
     return result
 
 
@@ -220,10 +229,9 @@ def test_files_panel_rejects_traversal(tmp_path: Path, monkeypatch):
     assert status == 404
 
 
-def test_files_panel_is_available_without_bearer_auth():
-    status, _, body = _request("/api/files")
-    assert status == 200
-    assert b'"files"' in body
+def test_files_panel_requires_bearer_when_origin_is_missing():
+    status, _, _ = _request("/api/files", tokenless=True)
+    assert status == 401
 
 
 def test_chat_question_card_answer_resumes_job(tmp_path: Path, monkeypatch):

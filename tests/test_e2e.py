@@ -6,7 +6,7 @@ from agent.workspace import Workspace
 from tests.test_files_panel import _request
 
 
-def test_tokenless_stream_creates_workspace_artifact(tmp_path: Path, monkeypatch):
+def test_authenticated_stream_creates_workspace_artifact(tmp_path: Path, monkeypatch):
     root = tmp_path / "share"
     root.mkdir()
     monkeypatch.setattr(server, "WORKSPACE", Workspace(root, "Hsx Work"))
@@ -38,7 +38,7 @@ def test_tokenless_stream_creates_workspace_artifact(tmp_path: Path, monkeypatch
 
 
 def test_health_allows_requests_without_token():
-    status, _, body = _request("/health")
+    status, _, body = _request("/health", tokenless=True)
     assert status == 200
     assert body == b'{"status": "ok"}'
 

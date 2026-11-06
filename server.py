@@ -9,6 +9,7 @@ import os
 import queue
 import re
 import shutil
+import sqlite3
 import threading
 import time
 import copy
@@ -26,6 +27,7 @@ from agent.ask_user import ApprovalRequest, AskUserJobs, AskUserRequest
 from agent.jobs import JobQueue
 from agent.approval import ApprovalGuard
 from agent.devices import DeviceRegistry, system_body_state
+from agent.feedback import FeedbackStore
 from agent.hardware import AUDIO_ALERTS, CAMERA, MOTION_MONITOR
 from agent.hardware.camera import MAX_FRAME_AGE_SECONDS
 from agent.llm.router import default_router
@@ -49,6 +51,7 @@ from agent.tools.dynamic_registry import DYNAMIC_TOOLS, register_meta_tool
 from agent.workspace import Workspace, task_output_scope, workspace_search
 from config import (
     ALLOWED_ORIGINS,
+    ALLOWED_HOSTS,
     DATA_DIR,
     HOST,
     GROQ_API_KEY,
@@ -81,7 +84,7 @@ if INTENT_ROUTER.model_path.is_file():
 else:
     INTENT_ROUTER.train_from_tools(TOOLS)
 set_runtime_registry(TOOLS, SKILL_MAP)
-AUTH_SERVICE = AuthService(ALLOWED_ORIGINS)
+AUTH_SERVICE = AuthService(ALLOWED_ORIGINS, ALLOWED_HOSTS, REMOTE_ACCESS_TOKEN)
 HISTORY = []
 SESSION_HISTORIES = {}
 SESSION_LAST_JOBS = {}
@@ -104,6 +107,7 @@ IMPROVEMENTS = SelfImprovement(
 DEVICES = DeviceRegistry(approval_guard=APPROVAL_GUARD)
 WORKSPACE = Workspace(WORKSPACE_DIR, WORK_DIR)
 NOTIFIER = Notifier(DATA_DIR / "notifications.db")
+FEEDBACK_STORE = FeedbackStore(DATA_DIR / "feedback.db")
 _RESOURCE_ALERT_LOCK = threading.Lock()
 _RESOURCE_ALERT_STATE = {"cpu": False, "memory": False, "disk": False}
 MESH_GATEWAY = MeshGateway.from_environment()
@@ -701,6 +705,12 @@ class HsxHandler(BaseHTTPRequestHandler):
                     self.client_address[0],
                 )
                 if allowed:
+                    if not AUTH_SERVICE.allowed(
+                        self,
+                        self._json,
+                        require_no_origin_bearer=False,
+                    ):
+                        return False
                     self._authorized_remote_control = True
                     return True
                 self._json({"error": message}, status)
@@ -716,7 +726,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         origin = self.headers.get("Origin")
-        if origin in ALLOWED_ORIGINS:
+        if origin and origin != "null" and AUTH_SERVICE._origin_key(origin) in AUTH_SERVICE.origins:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -740,7 +750,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.send_header("X-Accel-Buffering", "no")
         origin = self.headers.get("Origin")
-        if origin in ALLOWED_ORIGINS:
+        if origin and origin != "null" and AUTH_SERVICE._origin_key(origin) in AUTH_SERVICE.origins:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         self.end_headers()
@@ -872,6 +882,12 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif path == "/api/notifications":
             notifications, unread = NOTIFIER.list_notifications()
             self._json({"notifications": notifications, "unread": unread})
+        elif path == "/api/feedback/settings":
+            try:
+                self._json(FEEDBACK_STORE.settings())
+            except (OSError, sqlite3.Error) as error:
+                LOGGER.warning("Feedback settings request failed: %s", error)
+                self._json({"error": "Feedback settings are temporarily unavailable."}, 503)
         elif path == "/api/notifications/stream":
             self._stream_notifications(query)
             return
@@ -952,7 +968,32 @@ class HsxHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/mesh/tasks":
             path = "/api/chat/stream"
-        if path == "/api/greeting":
+        if path == "/api/feedback/settings":
+            payload = self._body()
+            try:
+                result = FEEDBACK_STORE.update_settings(
+                    save_feedback=bool(payload.get("save_feedback")),
+                    include_full_conversation=bool(payload.get("include_full_conversation")),
+                    include_file_contents=bool(payload.get("include_file_contents")),
+                )
+            except (OSError, sqlite3.Error, ValueError) as error:
+                self._json({"error": str(error)}, 400)
+                return
+            self._json(result)
+        elif path == "/api/feedback/delete":
+            payload = self._body()
+            if payload.get("confirm") is not True:
+                self._json({"error": "Confirm deletion to remove saved feedback."}, 400)
+                return
+            try:
+                deleted = FEEDBACK_STORE.delete_all()
+                settings = FEEDBACK_STORE.settings()
+            except (OSError, sqlite3.Error) as error:
+                LOGGER.warning("Feedback deletion failed: %s", error)
+                self._json({"error": "Feedback could not be deleted right now."}, 503)
+                return
+            self._json({"deleted": deleted, **settings})
+        elif path == "/api/greeting":
             payload = self._body()
             time_of_day = str(payload.get("time_of_day", "")).strip().lower()
             try:
@@ -969,16 +1010,54 @@ class HsxHandler(BaseHTTPRequestHandler):
             payload = self._body()
             job_id = str(payload.get("job_id", "")).strip()
             feedback = str(payload.get("feedback", "")).strip().lower()
-            if not job_id or feedback not in {"good", "bad"}:
-                self._json({"error": "job_id and feedback (good or bad) are required."}, 400)
+            conversation_id = str(payload.get("conversation_id", "")).strip()
+            message_id = str(payload.get("message_id", "")).strip()
+            if feedback not in {"good", "bad", "up", "down"}:
+                self._json({"error": "Feedback rating must be up or down."}, 400)
                 return
-            job = ASK_JOBS.get(job_id)
-            if job is None:
+            job = ASK_JOBS.get(job_id) if job_id else None
+            if job_id and job is None:
                 self._json({"error": "Chat job not found."}, 404)
                 return
-            ROUTER_LOGGER.log_feedback(job["session_id"], job_id, feedback)
-            record_provider_feedback(job_id, feedback)
-            self._json({"success": True, "job_id": job_id, "feedback": feedback}, 201)
+            if job:
+                conversation_id = conversation_id or job["session_id"]
+                message_id = message_id or job_id
+                telemetry = LLM_TELEMETRY.snapshot()
+                tool_names = [
+                    str(item.get("type"))
+                    for item in job.get("device_actions", [])
+                    if isinstance(item, dict) and item.get("type")
+                ]
+                prompt_messages = payload.get("prompt_messages") or [{
+                    "role": "user",
+                    "content": job["request"],
+                }]
+                full_conversation = SESSION_HISTORIES.get(job["session_id"], [])
+                try:
+                    saved = FEEDBACK_STORE.record(
+                        conversation_id=conversation_id,
+                        message_id=message_id,
+                        rating="up" if feedback in {"good", "up"} else "down",
+                        reason=str(payload.get("reason", "")),
+                        note=str(payload.get("note", "")),
+                        provider=str(telemetry.get("provider", "")),
+                        model=str(telemetry.get("model", "")),
+                        tool_names=tool_names,
+                        app_version=os.getenv("HSX_APP_VERSION", "0.0.0+local"),
+                        client=str(payload.get("client", "web")),
+                        prompt_messages=prompt_messages,
+                        response=str(payload.get("response", job.get("result", ""))),
+                        full_conversation=full_conversation,
+                    )
+                except (OSError, sqlite3.Error, TypeError, ValueError) as error:
+                    self._json({"error": str(error)}, 400)
+                    return
+                if saved:
+                    ROUTER_LOGGER.log_feedback(conversation_id, message_id, "good" if feedback in {"good", "up"} else "bad")
+                    record_provider_feedback(job_id, "good" if feedback in {"good", "up"} else "bad")
+            else:
+                saved = False
+            self._json({"success": True, "saved": saved, "job_id": job_id, "feedback": feedback}, 201)
         elif path == "/api/chat":
             payload = self._body()
             message = str(payload.get("message", "")).strip()
@@ -1414,7 +1493,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                 return
         self.send_response(204)
         origin = self.headers.get("Origin")
-        if origin in ALLOWED_ORIGINS:
+        if origin and origin != "null" and AUTH_SERVICE._origin_key(origin) in AUTH_SERVICE.origins:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")

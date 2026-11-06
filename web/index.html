@@ -61,6 +61,15 @@
             </div>
             <p>Kept in this tab only. Never added to the URL.</p>
           </form>
+          <details class="feedback-settings">
+            <summary>Feedback settings</summary>
+            <p id="feedback-storage-note">Stored on this computer only.</p>
+            <label><input id="save-feedback-setting" type="checkbox" checked> Save feedback</label>
+            <label><input id="full-conversation-setting" type="checkbox"> Include full conversation in exports</label>
+            <label><input id="file-contents-setting" type="checkbox"> Allow file contents in exports</label>
+            <span id="feedback-count">0 feedback entries</span>
+            <button id="delete-feedback-button" type="button">Delete all feedback</button>
+          </details>
           <div class="local-note"><span class="local-note-dot"></span> Your workspace stays on your Hsx host</div>
         </div>
 
@@ -235,5 +244,18 @@
     <template id="activity-template">
       <div class="activity-card" role="status"><span class="activity-spinner"></span><span></span></div>
     </template>
+    <dialog id="feedback-dialog" class="feedback-dialog">
+      <form method="dialog" id="feedback-form">
+        <h2>Share feedback</h2>
+        <label for="feedback-reason">Reason (optional)</label>
+        <input id="feedback-reason" maxlength="200">
+        <label for="feedback-note">Note (optional)</label>
+        <textarea id="feedback-note" rows="3" maxlength="2000"></textarea>
+        <div>
+          <button type="button" id="feedback-cancel">Cancel</button>
+          <button type="submit">Save feedback</button>
+        </div>
+      </form>
+    </dialog>
   </body>
 </html>

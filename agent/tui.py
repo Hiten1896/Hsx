@@ -293,12 +293,14 @@ class HsxTUI(App):
 
     def _api_request(self, endpoint: str, payload: dict | None = None) -> dict:
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        headers = {"Content-Type": "application/json"}
+        token = os.getenv("HSX_REMOTE_TOKEN", "").strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         request = urllib.request.Request(
             self.base_url + endpoint,
             data=data,
-            headers={
-                "Content-Type": "application/json",
-            },
+            headers=headers,
             method="POST" if payload is not None else "GET",
         )
         try:
@@ -518,7 +520,7 @@ class HsxTUI(App):
             worker = self.run_worker(
                 lambda: self._api_request(
                     _API["endpoints"]["feedback"],
-                    {"job_id": job_id, "feedback": feedback},
+                    {"job_id": job_id, "feedback": feedback, "client": "cli"},
                 ),
                 thread=True,
                 name="feedback",
@@ -527,9 +529,8 @@ class HsxTUI(App):
             if not result or not result.get("success"):
                 raise RuntimeError("The server did not save this feedback.")
             if row:
-                row.query_one(".feedback-status", Static).update("Thanks!")
-                for other in row.query(Button):
-                    other.disabled = True
+                status = "Thanks!" if result.get("saved") else "Saving is off."
+                row.query_one(".feedback-status", Static).update(status)
         except (RuntimeError, LookupError) as error:
             if row:
                 row.query_one(".feedback-status", Static).update(str(error)[:40])
