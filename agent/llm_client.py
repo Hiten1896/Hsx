@@ -154,12 +154,15 @@ class NormalizedBlock:
     content: str = ""
     tool_use_id: str = ""
     provider_meta: dict = None
+    part: dict = None
 
     def to_dict(self) -> dict:
         if self.type == "text":
             result = {"type": "text", "text": self.text}
             if self.provider_meta:
                 result["provider_meta"] = self.provider_meta
+            if self.part:
+                result["gemini_part"] = self.part
             return result
         if self.type == "tool_use":
             result = {
@@ -177,6 +180,11 @@ class NormalizedBlock:
                 "tool_use_id": self.tool_use_id or self.id,
                 "content": self.content or self.text,
             }
+        if self.type == "gemini_part":
+            result = {"type": "gemini_part", "part": self.part or {}}
+            if self.provider_meta:
+                result["provider_meta"] = self.provider_meta
+            return result
         return {"type": self.type, "text": self.text}
 
 
@@ -295,7 +303,7 @@ def call_llm(
                     on_text_delta(event.text)
                 output_characters += len(event.text)
                 blocks.append(NormalizedBlock(
-                    type="text", text=event.text, provider_meta=event.provider_meta or {}
+                    type="text", text=event.text, provider_meta=event.provider_meta or {}, part=event.raw_part
                 ))
             elif event.type == "tool_call":
                 blocks.append(
@@ -307,6 +315,10 @@ def call_llm(
                         provider_meta=event.provider_meta or {},
                     )
                 )
+            elif event.type == "provider_part":
+                blocks.append(NormalizedBlock(
+                    type="gemini_part", part=event.raw_part, provider_meta=event.provider_meta or {}
+                ))
             elif event.type == "stop":
                 usage = event.usage
 

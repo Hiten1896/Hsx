@@ -32,6 +32,7 @@ class LLMEvent:
     usage: dict[str, int] = field(default_factory=dict)
     stop_reason: str = ""
     provider_meta: dict[str, Any] = field(default_factory=dict)
+    raw_part: dict[str, Any] = field(default_factory=dict)
 
 
 EventStream = Iterator[LLMEvent]

@@ -126,9 +126,16 @@ def _serializable_history(history: list) -> list:
             }
             if getattr(value, "provider_meta", None):
                 result["provider_meta"] = convert(value.provider_meta)
+            if getattr(value, "part", None):
+                result["gemini_part"] = convert(value.part)
             return result
         if getattr(value, "type", "") == "text":
             result = {"type": "text", "text": value.text}
+            if getattr(value, "provider_meta", None):
+                result["provider_meta"] = convert(value.provider_meta)
+            return result
+        if getattr(value, "type", "") == "gemini_part":
+            result = {"type": "gemini_part", "part": convert(value.part or {})}
             if getattr(value, "provider_meta", None):
                 result["provider_meta"] = convert(value.provider_meta)
             return result

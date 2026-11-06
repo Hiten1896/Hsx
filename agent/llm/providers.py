@@ -282,14 +282,16 @@ def _validate_gemini_payload(payload: dict[str, Any]) -> None:
             part_path = f"{path}.parts[{part_index}]"
             if not isinstance(part, dict):
                 raise _shape_error(provider, part_path, "part", "must contain exactly one native part")
-            unknown = set(part) - {"text", "functionCall", "functionResponse", "inlineData", "thoughtSignature"}
+            unknown = set(part) - {"text", "functionCall", "functionResponse", "inlineData", "thoughtSignature", "thought"}
             if unknown:
                 raise _shape_error(provider, part_path, sorted(unknown)[0])
-            if len(set(part) - {"thoughtSignature"}) != 1:
+            if len(set(part) - {"thoughtSignature", "thought"}) != 1:
                 raise _shape_error(provider, part_path, "part", "must contain exactly one native part")
             if "thoughtSignature" in part and not isinstance(part["thoughtSignature"], str):
                 raise _shape_error(provider, part_path, "thoughtSignature", "must be an opaque string")
-            kind = next(key for key in part if key != "thoughtSignature")
+            if "thought" in part and not isinstance(part["thought"], bool):
+                raise _shape_error(provider, part_path, "thought", "must be a boolean")
+            kind = next(key for key in part if key not in {"thoughtSignature", "thought"})
             if kind == "text":
                 if not isinstance(part["text"], str):
                     raise _shape_error(provider, part_path, "text", "must be a string")
@@ -690,7 +692,9 @@ def to_gemini_payload(request: LLMRequest) -> dict[str, Any]:
                 continue
             block_type = block.get("type")
             if block_type == "text":
-                part = {"text": _gemini_text(block.get("text", ""))}
+                stored_part = block.get("gemini_part")
+                part = dict(stored_part) if isinstance(stored_part, dict) else {}
+                part.setdefault("text", _gemini_text(block.get("text", "")))
                 signature = (block.get("provider_meta") or {}).get("gemini_thought_signature")
                 if isinstance(signature, str) and signature:
                     part["thoughtSignature"] = signature
@@ -748,6 +752,14 @@ def to_gemini_payload(request: LLMRequest) -> dict[str, Any]:
                     if isinstance(request_id, str) and request_id:
                         response["id"] = request_id
                     parts.append({"functionResponse": response})
+            elif block_type == "gemini_part":
+                part = block.get("part")
+                if isinstance(part, dict):
+                    serialized_part = dict(part)
+                    signature = (block.get("provider_meta") or {}).get("gemini_thought_signature")
+                    if isinstance(signature, str) and signature:
+                        serialized_part["thoughtSignature"] = signature
+                    parts.append(serialized_part)
             else:
                 # Drop unknown provider-specific history blocks rather than replaying
                 # malformed data into Gemini on every subsequent turn.
@@ -893,8 +905,6 @@ class GeminiProvider(JSONHTTPProvider):
         for part in parts:
             signature = part.get("thoughtSignature")
             provider_meta = {"gemini_thought_signature": signature} if isinstance(signature, str) and signature else {}
-            if part.get("text"):
-                yield LLMEvent(type="text_delta", text=part["text"], provider_meta=provider_meta)
             if part.get("functionCall"):
                 function = part["functionCall"]
                 provider_meta["gemini_function_call_id"] = function.get("id")
@@ -905,6 +915,18 @@ class GeminiProvider(JSONHTTPProvider):
                     tool_call_id=function.get("id") or f"gemini-{function.get('name', '')}",
                     provider_meta=provider_meta,
                 )
+            elif part.get("text") and part.get("thought") is True:
+                raw_part = {key: value for key, value in part.items() if key != "thoughtSignature"}
+                yield LLMEvent(type="provider_part", provider_meta=provider_meta, raw_part=raw_part)
+            elif part.get("text"):
+                raw_part = {key: value for key, value in part.items() if key != "thoughtSignature"}
+                yield LLMEvent(
+                    type="text_delta", text=part["text"], provider_meta=provider_meta,
+                    raw_part=raw_part if provider_meta else {},
+                )
+            elif provider_meta:
+                raw_part = {key: value for key, value in part.items() if key != "thoughtSignature"}
+                yield LLMEvent(type="provider_part", provider_meta=provider_meta, raw_part=raw_part)
         yield LLMEvent(type="stop", stop_reason="stop")
 
 

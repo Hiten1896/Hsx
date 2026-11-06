@@ -105,17 +105,50 @@ def test_gemini_captures_response_part_thought_signature():
     class FakeGemini(GeminiProvider):
         def _post(self, _payload):
             return {"candidates": [{"content": {"parts": [
-                {"text": "Checking.", "thoughtSignature": "opaque-text"},
+                {"text": "Visible", "thoughtSignature": "visible-signature"},
+                {"text": "Thinking only.", "thought": True, "thoughtSignature": "opaque-text"},
+                {"inlineData": {"mimeType": "image/png", "data": "AA=="}, "thoughtSignature": "opaque-other"},
                 {"functionCall": {"name": "system_info", "args": {}, "id": "exact-id"},
                  "thoughtSignature": "opaque-call"},
             ]}}]}
 
     events = list(FakeGemini("model", "http://localhost").generate(LLMRequest([])))
-    assert events[0].provider_meta == {"gemini_thought_signature": "opaque-text"}
-    assert events[1].provider_meta == {
+    assert events[0].provider_meta == {"gemini_thought_signature": "visible-signature"}
+    assert events[0].raw_part == {"text": "Visible"}
+    assert events[1].type == "provider_part"
+    assert events[1].provider_meta == {"gemini_thought_signature": "opaque-text"}
+    assert events[1].raw_part == {"text": "Thinking only.", "thought": True}
+    assert events[2].type == "provider_part"
+    assert events[2].provider_meta == {"gemini_thought_signature": "opaque-other"}
+    assert events[2].raw_part == {"inlineData": {"mimeType": "image/png", "data": "AA=="}}
+    assert events[3].provider_meta == {
         "gemini_thought_signature": "opaque-call", "gemini_function_call_id": "exact-id"
     }
-    assert events[1].tool_call_id == "exact-id"
+    assert events[3].tool_call_id == "exact-id"
+    replay = to_gemini_payload(LLMRequest([{
+        "role": "assistant",
+        "content": [{"type": "gemini_part", "part": events[2].raw_part, "provider_meta": events[2].provider_meta}],
+    }]))
+    assert replay["contents"][0]["parts"][0]["thoughtSignature"] == "opaque-other"
+    text_replay = to_gemini_payload(LLMRequest([{
+        "role": "assistant",
+        "content": [{
+            "type": "text", "text": events[0].text,
+            "gemini_part": events[0].raw_part, "provider_meta": events[0].provider_meta,
+        }],
+    }]))
+    assert text_replay["contents"][0]["parts"][0] == {
+        "text": "Visible", "thoughtSignature": "visible-signature"
+    }
+    assert_payload_valid("gemini", text_replay)
+    thought_replay = to_gemini_payload(LLMRequest([{
+        "role": "assistant",
+        "content": [{"type": "gemini_part", "part": events[1].raw_part, "provider_meta": events[1].provider_meta}],
+    }]))
+    assert thought_replay["contents"][0]["parts"][0] == {
+        "text": "Thinking only.", "thought": True, "thoughtSignature": "opaque-text"
+    }
+    assert_payload_valid("gemini", thought_replay)
 
 
 def test_provider_meta_survives_normalization_and_is_ignored_by_groq(monkeypatch):
