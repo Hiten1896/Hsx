@@ -271,7 +271,14 @@ class HsxTUI(App):
                     label += f" (+{len(active) - 1} more)"
             else:
                 label = "Agent tasks: none"
-            label += f"  ·  Generated files: {len(files)}"
+            filenames = [str(item.get("name", "file")) for item in files[:3]]
+            if filenames:
+                file_label = ", ".join(filenames)
+                if len(files) > len(filenames):
+                    file_label += f" (+{len(files) - len(filenames)} more)"
+            else:
+                file_label = "none"
+            label += f"  ·  Files: {file_label}"
             self.query_one("#workspace-activity", Static).update(label)
         except (RuntimeError, ValueError, LookupError) as error:
             self.query_one("#workspace-activity", Static).update(

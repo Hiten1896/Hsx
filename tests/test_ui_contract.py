@@ -117,7 +117,7 @@ def test_tui_activity_panel_uses_live_job_and_output_endpoints():
             await app.refresh_workspace_activity()
             label = app.query_one("#workspace-activity").render().plain
             assert "running — Build a weekly report" in label
-            assert "Generated files: 1" in label
+            assert "Files: report.pdf" in label
             assert "/api/activity?session_id=terminal" in requests
             assert "/api/outputs" in requests
 
