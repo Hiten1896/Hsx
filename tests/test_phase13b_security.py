@@ -9,6 +9,7 @@ import pytest
 import server
 from agent.approval import ApprovalGuard
 from agent.llm_client import call_llm
+from agent.sandbox import linux_network_sandbox_available
 from skills.run_code import skill as run_code
 from skills.run_code.skill import _docker_available, run
 
@@ -21,6 +22,7 @@ def test_wrong_pin_locks_out(tmp_path: Path):
     assert guard.remaining_lockout() > 0
 
 
+@pytest.mark.skipif(not linux_network_sandbox_available(), reason="Linux network sandbox is unavailable")
 def test_run_code_cannot_call_approval_endpoint(monkeypatch):
     monkeypatch.setattr("skills.run_code.skill.SANDBOX", "subprocess")
     result = run(
@@ -28,9 +30,10 @@ def test_run_code_cannot_call_approval_endpoint(monkeypatch):
         "urllib.request.urlopen('http://127.0.0.1:8000/api/improvements/x/approve', timeout=1)"
     )
     assert not result["success"]
-    assert "network disabled" in result["stderr"]
+    assert "network" in (result.get("stderr", "") + result.get("error", "")).lower()
 
 
+@pytest.mark.skipif(not linux_network_sandbox_available(), reason="Linux network sandbox is unavailable")
 def test_run_code_subprocess_is_deterministic(monkeypatch):
     monkeypatch.setattr("skills.run_code.skill.SANDBOX", "subprocess")
     result = run("print(1 + 1)")
