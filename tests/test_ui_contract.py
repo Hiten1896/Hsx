@@ -32,6 +32,13 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
 
     assert 'id="connections-title"' in html
     assert 'id="chat-stream"' in html
+    assert 'id="conversation-layout"' in html
+    assert 'id="greeting-title"' in html
+    assert 'placeholder="Type / for skills"' in html
+    assert 'id="voice-button"' in html
+    assert 'id="composer-options-button"' in html
+    assert 'id="voice-indicator"' in html
+    assert 'class="message-author"' not in html
     assert 'id="composer-form"' in html
     assert 'id="live-camera"' in html
     assert 'id="sidebar-toggle"' in html
@@ -56,6 +63,10 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert 'data-feedback="good"' in html
     assert 'data-feedback="bad"' in html
     assert "marked.parse" in script
+    assert "function updateGreeting()" in script
+    assert "function setConversationEmpty(isEmpty)" in script
+    assert "function setupVoiceInput()" in script
+    assert "window.webkitSpeechRecognition" in script
     assert "Authorization" in script
     assert "login-panel" not in html
     assert "bearerToken" in script
@@ -91,6 +102,9 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert ".activity-panel" in css
     assert "grid-template-rows: minmax(0, 1fr) auto" in css
     assert "aspect-ratio: 16 / 9" in css
+    assert ".conversation-layout.is-empty" in css
+    assert ".message-card[data-role=\"user\"]" in css
+    assert ".message-card { max-width: 790px; margin: 0 auto 25px; padding: 0" in css
     assert html.index('class="sidebar-bottom"') < html.index('class="connections"')
 
     service_worker = (BASE_DIR / "web" / "service-worker.js").read_text(encoding="utf-8")

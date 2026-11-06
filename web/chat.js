@@ -6,7 +6,6 @@ let activeChatController = null;
 let voiceRecognition = null;
 let voiceIsListening = false;
 let voiceDraft = '';
-let voiceFinalText = '';
 let voiceStatusMessage = 'Files up to 1 MB each';
 let bearerToken = loadBearerToken();
 let uploadedAttachments = [];
@@ -394,9 +393,9 @@ function setupVoiceInput() {
         const result = event.results[index];
         (result.isFinal ? finalParts : interimParts).push(result[0].transcript);
       }
-      voiceFinalText = finalParts.join(' ').trim();
-      const separator = voiceDraft && voiceFinalText && !/\s$/.test(voiceDraft) ? ' ' : '';
-      elements.prompt.value = `${voiceDraft}${separator}${voiceFinalText}`;
+      const finalText = finalParts.join(' ').trim();
+      const separator = voiceDraft && finalText && !/\s$/.test(voiceDraft) ? ' ' : '';
+      elements.prompt.value = `${voiceDraft}${separator}${finalText}`;
       elements.prompt.style.height = 'auto';
       elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 180)}px`;
       voiceStatusMessage = 'Voice text added. Review it before sending.';
@@ -420,7 +419,7 @@ function setupVoiceInput() {
     recognition.onend = () => {
       voiceIsListening = false;
       elements.voiceButton.setAttribute('aria-label', 'Start voice input');
-      elements.voiceButton.title = 'Dictate a message';
+      elements.voiceButton.title = 'Dictate a message; Chrome and Edge send audio to their speech service.';
       elements.voiceIndicator.hidden = true;
       elements.composerStatus.textContent = voiceStatusMessage;
       persistDraft();
@@ -428,6 +427,7 @@ function setupVoiceInput() {
       voiceRecognition = null;
     };
     voiceRecognition = recognition;
+    voiceIsListening = true;
     try {
       recognition.start();
     } catch (error) {
@@ -493,6 +493,8 @@ async function answerPendingQuestion(message) {
 }
 
 function appendApprovalCard(job) {
+  elements.welcome.hidden = true;
+  setConversationEmpty(false);
   const approval = job.approval || {};
   const card = document.createElement('section');
   card.className = 'approval-card';

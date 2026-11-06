@@ -17,8 +17,9 @@ API.
 - The navigation only presents chat and file attachment actions supported by the
   current web client. The Artifacts panel lists generated files from the host's
   `Hsx Work` output directory and links to download them. The Agent activity panel
-  reports tasks persisted for the current session; it does not invent sub-agent
-  statuses when no such work is reported by the backend.
+  sits below New chat in the navigation rail and reports tasks persisted for the
+  current session; it does not invent sub-agent statuses when no such work is
+  reported by the backend.
 - The connection rail reports API health, last-used LLM provider, host camera health,
   the current Tailnet access path, and the browser's network-online hint. “Standby”
   means there has not yet been a provider call; it is not a provider health check.
@@ -45,12 +46,17 @@ controls, responsive sizing, and reduced-motion behavior are part of the design.
 
 - Enter sends on desktop; Shift+Enter inserts a newline. The textarea grows to a
   bounded height and remains visible above the mobile keyboard.
-- The file picker accepts text, Markdown, CSV, JSON, log, and code/text formats up to
-  1 MB. Uploads go through `/api/upload` and are stored inside the Hsx workspace.
-  Unsupported binary files are not advertised as attachable.
+- The empty chat centers a local-time greeting and composer; after the first turn the
+  composer animates to the bottom below the scrollable transcript. User messages use
+  a subtle right-aligned bubble while assistant replies remain unboxed and unlabeled.
+- The file picker accepts any file type up to 1 MB. Uploads go through `/api/upload`
+  and preserve file bytes inside the Hsx workspace.
 - Uploaded file paths are included with the prompt so workspace tools can read the
   uploaded files. Draft text and attachment references are scoped to the current
   browser tab.
+- Secure browsers with SpeechRecognition expose a microphone control. Dictation adds
+  text to the draft for review and never submits it automatically; unsupported
+  browsers do not show a nonfunctional microphone control.
 - Assistant output is sanitized before Markdown display. Copy uses the Clipboard API;
   feedback controls call the existing feedback endpoint.
 - Stop uses the existing server stop endpoint. A new chat creates a new session ID;

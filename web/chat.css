@@ -95,9 +95,6 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visib
 .welcome-card { max-width: 680px; margin: 0 auto 28px; text-align: center; }
 .welcome-card h1 { margin: 0 0 12px; font-size: clamp(30px, 4vw, 42px); font-weight: 560; letter-spacing: -.045em; }
 .welcome-description { margin: 0; color: var(--muted); font-size: 14px; }
-.suggestions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; max-width: 540px; margin: 28px auto 0; }
-.suggestion { min-height: 44px; padding: 8px 11px; border: 1px solid #354139; border-radius: 10px; color: #c0cbc1; background: #1b221e; font-size: 11px; text-align: left; transition: border-color .16s, background .16s; }
-.suggestion:hover { border-color: #718477; background: #232c26; }
 .message-card { max-width: 790px; margin: 0 auto 25px; padding: 0; border: 0; border-radius: 0; background: transparent; animation: message-in .16s ease-out; }
 @keyframes message-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 .message-card[data-role="user"] { width: fit-content; max-width: min(78%, 690px); margin-right: max(0px, calc((100% - 790px) / 2)); margin-left: auto; padding: 11px 16px; border: 1px solid #343d37; border-radius: 19px; background: #242b26; }
@@ -249,11 +246,9 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
   .sidebar-toggle, .camera-toggle { display: inline-flex; }
   .notification-toggle { display: inline-flex; }
   .message-stream { padding: 58px 13px 18px; }
-  .welcome-card { margin-top: 9vh; }
-  .welcome-card h1 { font-size: 27px; }
+  .welcome-card { margin: 0 auto 24px; }
+  .welcome-card h1 { font-size: 29px; }
   .welcome-description { font-size: 12px; }
-  .suggestions { grid-template-columns: minmax(0, 1fr); gap: 7px; margin-top: 22px; }
-  .suggestion { min-height: 42px; }
   .message-card { padding: 15px; }
   .message-card[data-role="user"] { max-width: 90%; margin-right: 0; }
   .composer-dock { padding: 9px 11px max(12px, env(safe-area-inset-bottom)); }
@@ -271,8 +266,7 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 @media (max-width: 390px) {
   .chat-controls { gap: 2px; }
   .header-icon-button { width: 36px; height: 38px; }
-  .send-button { min-width: 48px; padding: 0 8px; }
-  .send-label { display: none; }
+  .send-button { width: 38px; min-width: 38px; padding: 0; }
   .attachment-chip { max-width: calc(100vw - 24px); }
 }
 @media (prefers-reduced-motion: reduce) {

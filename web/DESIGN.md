@@ -6,8 +6,11 @@ for shared design and server contracts.
 
 ## Current layout
 
-- Sidebar: Hsx branding, new chat, file attachment, and live connection health.
-- Center: prompt suggestions, streamed conversation, feedback, and a working composer.
+- Sidebar: Hsx branding, new chat, agent activity, and live connection health.
+- Center: a local-time greeting and centered composer for an empty chat; after the
+  first turn the composer transitions to the bottom beneath a scrollable transcript.
+  User messages are right-aligned soft bubbles, while assistant replies are unboxed
+  and have no speaker label.
 - Right rail on desktop: the Hsx host camera feed and its availability state.
 - Mobile: focused chat and sticky composer, a navigation drawer with live connection
   states, and a camera drawer with host feed, timing information, and generated
@@ -25,10 +28,11 @@ for shared design and server contracts.
   in-app notifications, shows unread counts, and opens approval/job notifications in
   the page.
 
-Only features backed by the current API are shown. Workspace attachments are supported
-for text, Markdown, CSV, JSON, log, and code/text files up to 1 MB. They upload through
-`/api/upload`, then their workspace paths are included in the chat request. Binary
-attachments and unsupported panels are not presented as working controls.
+Only features backed by the current API are shown. Any file type up to 1 MB can be
+attached. Uploads preserve bytes through `/api/upload`; the resulting workspace paths
+are included in the chat request. The microphone is shown only in secure browsers that
+support speech recognition, and recognized text remains in the draft until the user
+sends it. The options menu opens the file picker or host camera panel.
 
 The input supports Enter to send, Shift+Enter for a newline, paste, and drag-and-drop.
 The Send action submits to `/api/chat/stream`, Stop calls `/api/stop`, response copy
