@@ -1,8 +1,11 @@
 import json
 import base64
 import binascii
+import hashlib
+import logging
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -11,7 +14,14 @@ from .types import EventStream, LLMEvent, LLMRequest, to_plain_data
 
 
 class ProviderError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, provider: str = "", status: int | None = None, detail: str = ""):
+        super().__init__(message)
+        self.provider = provider
+        self.status = status
+        self.detail = detail
+
+
+LOGGER = logging.getLogger("hsx.llm.providers")
 
 
 class Provider:
@@ -19,6 +29,13 @@ class Provider:
 
     def generate(self, request: LLMRequest) -> EventStream:
         raise NotImplementedError
+
+
+def _validated_model_name(model: str) -> str:
+    normalized = model.strip() if isinstance(model, str) else ""
+    if not normalized or any(character.isspace() for character in normalized):
+        raise ValueError("Provider model name must be a non-empty identifier without whitespace.")
+    return normalized
 
 
 def _shape_error(provider: str, path: str, key: str, detail: str = "") -> ValueError:
@@ -50,6 +67,11 @@ _GEMINI_SCHEMA_KEYS = {
     "minProperties",
     "maxProperties",
     "propertyOrdering",
+}
+_OPENAI_SCHEMA_KEYS = {
+    "type", "description", "title", "properties", "required", "items", "enum",
+    "additionalProperties", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
+    "minItems", "maxItems", "minLength", "maxLength", "pattern", "format", "nullable",
 }
 
 
@@ -86,6 +108,39 @@ def _validate_gemini_schema(provider: str, schema: dict[str, Any], path: str) ->
         _validate_gemini_schema(provider, schema["items"], f"{path}.items")
 
 
+def _sanitize_openai_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    sanitized = {key: value for key, value in schema.items() if key in _OPENAI_SCHEMA_KEYS}
+    properties = sanitized.get("properties")
+    if isinstance(properties, dict):
+        sanitized["properties"] = {
+            name: _sanitize_openai_schema(value) if isinstance(value, dict) else {"type": "string"}
+            for name, value in properties.items()
+        }
+    if isinstance(sanitized.get("items"), dict):
+        sanitized["items"] = _sanitize_openai_schema(sanitized["items"])
+    if sanitized.get("type") == "array" and not isinstance(sanitized.get("items"), dict):
+        sanitized["items"] = {"type": "string"}
+    return sanitized
+
+
+def _validate_openai_schema(schema: dict[str, Any], path: str) -> None:
+    if not isinstance(schema, dict):
+        raise _shape_error("groq", path, "schema", "must be an object")
+    unknown = set(schema) - _OPENAI_SCHEMA_KEYS
+    if unknown:
+        raise _shape_error("groq", path, sorted(unknown)[0])
+    if schema.get("type") == "array" and "items" not in schema:
+        raise _shape_error("groq", path, "items", "required for array schemas")
+    properties = schema.get("properties")
+    if properties is not None:
+        if not isinstance(properties, dict):
+            raise _shape_error("groq", f"{path}.properties", "properties", "must be an object")
+        for name, child in properties.items():
+            _validate_openai_schema(child, f"{path}.properties.{name}")
+    if "items" in schema:
+        _validate_openai_schema(schema["items"], f"{path}.items")
+
+
 def _validate_gemini_payload(payload: dict[str, Any]) -> None:
     provider = "gemini"
     _require_keys(provider, payload, "$", {"contents"}, {"contents", "systemInstruction", "tools"})
@@ -96,8 +151,8 @@ def _validate_gemini_payload(payload: dict[str, Any]) -> None:
         if not isinstance(content, dict):
             raise _shape_error(provider, path, "content", "must be an object")
         _require_keys(provider, content, path, {"role", "parts"}, {"role", "parts"})
-        if content["role"] not in {"user", "model", "function"}:
-            raise _shape_error(provider, f"{path}.role", "role", "must be user, model, or function")
+        if content["role"] not in {"user", "model"}:
+            raise _shape_error(provider, f"{path}.role", "role", "must be user or model")
         if not isinstance(content["parts"], list):
             raise _shape_error(provider, f"{path}.parts", "parts", "must be a list")
         for part_index, part in enumerate(content["parts"]):
@@ -176,12 +231,15 @@ def _validate_gemini_payload(payload: dict[str, Any]) -> None:
 def _validate_openai_payload(payload: dict[str, Any]) -> None:
     provider = "groq"
     _require_keys(provider, payload, "$", {"model", "messages", "tools"}, {"model", "messages", "tools"})
-    if not isinstance(payload["model"], str) or not payload["model"]:
-        raise _shape_error(provider, "model", "model", "must be a non-empty string")
+    try:
+        _validated_model_name(payload["model"])
+    except ValueError as error:
+        raise _shape_error(provider, "model", "model", str(error)) from error
     if not isinstance(payload["messages"], list):
         raise _shape_error(provider, "messages", "messages", "must be a list")
     if not isinstance(payload["tools"], list):
         raise _shape_error(provider, "tools", "tools", "must be a list")
+    seen_tool_call_ids = set()
     for index, message in enumerate(payload["messages"]):
         path = f"messages[{index}]"
         if not isinstance(message, dict) or "role" not in message:
@@ -208,10 +266,15 @@ def _validate_openai_payload(payload: dict[str, Any]) -> None:
                     json.loads(function["arguments"])
                 except json.JSONDecodeError as error:
                     raise _shape_error(provider, f"{call_path}.function.arguments", "arguments", str(error)) from error
+                if not isinstance(call["id"], str) or not call["id"]:
+                    raise _shape_error(provider, f"{call_path}.id", "id", "must be a non-empty string")
+                seen_tool_call_ids.add(call["id"])
         elif role == "tool":
             _require_keys(provider, message, path, {"role", "tool_call_id", "content"}, {"role", "tool_call_id", "content"})
             if not isinstance(message["content"], str):
                 raise _shape_error(provider, f"{path}.content", "content", "must be a string")
+            if not isinstance(message["tool_call_id"], str) or message["tool_call_id"] not in seen_tool_call_ids:
+                raise _shape_error(provider, f"{path}.tool_call_id", "tool_call_id", "must match a previous assistant tool call")
         else:
             raise _shape_error(provider, f"{path}.role", "role", "unsupported role")
     for index, tool in enumerate(payload["tools"]):
@@ -223,6 +286,7 @@ def _validate_openai_payload(payload: dict[str, Any]) -> None:
         _require_keys(provider, function, f"{path}.function", {"name", "description", "parameters"}, {"name", "description", "parameters"})
         if not isinstance(function["parameters"], dict):
             raise _shape_error(provider, f"{path}.function.parameters", "parameters", "must be an object")
+        _validate_openai_schema(function["parameters"], f"{path}.function.parameters")
 
 
 def assert_payload_valid(provider: str, payload: dict[str, Any]) -> None:
@@ -244,7 +308,7 @@ class AnthropicProvider(Provider):
 
     def __init__(self, api_key: str, model: str):
         self.api_key = api_key
-        self.model = model
+        self.model = _validated_model_name(model)
 
     def generate(self, request: LLMRequest) -> EventStream:
         import anthropic
@@ -284,7 +348,7 @@ class JSONHTTPProvider(Provider):
     endpoint = ""
 
     def __init__(self, model: str, endpoint: str, api_key: str = ""):
-        self.model = model
+        self.model = _validated_model_name(model)
         self.endpoint = endpoint
         self.api_key = api_key
 
@@ -298,12 +362,16 @@ class JSONHTTPProvider(Provider):
         return headers
 
     def _error_detail(self, status: str, body: str) -> str:
+        redacted = self._redact_body(body)
+        return f"status {status}; response body: {redacted[:200]}"
+
+    def _redact_body(self, body: str) -> str:
         redacted = body
         if self.api_key:
             redacted = redacted.replace(self.api_key, "[REDACTED]")
         redacted = re.sub(r"(?i)(bearer\s+)[^\s,\"']+", r"\1[REDACTED]", redacted)
         redacted = re.sub(r"(?i)([?&]key=)[^&\s]+", r"\1[REDACTED]", redacted)
-        return f"status {status}; response body: {redacted[:200]}"
+        return redacted
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         if os.getenv("HSX_DEBUG") == "1":
@@ -322,13 +390,35 @@ class JSONHTTPProvider(Provider):
                     return json.loads(body)
                 except json.JSONDecodeError as error:
                     detail = self._error_detail(str(status), body)
-                    raise ProviderError(f"{self.name} request failed: {detail}") from error
+                    LOGGER.warning("%s provider returned invalid JSON: %s", self.name, self._redact_body(body))
+                    message = (
+                        f"{self.name.title()} returned an invalid response."
+                        if os.getenv("HSX_DEBUG") != "1"
+                        else f"{self.name} request failed: {detail}"
+                    )
+                    raise ProviderError(message, provider=self.name, detail=detail) from error
         except urllib.error.HTTPError as error:
             body = error.read().decode("utf-8", errors="replace")
             detail = self._error_detail(str(error.code), body)
-            raise ProviderError(f"{self.name} request failed: {detail}") from error
+            LOGGER.warning("%s provider HTTP %s response: %s", self.name, error.code, self._redact_body(body))
+            if os.getenv("HSX_DEBUG") == "1":
+                message = f"{self.name} request failed (HTTP {error.code}): {detail}"
+            elif self.name == "gemini" and error.code == 400:
+                message = "Gemini rejected the conversation format."
+            elif self.name == "groq" and error.code == 404:
+                message = "Groq model not found."
+            else:
+                message = f"{self.name.title()} request failed (HTTP {error.code}); {detail}"
+            raise ProviderError(message, provider=self.name, status=error.code, detail=detail) from error
         except OSError as error:
-            raise ProviderError(f"{self.name} request failed: {self._error_detail('unknown', str(error))}") from error
+            detail = self._error_detail("unknown", str(error))
+            LOGGER.warning("%s provider connection failed: %s", self.name, detail)
+            message = (
+                f"{self.name.title()} could not connect to its API."
+                if os.getenv("HSX_DEBUG") != "1"
+                else f"{self.name} request failed: {detail}"
+            )
+            raise ProviderError(message, provider=self.name, detail=detail) from error
 
 
 def _gemini_response_value(content: Any) -> dict[str, Any]:
@@ -351,6 +441,20 @@ def to_gemini_payload(request: LLMRequest) -> dict[str, Any]:
     for message in messages:
         parts = []
         raw_content = message.get("content", "")
+        if message.get("role") == "function":
+            function_name = message.get("name", "")
+            if not isinstance(function_name, str) or not function_name:
+                raise ProviderError("Gemini legacy tool results require a function name.")
+            contents.append({
+                "role": "user",
+                "parts": [{
+                    "functionResponse": {
+                        "name": function_name,
+                        "response": _gemini_response_value(raw_content),
+                    }
+                }],
+            })
+            continue
         blocks = raw_content if isinstance(raw_content, list) else [{"type": "text", "text": raw_content}]
         for block in blocks:
             block_type = block.get("type")
@@ -379,7 +483,8 @@ def to_gemini_payload(request: LLMRequest) -> dict[str, Any]:
                     }
                 })
         has_function_response = any("functionResponse" in part for part in parts)
-        role = "function" if has_function_response else "model" if message.get("role") == "assistant" else "user"
+        # Gemini accepts only user/model content roles; function responses belong to a user turn.
+        role = "user" if has_function_response else "model" if message.get("role") == "assistant" else "user"
         contents.append({"role": role, "parts": parts})
 
     payload: dict[str, Any] = {"contents": contents}
@@ -416,12 +521,28 @@ def _tool_arguments(arguments: Any, provider: str) -> dict[str, Any]:
     return parsed
 
 
+def _openai_role(role: Any) -> str:
+    if isinstance(role, str) and role in {"system", "user", "assistant", "tool"}:
+        return role
+    raise ProviderError(f"Unsupported internal message role for OpenAI-compatible provider: {role!r}")
+
+
 def to_openai_payload(request: LLMRequest, model: str = "") -> dict[str, Any]:
     messages = to_plain_data(request.messages)
     converted_messages = []
     for message in messages:
-        role = message.get("role", "user")
         raw_content = message.get("content", "")
+        if message.get("role") == "function":
+            tool_call_id = message.get("tool_call_id") or message.get("id")
+            if not isinstance(tool_call_id, str) or not tool_call_id:
+                raise ProviderError("Groq legacy tool results require a tool_call_id.")
+            converted_messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": _openai_tool_result_content(raw_content),
+            })
+            continue
+        role = _openai_role(message.get("role", "user"))
         if not isinstance(raw_content, list):
             converted_messages.append({"role": role, "content": raw_content})
             continue
@@ -457,7 +578,7 @@ def to_openai_payload(request: LLMRequest, model: str = "") -> dict[str, Any]:
             converted_messages.extend(tool_results)
         else:
             converted_message: dict[str, Any] = {
-                "role": "assistant" if role == "assistant" else role,
+                "role": role,
                 "content": "".join(text_parts) if text_parts else None,
             }
             if tool_calls:
@@ -472,7 +593,7 @@ def to_openai_payload(request: LLMRequest, model: str = "") -> dict[str, Any]:
             "function": {
                 "name": tool["name"],
                 "description": tool.get("description", ""),
-                "parameters": tool.get("input_schema", {}),
+                "parameters": _sanitize_openai_schema(tool.get("input_schema", {})),
             },
         }
         for tool in request.tools
@@ -552,3 +673,111 @@ class OpenAICompatibleProvider(JSONHTTPProvider):
                 tool_call_id=tool_call.get("id", ""),
             )
         yield LLMEvent(type="stop", stop_reason=choice.get("finish_reason", "stop"))
+
+
+class GroqProvider(OpenAICompatibleProvider):
+    models_endpoint = "https://api.groq.com/openai/v1/models"
+    _catalog_cache: dict[str, tuple[float, list[str]]] = {}
+    _catalog_ttl_seconds = 300
+    _reported_missing: set[tuple[str, str]] = set()
+
+    def __init__(
+        self,
+        api_key: str,
+        configured_model: str = "",
+        endpoint: str = "https://api.groq.com/openai/v1/chat/completions",
+        models_url: str | None = None,
+    ):
+        self.api_key = api_key
+        self.models_url = models_url or self.models_endpoint
+        models = self._fetch_models()
+        selected = configured_model.strip()
+        if selected and selected not in models:
+            self._report_missing_model(selected, models)
+            selected = self._safe_default(models)
+        elif not selected:
+            selected = self._safe_default(models)
+        if not selected:
+            raise ProviderError("Groq did not return any usable chat models.", provider="groq")
+        self.available_models = models
+        super().__init__("groq", api_key, selected, endpoint)
+
+    def _fetch_models(self, *, force: bool = False) -> list[str]:
+        cache_key = hashlib.sha256(self.api_key.encode()).hexdigest()
+        cached = self._catalog_cache.get(cache_key)
+        if not force and cached and time.monotonic() - cached[0] < self._catalog_ttl_seconds:
+            return list(cached[1])
+        request = urllib.request.Request(
+            self.models_url,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Accept": "application/json",
+            },
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                body = response.read().decode("utf-8", errors="replace")
+            data = json.loads(body)
+        except urllib.error.HTTPError as error:
+            body = error.read().decode("utf-8", errors="replace")
+            detail = self._error_detail(str(error.code), body)
+            LOGGER.warning("Groq model catalog HTTP %s response: %s", error.code, detail)
+            raise ProviderError(
+                "Groq model catalog is unavailable.",
+                provider="groq",
+                status=error.code,
+                detail=detail,
+            ) from error
+        except (OSError, json.JSONDecodeError) as error:
+            LOGGER.warning("Groq model catalog request failed: %s", error)
+            raise ProviderError("Groq model catalog is unavailable.", provider="groq") from error
+        model_data = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(model_data, list):
+            raise ProviderError("Groq returned an invalid model catalog.", provider="groq")
+        models = sorted({
+            item["id"].strip()
+            for item in model_data
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"].strip()
+        })
+        self._catalog_cache[cache_key] = (time.monotonic(), models)
+        return models
+
+    @staticmethod
+    def _safe_default(models: list[str]) -> str:
+        if not models:
+            return ""
+        chat_models = [
+            model for model in models
+            if not any(marker in model.casefold() for marker in ("whisper", "embedding", "moderation", "guard"))
+        ]
+        return (chat_models or models)[0]
+
+    def _report_missing_model(self, model: str, models: list[str]) -> None:
+        cache_key = hashlib.sha256(self.api_key.encode()).hexdigest()
+        report_key = (cache_key, model)
+        if report_key in self._reported_missing:
+            return
+        self._reported_missing.add(report_key)
+        print(
+            f"Groq model {model} not found. Available: {', '.join(models)}. Set GROQ_MODEL in .env.",
+            flush=True,
+        )
+
+    def generate(self, request: LLMRequest) -> EventStream:
+        try:
+            yield from super().generate(request)
+        except ProviderError as error:
+            if error.status != 404:
+                raise
+            models = self._fetch_models(force=True)
+            if self.model not in models:
+                self._report_missing_model(self.model, models)
+                replacement = self._safe_default(models)
+                if not replacement:
+                    raise ProviderError("Groq model not found and no chat models are available.", provider="groq") from error
+                self.model = replacement
+                self.available_models = models
+                yield from super().generate(request)
+                return
+            raise

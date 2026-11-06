@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from agent import llm_client, orchestrator
+from agent.ask_user import AskUserRequest
 from agent.llm.providers import GeminiProvider, OpenAICompatibleProvider, assert_payload_valid
 
 
@@ -71,6 +72,160 @@ def test_real_orchestrator_four_turn_provider_smoke(provider_kind, monkeypatch):
         assert answers == ["done"] * 4
         assert len(handler.requests) == 5
         json.dumps(history)
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+class _FileConversationHandler(BaseHTTPRequestHandler):
+    provider = ""
+    requests = []
+
+    def do_POST(self):
+        payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        assert_payload_valid(self.provider, payload)
+        if self.provider == "gemini":
+            assert all(item["role"] in {"user", "model"} for item in payload["contents"])
+            parameters = payload["tools"][0]["functionDeclarations"][2]["parameters"]
+            assert parameters["properties"]["filenames"]["items"] == {"type": "string"}
+        else:
+            assert all(item["role"] in {"system", "user", "assistant", "tool"} for item in payload["messages"])
+            parameters = payload["tools"][2]["function"]["parameters"]
+            assert parameters["properties"]["filenames"]["items"] == {"type": "string"}
+        type(self).requests.append(payload)
+        call_index = len(type(self).requests)
+        if call_index == 1:
+            if self.provider == "gemini":
+                body = {"candidates": [{"content": {"parts": [{
+                    "functionCall": {
+                        "name": "ask_user",
+                        "args": {"question": "What text should I write?"},
+                    }
+                }]}}]}
+            else:
+                body = {"choices": [{"message": {"content": None, "tool_calls": [{
+                    "id": "ask-call",
+                    "type": "function",
+                    "function": {"name": "ask_user", "arguments": '{"question":"What text should I write?"}'},
+                }]}, "finish_reason": "tool_calls"}]}
+        elif call_index == 2:
+            if self.provider == "gemini":
+                body = {"candidates": [{"content": {"parts": [{
+                    "functionCall": {
+                        "name": "create_text_file",
+                        "args": {"path": "note.txt", "content": "hello"},
+                    }
+                }]}}]}
+            else:
+                body = {"choices": [{"message": {"content": None, "tool_calls": [{
+                    "id": "create-call",
+                    "type": "function",
+                    "function": {
+                        "name": "create_text_file",
+                        "arguments": '{"path":"note.txt","content":"hello"}',
+                    },
+                }]}, "finish_reason": "tool_calls"}]}
+        else:
+            if self.provider == "gemini":
+                body = {"candidates": [{"content": {"parts": [{"text": "Created note.txt."}]}}]}
+            else:
+                body = {"choices": [{"message": {"content": "Created note.txt."}, "finish_reason": "stop"}]}
+        encoded = json.dumps(body).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.mark.parametrize("provider_kind", ["gemini", "groq"])
+def test_file_creation_conversation_uses_native_tool_result_roles(provider_kind, monkeypatch):
+    handler = type(
+        "FileConversationHandler",
+        (_FileConversationHandler,),
+        {"provider": provider_kind, "requests": []},
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    created = []
+    try:
+        if provider_kind == "gemini":
+            provider = GeminiProvider("fake", f"http://127.0.0.1:{server.server_port}")
+        else:
+            provider = OpenAICompatibleProvider(
+                "groq", "fake", "live-model", f"http://127.0.0.1:{server.server_port}"
+            )
+        monkeypatch.setattr(
+            llm_client,
+            "default_router",
+            lambda: type("Router", (), {"generate": provider.generate})(),
+        )
+        tools = [
+            {"name": "ask_user", "description": "Ask a question.", "risk": "safe", "input_schema": {
+                "type": "object", "properties": {"question": {"type": "string"}}, "required": ["question"]
+            }},
+            {"name": "create_text_file", "description": "Create a workspace text file.", "risk": "safe", "input_schema": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                "required": ["path", "content"],
+            }},
+            {"name": "compress_files", "description": "Create an archive.", "risk": "safe", "input_schema": {
+                "type": "object",
+                "properties": {"filenames": {"type": "array"}},
+                "required": ["filenames"],
+            }},
+        ]
+
+        def create_text_file(path, content):
+            created.append((path, content))
+            return {"success": True, "path": path}
+
+        history = []
+        with pytest.raises(AskUserRequest) as paused:
+            orchestrator.run_agent(
+                "Create note.txt in the workspace.",
+                history,
+                tools,
+                {
+                    "ask_user": lambda question: (_ for _ in ()).throw(AskUserRequest(question)),
+                    "create_text_file": create_text_file,
+                    "compress_files": lambda **_kwargs: {},
+                },
+                sensitive=True,
+                session_id=f"file-{provider_kind}",
+            )
+        assert paused.value.question == "What text should I write?"
+        answer, resumed_history = orchestrator.run_agent(
+            "Create note.txt in the workspace.",
+            paused.value.checkpoint,
+            tools,
+            {
+                "ask_user": lambda question: (_ for _ in ()).throw(AskUserRequest(question)),
+                "create_text_file": create_text_file,
+                "compress_files": lambda **_kwargs: {},
+            },
+            sensitive=True,
+            session_id=f"file-{provider_kind}",
+            resume_tool_result={"tool_call_id": paused.value.tool_call_id, "answer": "hello"},
+        )
+        assert answer == "Created note.txt."
+        assert created == [("note.txt", "hello")]
+        assert len(handler.requests) == 3
+        json.dumps(resumed_history)
+        if provider_kind == "gemini":
+            assert handler.requests[1]["contents"][2]["parts"][0]["functionResponse"]["name"] == "ask_user"
+        else:
+            tool_result = next(
+                message for message in handler.requests[1]["messages"]
+                if message["role"] == "tool"
+            )
+            assert tool_result == {
+                "role": "tool", "tool_call_id": "ask-call", "content": '{"success": true, "answer": "hello"}'
+            }
     finally:
         server.shutdown()
         thread.join()

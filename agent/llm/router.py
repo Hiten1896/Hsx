@@ -5,6 +5,7 @@ import time
 from .providers import (
     AnthropicProvider,
     GeminiProvider,
+    GroqProvider,
     OllamaProvider,
     OpenAICompatibleProvider,
     Provider,
@@ -39,7 +40,7 @@ class LLMRouter:
                         (time.perf_counter() - started) * 1000,
                     )
                 LOGGER.warning("LLM provider %s failed: %s", provider.name, error)
-                errors.append(f"{provider.name}: {error}")
+                errors.append((provider.name, str(error)))
             else:
                 if self.provider_result_callback is not None:
                     self.provider_result_callback(
@@ -48,7 +49,28 @@ class LLMRouter:
                         (time.perf_counter() - started) * 1000,
                     )
                 return
-        raise ProviderError("No LLM provider succeeded: " + "; ".join(errors))
+        if not errors:
+            raise ProviderError("No LLM provider is available. Configure a provider in .env.")
+        if len(errors) == 1:
+            provider_name, message = errors[0]
+            normalized = message.casefold()
+            if "rejected the conversation format" not in normalized and "model not found" not in normalized:
+                raise ProviderError(message, provider=provider_name)
+        provider_names = ", ".join(dict.fromkeys(name.title() for name, _ in errors))
+        reasons = {message for _, message in errors}
+        if any("rejected the conversation format" in reason for reason in reasons):
+            reason = "Gemini rejected the conversation format."
+            action = "Check the conversation and tool schema formats, then try again."
+        elif any("model not found" in reason.casefold() for reason in reasons):
+            reason = "The configured provider model was not found."
+            action = "Refresh the provider model list and set a valid model in .env."
+        else:
+            reason = "The configured language model providers could not complete the request."
+            action = "Check provider availability and settings, then try again."
+        raise ProviderError(
+            f"Provider failure: {provider_names}.\n{reason}\nWhat to do: {action}",
+            provider=provider_names,
+        )
 
     def panel(self, provider_names: list[str]) -> PanelRouter | None:
         selected = [provider for provider in self.providers if provider.name in provider_names]
@@ -60,7 +82,7 @@ class LLMRouter:
 
 
 def default_router() -> LLMRouter:
-    from config import ENV_FILE
+    from config import ENV_FILE, model_setting
     from dotenv import load_dotenv
 
     load_dotenv(ENV_FILE, override=False)
@@ -91,19 +113,23 @@ def default_router() -> LLMRouter:
         if name == "anthropic" and keys.get(name):
             providers.append(AnthropicProvider(keys[name], model))
         elif name == "gemini" and keys.get(name):
-            gemini_model = value("GEMINI_MODEL") or "gemini-2.0-flash"
+            gemini_model = model_setting("GEMINI_MODEL", "gemini-3.6-flash")
             providers.append(GeminiProvider(gemini_model, f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent", keys[name]))
         elif name in {"grok", "xai"} and keys.get("grok"):
             grok_model = value("GROK_MODEL") or value("XAI_MODEL") or "grok-3-mini"
             providers.append(OpenAICompatibleProvider("grok", keys["grok"], grok_model, "https://api.x.ai/v1/chat/completions"))
         elif name == "groq" and keys.get(name):
-            providers.append(OpenAICompatibleProvider("groq", keys[name], value("GROQ_MODEL") or "llama-3.1-8b-instant", "https://api.groq.com/openai/v1/chat/completions"))
+            try:
+                providers.append(GroqProvider(keys[name], value("GROQ_MODEL")))
+            except ProviderError as error:
+                LOGGER.warning("Groq provider was not initialized: %s", error)
         elif name == "ollama" and ollama_model:
             from config import OLLAMA_URL
 
             providers.append(OllamaProvider(ollama_model, f"{OLLAMA_URL.rstrip('/')}/v1/chat/completions"))
         elif name == "openrouter" and keys.get(name):
-            providers.append(OpenAICompatibleProvider("openrouter", keys[name], value("OPENROUTER_MODEL") or "google/gemini-2.0-flash-exp:free", "https://openrouter.ai/api/v1/chat/completions"))
+            openrouter_model = model_setting("OPENROUTER_MODEL", "google/gemini-3.6-flash")
+            providers.append(OpenAICompatibleProvider("openrouter", keys[name], openrouter_model, "https://openrouter.ai/api/v1/chat/completions"))
         elif name == "openai" and keys.get(name):
             providers.append(OpenAICompatibleProvider("openai", keys[name], value("OPENAI_MODEL") or "gpt-4o-mini", "https://api.openai.com/v1/chat/completions"))
         elif name == "openai_compatible" and keys.get("openai") and value("OPENAI_COMPATIBLE_URL"):

@@ -2,7 +2,13 @@ import json
 
 import pytest
 
-from agent.llm.providers import OpenAICompatibleProvider, assert_payload_valid, to_gemini_payload, to_openai_payload
+from agent.llm.providers import (
+    OpenAICompatibleProvider,
+    ProviderError,
+    assert_payload_valid,
+    to_gemini_payload,
+    to_openai_payload,
+)
 from agent.llm.types import LLMRequest
 
 
@@ -46,7 +52,7 @@ def test_gemini_payload_uses_function_call_and_response_parts():
             {"role": "model", "parts": [{
                 "functionCall": {"name": "search", "args": {"query": "cats"}}
             }]},
-            {"role": "function", "parts": [{
+            {"role": "user", "parts": [{
                 "functionResponse": {
                     "name": "search",
                     "response": {"items": ["cat"]},
@@ -56,6 +62,130 @@ def test_gemini_payload_uses_function_call_and_response_parts():
         ],
     }
     assert all("type" not in part for content in payload["contents"] for part in content["parts"])
+    assert all(content["role"] in {"user", "model"} for content in payload["contents"])
+
+
+def test_gemini_rejects_unsupported_function_role():
+    with pytest.raises(ValueError, match="role.*must be user or model"):
+        assert_payload_valid("gemini", {
+            "contents": [{"role": "function", "parts": [{"text": "unsupported"}]}],
+        })
+
+
+def test_gemini_maps_legacy_function_result_to_function_response():
+    payload = to_gemini_payload(LLMRequest([
+        {"role": "user", "content": "check this"},
+        {"role": "assistant", "content": [{
+            "type": "tool_use", "name": "lookup", "input": {}, "id": "call-1"
+        }]},
+        {"role": "function", "name": "lookup", "content": '{"ok": true}'},
+    ]))
+    assert payload["contents"][-1] == {
+        "role": "user",
+        "parts": [{"functionResponse": {"name": "lookup", "response": {"ok": True}}}],
+    }
+    assert_payload_valid("gemini", payload)
+
+
+def test_gemini_file_creation_conversation_uses_only_native_roles():
+    history = [
+        {"role": "user", "content": "Create a file called note.txt with hello."},
+        {"role": "assistant", "content": [{
+            "type": "tool_use", "name": "ask_user", "input": {"question": "What text?"}, "id": "ask-1"
+        }]},
+        {"role": "user", "content": [{
+            "type": "tool_result", "tool_use_id": "ask-1", "content": '{"answer": "hello"}'
+        }]},
+        {"role": "assistant", "content": [{"type": "text", "text": "I will create it."}]},
+        {"role": "user", "content": "Actually, use hello."},
+        {"role": "assistant", "content": [{
+            "type": "tool_use", "name": "create_text_file",
+            "input": {"path": "note.txt", "content": "hello"}, "id": "create-1"
+        }]},
+        {"role": "user", "content": [{
+            "type": "tool_result", "tool_use_id": "create-1", "content": '{"success": true}'
+        }]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Created note.txt."}]},
+    ]
+    payload = to_gemini_payload(LLMRequest(history))
+    assert all(item["role"] in {"user", "model"} for item in payload["contents"])
+    assert payload["contents"][5]["parts"][0]["functionCall"]["name"] == "create_text_file"
+    assert payload["contents"][6]["parts"][0]["functionResponse"]["name"] == "create_text_file"
+    assert_payload_valid("gemini", payload)
+
+
+def test_groq_file_creation_conversation_preserves_tool_call_ids():
+    history = [
+        {"role": "user", "content": "Create a file called note.txt with hello."},
+        {"role": "assistant", "content": [{
+            "type": "tool_use", "name": "ask_user", "input": {"question": "What text?"}, "id": "ask-1"
+        }]},
+        {"role": "user", "content": [{
+            "type": "tool_result", "tool_use_id": "ask-1", "content": '{"answer": "hello"}'
+        }]},
+        {"role": "assistant", "content": [{"type": "text", "text": "I will create it."}]},
+        {"role": "user", "content": "Actually, use hello."},
+        {"role": "assistant", "content": [{
+            "type": "tool_use", "name": "create_text_file",
+            "input": {"path": "note.txt", "content": "hello"}, "id": "create-1"
+        }]},
+        {"role": "user", "content": [{
+            "type": "tool_result", "tool_use_id": "create-1", "content": '{"success": true}'
+        }]},
+    ]
+    payload = to_openai_payload(LLMRequest(history), "live-selected-model")
+    assert all(item["role"] in {"system", "user", "assistant", "tool"} for item in payload["messages"])
+    assert payload["messages"][2] == {
+        "role": "tool", "tool_call_id": "ask-1", "content": '{"answer": "hello"}'
+    }
+    assert payload["messages"][6] == {
+        "role": "tool", "tool_call_id": "create-1", "content": '{"success": true}'
+    }
+    assert_payload_valid("groq", payload)
+
+
+def test_gemini_array_schemas_get_default_items_recursively():
+    request = LLMRequest([], tools=[_tool(schema={
+        "type": "object",
+        "properties": {
+            "filenames": {"type": "array"},
+            "nested": {"type": "object", "properties": {"values": {"type": "array"}}},
+        },
+    })])
+    payload = to_gemini_payload(request)
+    parameters = payload["tools"][0]["functionDeclarations"][0]["parameters"]
+    assert parameters["properties"]["filenames"]["items"] == {"type": "string"}
+    assert parameters["properties"]["nested"]["properties"]["values"]["items"] == {"type": "string"}
+    assert_payload_valid("gemini", payload)
+
+
+def test_openai_compatible_maps_legacy_function_role_to_correlated_tool_result():
+    payload = to_openai_payload(LLMRequest([
+        {"role": "assistant", "content": [{
+            "type": "tool_use", "name": "lookup", "input": {}, "id": "call-legacy"
+        }]},
+        {"role": "function", "name": "lookup", "tool_call_id": "call-legacy", "content": "legacy function output"},
+    ]), "model")
+
+    assert payload["messages"][-1] == {
+        "role": "tool",
+        "tool_call_id": "call-legacy",
+        "content": "legacy function output",
+    }
+
+
+def test_openai_compatible_rejects_unpaired_legacy_function_result():
+    with pytest.raises(ProviderError, match="require a tool_call_id"):
+        to_openai_payload(LLMRequest([
+            {"role": "function", "name": "lookup", "content": "legacy function output"},
+        ]), "model")
+
+
+def test_openai_compatible_rejects_unknown_internal_roles():
+    with pytest.raises(ProviderError, match="Unsupported internal message role"):
+        to_openai_payload(LLMRequest([
+            {"role": "developer", "content": "unsupported"},
+        ]), "model")
 
 
 def test_groq_payload_uses_openai_text_and_tool_schemas():

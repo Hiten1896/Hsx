@@ -10,6 +10,7 @@ openpyxl
 rapidfuzz
 scikit-learn
 joblib
+networkx
 psutil
 # PDF and presentation skills.
 pdfplumber

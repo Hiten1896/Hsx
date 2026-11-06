@@ -1,5 +1,51 @@
-from agent.llm.providers import OpenAICompatibleProvider
+import pytest
+
+from agent.llm.router import default_router
+from agent.llm.providers import JSONHTTPProvider, OpenAICompatibleProvider
 from agent.llm.types import LLMRequest
+
+
+def test_provider_model_names_must_be_nonempty_and_whitespace_free():
+    assert JSONHTTPProvider(" google/gemini-3.6-flash ", "https://example.test").model == "google/gemini-3.6-flash"
+    with pytest.raises(ValueError, match="model name"):
+        JSONHTTPProvider("  ", "https://example.test")
+    with pytest.raises(ValueError, match="model name"):
+        JSONHTTPProvider("invalid model id", "https://example.test")
+
+
+def test_default_router_uses_live_groq_model_catalog(monkeypatch, capsys):
+    for key in (
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GROQ_API_KEY",
+        "GROK_API_KEY",
+        "XAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "OPENAI_API_KEY",
+        "OLLAMA_MODEL",
+    ):
+        monkeypatch.setenv(key, "")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.0-flash")
+    monkeypatch.setenv("GROQ_MODEL", "llama-3.1-8b-instant")
+    monkeypatch.setenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("HSX_PROVIDER", "gemini")
+    monkeypatch.setenv("HSX_FALLBACKS", "groq,openrouter")
+    monkeypatch.setattr(
+        "agent.llm.providers.GroqProvider._fetch_models",
+        lambda self, force=False: ["live-chat", "whisper-transcriber"],
+    )
+
+    router = default_router()
+
+    assert {provider.name: provider.model for provider in router.providers} == {
+        "gemini": "gemini-3.6-flash",
+        "groq": "live-chat",
+        "openrouter": "google/gemini-3.6-flash",
+    }
+    assert capsys.readouterr().out.startswith("Groq model llama-3.1-8b-instant not found.")
 
 
 def test_openai_compatible_provider_normalizes_text_and_tools(monkeypatch):

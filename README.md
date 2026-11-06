@@ -18,6 +18,8 @@ demo. The implemented runtime currently provides:
   previews, downloads, output retrieval, and an installable PWA shell.
 - A local TTY client with streamed responses, follow-up questions, job cancellation,
   and the same API and policy boundaries as the browser client.
+- Direct, structured local-host tools for system information, disk usage, network
+  status, USB devices, and no-overwrite text-file creation in the shared workspace.
 - Automatic discovery of configured LLM providers with ordered fallback routing and a
   provider-neutral event stream.
 - Optional multi-model answer panels for text-only requests: independent drafts are
@@ -50,6 +52,9 @@ demo. The implemented runtime currently provides:
   with policy-checked step execution and bounded reflection retries.
 - A streaming, SQLite-backed workspace RAG index using local hashed n-gram vectors,
   redacted `.py`/`.md`/`.json` chunks, and bounded untrusted context retrieval.
+- A bounded NetworkX knowledge graph of local Python symbols, imports, calls, and
+  Markdown links, persisted in `data/knowledge_graph.json` and retrieved as untrusted
+  context alongside RAG results.
 - A Planner/Coder/Critic flow for non-sensitive complex plans; proposals are reviewed
   before the normal policy-gated executor handles any tools.
 - Successful non-sensitive execution traces exported as redacted ShareGPT JSONL, plus
@@ -57,7 +62,7 @@ demo. The implemented runtime currently provides:
 - Opt-in, low-resolution camera/RTSP and headless Motion process wrappers, confirmation-
   gated Gemini still-image context, and asynchronous Piper/ALSA notification cues.
 - A policy broker and audit trail for dangerous or administrative operations, plus
-  Docker-first isolation for model-requested code execution.
+  Docker or fail-closed Linux network-namespace/resource-limited code execution.
 
 The system is still an actively developed personal project. Hardware co-processors,
 general visual awareness, ambient sound classification, and independent hardware
@@ -83,6 +88,13 @@ whether that call is available, requires confirmation, or must be denied. Host-l
 operations are further separated behind the policy broker and the operating-system
 permissions of the Hsx service account.
 
+Autonomy is controlled by `HSX_AUTONOMY=auto|ask|strict` (default `auto`). SAFE
+actions run with audit logging, NORMAL actions run silently in `auto` and `strict`
+but ask in `ask`, DANGEROUS actions always require approval, and BLOCKED actions
+never run. Approval requests persist across restarts and are resumed from the stored
+tool call. See [docs/approvals.md](docs/approvals.md) for action tiers and response
+handling.
+
 ## Supported model providers
 
 Configure one or more providers in `.env`. The router discovers configured credentials;
@@ -104,6 +116,11 @@ Thompson-sampling selector. Provider success, failure, latency, and response
 feedback are stored in `data/provider_bandit.json`; transient 503 and timeout
 errors fall through to the next configured provider.
 
+Groq model IDs are verified against the authenticated live model catalog. If
+`GROQ_MODEL` is unset, Hsx selects a chat-capable ID from that catalog; if the
+configured ID is unavailable, the CLI/server prints the available IDs and
+suggests setting `GROQ_MODEL` in `.env`.
+
 `HSX_PROVIDER` selects the preferred provider and `HSX_FALLBACKS` supplies an ordered
 fallback list. If they are empty, Hsx discovers providers in its built-in order and uses
 the credentials that are present. Provider quotas, model names, and availability are
@@ -112,6 +129,15 @@ controlled by the provider and can change independently of Hsx.
 The Anthropic SDK is included in the core dependency profile for compatibility, but it
 is loaded only when the Anthropic provider is used. The other hosted providers use the
 shared HTTP implementation.
+
+### Known provider failure messages
+
+| Provider | Failure | Resolution |
+| --- | --- | --- |
+| Gemini | `Role 'function' is not supported` | Tool results are converted to `functionResponse` parts in a `user` turn. |
+| Gemini | `function_declarations...items missing` | Array schemas are sanitized recursively and receive an item schema. |
+| Groq | `model_not_found` / HTTP 404 | Hsx refreshes the authenticated model catalog; set `GROQ_MODEL` to an available ID if needed. |
+| Gemini or Groq | HTTP 400 / conversation-format rejection | Hsx displays a short plain-English error; inspect the server log for the redacted provider response. |
 
 ## Installation
 
@@ -166,7 +192,8 @@ Copy `.env.example` to `.env` and fill only the settings you need. Important gro
 | Group | Variables | Purpose |
 | --- | --- | --- |
 | Provider | `HSX_PROVIDER`, `HSX_FALLBACKS`, provider API keys and model names | Select and configure LLMs |
-| Server | `HSX_HOST`, `HSX_PORT`, `HSX_ALLOWED_ORIGINS` | Bind address, port, and browser origins |
+| Server | `HSX_HOST`, `HSX_PORT`, `HSX_ALLOWED_ORIGINS`, `HSX_REMOTE_TOKEN` | Bind address, port, browser origins, and optional Tailscale bearer auth |
+| Mesh | `HSX_MESH_HOST`, `HSX_MESH_PORT`, `HSX_MESH_TOKEN`, `HSX_MESH_TLS_CERT`, `HSX_MESH_TLS_KEY` | Optional private-LAN HTTPS node API |
 | Owner approval | `HSX_OWNER_PIN` | Approval for privileged actions |
 | Workspace | `HSX_WORKSPACE`, `HSX_WORK_DIR` | Source files and generated deliverables |
 | Execution | `HSX_SANDBOX`, `HSX_ALLOW_DANGEROUS`, `HSX_ALLOW_SYSTEM_CONTROL` | Code isolation and administrative controls |
@@ -174,8 +201,14 @@ Copy `.env.example` to `.env` and fill only the settings you need. Important gro
 | Hardware | `HSX_ENABLE_CAMERA_STREAM`, `HSX_ENABLE_MOTION_MONITOR`, `HSX_ENABLE_VISION_CAPTURE`, `HSX_ENABLE_AUDIO_ALERTS`, `HSX_ENABLE_VOICE_ALERTS` | Opt-in camera, motion, and speaker services |
 | Notifications | `HSX_VAPID_*`, `HSX_NOTIFY_*`, `TELEGRAM_*` | Web Push, in-app, and Telegram routing |
 
-The local server accepts loopback connections without an access token and
-rejects non-loopback HTTP requests. Keep the server bound to localhost. When
+The primary API defaults to loopback and accepts local requests without a token.
+For direct Tailscale access, bind `HSX_HOST` to the server's Tailscale address
+(preferred) or `0.0.0.0`, then set `HSX_REMOTE_TOKEN` to a random value of at
+least 32 characters. Remote API requests are accepted only from Tailscale IPv4
+(`100.64.0.0/10`) or IPv6 (`fd7a:115c:a1e0::/48`) peers and must include
+`Authorization: Bearer <HSX_REMOTE_TOKEN>`; an unset token keeps remote access
+disabled. Remote browser origins must also be listed exactly in
+`HSX_ALLOWED_ORIGINS`. The restricted TLS mesh listener remains separate.
 
 ### Headless Debian hardware (optional)
 
@@ -207,14 +240,39 @@ To install the optional AirPlay receiver on Debian, run
 `sudo bash deploy/setup_airplay.sh`. It installs Shairport Sync, Avahi, and ALSA
 utilities and backs up an existing Shairport configuration before replacing it.
 Set `HSX_AIRPLAY_NAME` in the installer environment to customize the advertised
-receiver name. Keep the server bound to localhost. When
-`HSX_OWNER_PIN` is omitted, an owner PIN is generated and shown once.
+receiver name. Keep the primary server bound to localhost. If `HSX_OWNER_PIN` is
+omitted, an owner PIN is generated and shown once.
 
 Runtime Python logs and structured router/job events are batched into
 `data/datasets/agent_logs.jsonl`, with one bounded rotated file. Successful,
 non-sensitive ShareGPT training examples and tool trajectories are stored in
 `data/datasets/sft_dataset.jsonl`; log messages and structured events redact
 credential fields, and sensitive jobs are excluded from training records.
+Preference candidates are conservatively labeled only when explicit test and tool
+evidence exists; matching chosen/rejected runs are paired in
+`data/datasets/dpo_dataset.jsonl`. Use `agent.ml.dpo_collector.export_clean_pairs`
+to export validated pairs for offline alignment. The startup code-graph pass is
+bounded and runs in the background; graph hints contain symbol names and paths, not
+source text.
+
+The optional mesh listener is separate from the loopback web server and is disabled
+unless `HSX_MESH_HOST` is set to a private, non-loopback IP address. Enabling it
+requires a TLS certificate/key and a random `HSX_MESH_TOKEN` of at least 32
+characters; keep the private key readable only by the HSX service account. Remote
+clients must authenticate with a token over HTTPS. The mesh exposes only node info,
+telemetry, camera status/stream, job status, and task submission; it does not expose
+the general local API. `GET /api/mesh/info` provides node metadata, and the optional
+IPv4 multicast responder on `239.255.42.99:45800` supports discovery on the local
+network (`agent.mesh.discover_nodes`). Discovery advertises only the private HTTPS
+address and node identifier; all API requests still require TLS and the token. No
+public or wildcard listener is started. For browser-based clients, add the exact HTTPS origin to
+`HSX_ALLOWED_ORIGINS`.
+
+The Python sandbox denies network access with a Linux network namespace and applies
+CPU, address-space, file-size, and descriptor limits. If the required namespace is
+unavailable, execution fails closed. Docker remains available as the isolated
+`run_code` backend. This is not a filesystem container; run the HSX service as an
+unprivileged account and keep proposal directories writable only by that account.
 The PIN is stored as a salted hash outside the agent context and is never placed in a
 prompt or memory record.
 
@@ -313,9 +371,11 @@ In-app notifications work with the local web interface. Web Push requires VAPID 
 Telegram is an optional backup channel for selected health and heartbeat events. Routing,
 quiet hours, and target selection are configurable through `.env`.
 
-The local interface is intentionally loopback-only and has no API access token.
-Do not expose it through Tailscale Serve, a reverse proxy, a container port, or
-a public port.
+The web dashboard remains intended for local use. Direct remote API clients,
+including `cli.py` when `HSX_REMOTE_TOKEN` is set, can connect over Tailscale
+with bearer authentication. Do not expose the primary listener through Tailscale
+Serve, a reverse proxy, a container port, or a public port; proxying can obscure
+the peer address used to enforce the Tailscale-only policy.
 
 ## Diagnostics and development
 

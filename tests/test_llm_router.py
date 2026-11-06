@@ -388,7 +388,7 @@ def test_provider_completes_tool_call_loop_with_local_http_server(provider_kind)
                 "parts": [{"functionCall": {"name": "search", "args": {"query": "news"}}}],
             }
             assert contents[2] == {
-                "role": "function",
+                "role": "user",
                 "parts": [{"functionResponse": {"name": "search", "response": {"results": ["A news story"]}}}],
             }
         else:

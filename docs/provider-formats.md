@@ -67,4 +67,8 @@ Tool-call arguments are JSON strings. Tool results are strings, including an emp
 | Provider | Failure | Cause | Fix |
 | --- | --- | --- | --- |
 | Gemini | `Invalid JSON payload. Unknown name 'type' at 'contents[1].parts[0]'` | Internal Hsx block dictionaries were sent directly as Gemini parts. | Convert text, tool calls, and tool results to Gemini-native parts. |
+| Gemini | `Role 'function' is not supported. Please use a valid role` | A tool result was serialized as a `function` content role. | Convert results to a `functionResponse` part in a `user` content turn; never send the internal role. |
+| Gemini | `function_declarations[...].parameters.properties[...].items missing` | An array declaration omitted its element schema. | Recursively sanitize schemas and provide `items: {"type":"string"}` when an array item type is unspecified. |
 | Groq | `'tools.0.type': property 'type' is missing` | Hsx tool schemas were sent without the OpenAI function wrapper. | Send `{"type":"function","function":{...}}` and convert history to OpenAI messages. |
+| Groq | `model_not_found` / HTTP 404 | The configured model ID is unavailable to the account or no longer active. | Query the authenticated models endpoint, select an available chat model, and set `GROQ_MODEL` in `.env` if needed. |
+| Gemini or Groq | HTTP 400 / provider payload rejected | The provider rejected a role, tool result, or tool schema. | Hsx shows a short plain-English error; inspect the server log and verify the provider contract before retrying. |
