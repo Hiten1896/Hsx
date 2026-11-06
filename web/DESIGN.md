@@ -9,7 +9,11 @@ for shared design and server contracts.
 - Sidebar: Hsx branding, new chat, file attachment, and live connection health.
 - Center: prompt suggestions, streamed conversation, feedback, and a working composer.
 - Right rail on desktop: the Hsx host camera feed and its availability state.
-- Mobile: focused chat and sticky composer; browser camera access is never requested.
+- Mobile: focused chat and sticky composer, a navigation drawer with live connection
+  states, and a camera drawer with host feed, timing information, and generated
+  artifacts. Browser camera access is never requested.
+- Artifacts are loaded from `/api/outputs` and link to files in the host workspace's
+  `Hsx Work` output directory.
 
 Only features backed by the current API are shown. Workspace attachments are supported
 for text, Markdown, CSV, JSON, log, and code/text files up to 1 MB. They upload through

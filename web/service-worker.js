@@ -1,9 +1,10 @@
-const CACHE_NAME = 'hsx-shell-v5';
+const CACHE_NAME = 'hsx-shell-v6';
 const SHELL = [
   '/web/',
   '/web/chat.css',
   '/web/chat.js',
   '/web/design-tokens.json',
+  '/web/api-contract.json',
   '/web/api-contract.json',
   '/web/manifest.webmanifest',
   '/web/icon.svg',

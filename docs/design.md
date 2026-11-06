@@ -10,11 +10,13 @@ API.
 - Hsx uses a subdued forest-and-stone dark theme with a custom Hsx mark.
 - Desktop uses a navigation and connection-status rail, a central chat, and a
   right-hand host-camera panel.
-- On narrow screens the navigation and camera rail collapse so the composer and chat
-  remain usable; the host camera is never substituted with the phone's camera.
+- On narrow screens a menu button opens the navigation and connection-status drawer,
+  while a camera button opens the host feed, camera timing details, and generated
+  artifacts. Both drawers leave the chat composer available when closed; the host
+  camera is never substituted with the phone's camera.
 - The navigation only presents chat and file attachment actions supported by the
-  current web client. Unsupported artifact/history/settings panels are not presented
-  as working features.
+  current web client. The Artifacts panel lists generated files from the host's
+  `Hsx Work` output directory and links to their workspace previews.
 - The connection rail reports API health, last-used LLM provider, host camera health,
   the current Tailnet access path, and the browser's network-online hint. “Standby”
   means there has not yet been a provider call; it is not a provider health check.

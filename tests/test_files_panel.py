@@ -75,6 +75,24 @@ def test_files_panel_lists_workspace_files_and_serves_ranges(tmp_path: Path, mon
     assert body == b"2345"
 
 
+def test_outputs_endpoint_lists_generated_artifacts(tmp_path: Path, monkeypatch):
+    root = tmp_path / "share"
+    output_dir = root / "Hsx Work"
+    output_dir.mkdir(parents=True)
+    (output_dir / "report.pdf").write_bytes(b"pdf")
+    (root / "source.txt").write_text("input", encoding="utf-8")
+    monkeypatch.setattr(server, "WORKSPACE", Workspace(root, "Hsx Work"))
+    monkeypatch.setattr(server, "WORKSPACE_DIR", root)
+    monkeypatch.setattr(server, "WORK_DIR", output_dir)
+
+    status, _, body = _request("/api/outputs")
+
+    assert status == 200
+    files = json.loads(body)["files"]
+    assert [item["name"] for item in files] == ["report.pdf"]
+    assert files[0]["path"] == "Hsx Work/report.pdf"
+
+
 def test_text_upload_returns_workspace_path_for_chat_attachment(tmp_path: Path, monkeypatch):
     root = tmp_path / "share"
     root.mkdir()

@@ -33,6 +33,10 @@ const elements = {
   dropHint: document.getElementById('drop-hint'),
   tokenForm: document.getElementById('access-token-form'),
   tokenInput: document.getElementById('access-token-input'),
+  sidebar: document.getElementById('app-sidebar'),
+  cameraSidebar: document.getElementById('camera-sidebar'),
+  panelBackdrop: document.getElementById('panel-backdrop'),
+  artifactsList: document.getElementById('artifacts-list'),
 };
 
 function safeStorageGet(storage, key) {
@@ -521,6 +525,7 @@ async function submitPrompt() {
     setBusy(false);
     elements.send.disabled = false;
     elements.prompt.focus();
+    refreshArtifacts();
     refreshConnections();
   }
 }
@@ -782,7 +787,6 @@ async function refreshConnections() {
       setConnection('api-dot', 'api-state', 'Token needed', 'warning');
       elements.connection.textContent = 'Token needed';
       setConnection('llm-dot', 'llm-state', 'Locked', 'warning');
-      document.getElementById('provider-chip').textContent = 'Access token needed';
       document.getElementById('connection-summary').textContent = 'Enter token to connect';
       await refreshCamera();
       return;
@@ -796,14 +800,10 @@ async function refreshConnections() {
     if (telemetryResponse.ok) {
       const telemetry = await telemetryResponse.json();
       const provider = String(telemetry.provider || 'not connected');
-      const model = String(telemetry.model || '');
       const available = !['not connected', ''].includes(provider.toLowerCase());
-      const label = available ? `${provider}${model && model !== '—' ? ` · ${model}` : ''}` : 'Standby';
       setConnection('llm-dot', 'llm-state', available ? 'Used' : 'Standby', available ? 'connected' : 'warning');
-      document.getElementById('provider-chip').textContent = available ? label : 'Provider standby';
     } else {
       setConnection('llm-dot', 'llm-state', 'Unavailable', 'disconnected');
-      document.getElementById('provider-chip').textContent = 'Provider unavailable';
     }
     const healthy = healthResponse.ok;
     document.getElementById('connection-summary').textContent = healthy ? 'Host reachable' : 'Offline';
@@ -815,10 +815,72 @@ async function refreshConnections() {
     connectionDot.className = 'connection-dot';
     connectionDot.dataset.state = 'disconnected';
     elements.connection.append(connectionDot, document.createTextNode(' Offline'));
-    document.getElementById('provider-chip').textContent = 'Provider unavailable';
     document.getElementById('connection-summary').textContent = 'Offline';
   }
   await refreshCamera();
+}
+
+function closeMobilePanels() {
+  elements.sidebar.classList.remove('is-open');
+  elements.cameraSidebar.classList.remove('is-open');
+  elements.panelBackdrop.hidden = true;
+  document.getElementById('sidebar-toggle').setAttribute('aria-expanded', 'false');
+  document.getElementById('camera-toggle').setAttribute('aria-expanded', 'false');
+}
+
+function openMobilePanel(panel) {
+  closeMobilePanels();
+  panel.classList.add('is-open');
+  elements.panelBackdrop.hidden = false;
+  const isSidebar = panel === elements.sidebar;
+  document.getElementById(isSidebar ? 'sidebar-toggle' : 'camera-toggle')
+    .setAttribute('aria-expanded', 'true');
+}
+
+async function refreshArtifacts() {
+  const empty = document.createElement('p');
+  empty.className = 'artifacts-empty';
+  empty.textContent = 'Loading generated files…';
+  elements.artifactsList.replaceChildren(empty);
+  try {
+    const response = await apiFetch(apiContract.endpoints.outputs);
+    if (!response.ok) throw new Error('Could not load generated files.');
+    const data = await response.json();
+    const files = Array.isArray(data.files) ? data.files : [];
+    if (!files.length) {
+      empty.textContent = 'No generated files yet. Files created by Hsx will appear here.';
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    for (const file of files) {
+      if (typeof file.path !== 'string' || typeof file.name !== 'string') continue;
+      const item = document.createElement('div');
+      item.className = 'artifact-item';
+      const links = document.createElement('a');
+      const query = new URLSearchParams({ path: file.path });
+      links.href = `/api/files/download?${query}`;
+      links.setAttribute('aria-label', `Download ${file.name}`);
+      const name = document.createElement('span');
+      name.className = 'artifact-name';
+      name.textContent = file.name;
+      const meta = document.createElement('span');
+      meta.className = 'artifact-meta';
+      meta.textContent = file.path;
+      links.append(name, meta);
+      const type = document.createElement('span');
+      type.className = 'artifact-type';
+      type.textContent = String(file.type || 'file');
+      item.append(links, type);
+      fragment.append(item);
+    }
+    if (!fragment.childNodes.length) {
+      empty.textContent = 'No generated files yet. Files created by Hsx will appear here.';
+      return;
+    }
+    elements.artifactsList.replaceChildren(fragment);
+  } catch {
+    empty.textContent = 'Generated files are unavailable right now. Tap refresh to try again.';
+  }
 }
 
 async function stopTask() {
@@ -876,6 +938,25 @@ async function initialize() {
   ]);
   if (!tokensResponse.ok || !contractResponse.ok) throw new Error('Could not load the Hsx interface contract.');
   apiContract = await contractResponse.json();
+  document.getElementById('sidebar-toggle').addEventListener('click', () => {
+    if (elements.sidebar.classList.contains('is-open')) closeMobilePanels();
+    else openMobilePanel(elements.sidebar);
+  });
+  document.getElementById('camera-toggle').addEventListener('click', () => {
+    if (elements.cameraSidebar.classList.contains('is-open')) {
+      closeMobilePanels();
+    } else {
+      openMobilePanel(elements.cameraSidebar);
+      refreshArtifacts();
+      refreshCamera();
+    }
+  });
+  document.getElementById('camera-close').addEventListener('click', closeMobilePanels);
+  elements.panelBackdrop.addEventListener('click', closeMobilePanels);
+  document.getElementById('refresh-artifacts').addEventListener('click', refreshArtifacts);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeMobilePanels();
+  });
   persistSessionId();
   setupTokenControls();
   const draft = safeStorageGet('sessionStorage', `hsx-draft-${sessionId}`);
@@ -968,6 +1049,7 @@ async function initialize() {
     }
   });
   await refreshConnections();
+  refreshArtifacts();
   window.setInterval(refreshConnections, 15000);
   updateCameraClock();
   window.setInterval(updateCameraClock, 1000);

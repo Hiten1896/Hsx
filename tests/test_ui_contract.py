@@ -31,6 +31,10 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert 'id="chat-stream"' in html
     assert 'id="composer-form"' in html
     assert 'id="live-camera"' in html
+    assert 'id="sidebar-toggle"' in html
+    assert 'id="camera-toggle"' in html
+    assert 'id="panel-backdrop"' in html
+    assert 'id="artifacts-list"' in html
     assert 'id="camera-clock"' in html
     assert 'id="camera-latency"' in html
     assert 'id="camera-clip-time"' in html
@@ -41,7 +45,7 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert "Authorization" in script
     assert "login-panel" not in html
     assert "bearerToken" in script
-    assert "telemetry.model" in script
+    assert "telemetry.provider" in script
     assert "hsx-bearer-token" in script
     assert "elements.composer.addEventListener('submit'" in script
     assert "elements.stop.addEventListener('click', stopTask)" in script
@@ -51,11 +55,16 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert "apiContract.endpoints.telemetry" in script
     assert "visibilitychange" in script
     assert "scheduleCameraReconnect" in script
+    assert "apiContract.endpoints.outputs" in script
+    assert "function openMobilePanel" in script
     assert "X-Hsx-Captured-At" in script
     assert "WORKSPACE</span>" not in html
     assert "var(--background)" in css
     assert "grid-template-columns: 258px minmax(0, 1fr) 340px" in css
     assert "grid-template-columns: minmax(0, 1fr)" in css
+    assert ".sidebar.is-open" in css
+    assert ".camera-sidebar.is-open" in css
+    assert ".artifacts-panel" in css
 
     service_worker = (BASE_DIR / "web" / "service-worker.js").read_text(encoding="utf-8")
     assert "'/web/chat.css'" in service_worker
