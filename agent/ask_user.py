@@ -444,7 +444,7 @@ class AskUserJobs:
             row = connection.execute("SELECT question_count, state FROM ask_jobs WHERE id = ?", (job_id,)).fetchone()
             if row is None:
                 raise KeyError("Question job not found.")
-            if row["state"] == "running":
+            if row["state"] in {"running", "waiting_for_user"}:
                 if row["question_count"] >= 3:
                     connection.execute(
                         "UPDATE ask_jobs SET state = 'cancelled', error = ?, updated = ? WHERE id = ?",
@@ -455,7 +455,7 @@ class AskUserJobs:
                         """UPDATE ask_jobs SET question = ?, options = ?, allow_free_text = ?,
                         question_count = question_count + 1, state = 'waiting_for_user',
                         tool_call_id = ?, checkpoint = ?, expires_at = ?, updated = ?
-                        WHERE id = ? AND state = 'running'""",
+                        WHERE id = ? AND state IN ('running', 'waiting_for_user')""",
                         (
                             question.question,
                             json.dumps(question.options),

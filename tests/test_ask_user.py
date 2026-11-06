@@ -59,19 +59,25 @@ def test_ask_user_timeout_and_question_limit(tmp_path: Path):
 
 def test_target_device_survives_job_store_restart(tmp_path: Path):
     database = tmp_path / "jobs.db"
-    job = AskUserJobs(database).create_running(
+    jobs = AskUserJobs(database)
+    job = jobs.create_running(
         "Play a tone", "local-tty", target_device="local_host", sensitive=True
     )
-    restored = AskUserJobs(database).get(job["id"])
+    restarted = AskUserJobs(database)
+    restored = restarted.get(job["id"])
     assert restored["target_device"] == "local_host"
     assert restored["sensitive"] is True
     assert restored["device_actions"] == []
-    AskUserJobs(database).complete(
-        job["id"],
+    assert restored["state"] == "failed"
+    completed_job = restarted.create_running(
+        "Play a tone", "local-tty", target_device="local_host", sensitive=True
+    )
+    restarted.complete(
+        completed_job["id"],
         "Playback ready",
         [{"type": "audio_play", "source_url": "https://example.test/tone.wav"}],
     )
-    completed = AskUserJobs(database).get(job["id"])
+    completed = restarted.get(completed_job["id"])
     assert completed["device_actions"][0]["type"] == "audio_play"
     listed = AskUserJobs(database).list()[0]
     assert listed["target_device"] == "local_host"

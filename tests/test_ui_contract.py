@@ -455,5 +455,5 @@ def test_feedback_and_telemetry_api_contract(tmp_path, monkeypatch):
     monkeypatch.setattr(server.POLICY, "stop_all", lambda: stopped.append(True))
     status, _, body = _request("/api/stop", method="POST", payload={})
     assert status == 200
-    assert json.loads(body) == {"success": True, "stopped": True}
+    assert json.loads(body) == {"success": True, "stopped": True, "cancelled_jobs": 0}
     assert stopped == [True]
