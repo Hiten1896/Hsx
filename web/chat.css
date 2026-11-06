@@ -80,6 +80,17 @@ button { cursor: pointer; }
 .feedback-button:hover, .feedback-button[aria-pressed="true"] { border-color: var(--border); background: var(--surface-raised); opacity: 1; }
 .feedback-status { color: var(--teal); }
 .activity-card { display: flex; align-items: center; gap: 10px; width: fit-content; margin: 0 auto 14px; padding: 8px 11px; color: var(--muted); font: 11px var(--font-code); }
+.approval-card { width: min(100% - 32px, 840px); margin: 0 auto 18px; padding: 18px 20px; border: 1px solid #f59e0b80; border-radius: 14px; background: var(--surface); box-shadow: 0 8px 26px #02061730; }
+.approval-card h3 { margin: 0 0 7px; font-size: 15px; }
+.approval-card p { margin: 5px 0; color: var(--muted); }
+.approval-card p:nth-of-type(3) { color: #fbbf24; font-weight: 650; }
+.approval-card details { margin-top: 12px; color: var(--muted); font-size: 12px; }
+.approval-card details pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.approval-actions { display: flex; gap: 9px; margin-top: 14px; }
+.approval-actions button { min-width: 76px; min-height: 36px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--surface-raised); font-weight: 650; }
+.approval-actions button:first-child { border-color: #34d39980; }
+.approval-actions button:last-child { border-color: #fb718580; }
+.approval-actions button:hover { filter: brightness(1.12); }
 .activity-spinner { width: 13px; height: 13px; border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .composer-dock { padding: 14px 24px 18px; border-top: 1px solid #24365099; background: linear-gradient(180deg, #0b122000, var(--background) 24%); }

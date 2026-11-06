@@ -175,17 +175,84 @@ async function readStream(response, onEvent) {
 
 async function answerPendingQuestion(message) {
   const jobId = pendingQuestion.id;
+  const approvalPending = pendingQuestion.state === 'waiting_for_approval';
+  if (approvalPending && message.trim().toLowerCase() === 'details') {
+    const details = elements.stream.querySelector(`[data-approval-job="${CSS.escape(jobId)}"] details`);
+    if (details) details.open = true;
+    return;
+  }
   const endpoint = apiContract.endpoints.ask_answer.replace('{job_id}', encodeURIComponent(jobId));
+  const payload = { answer: message };
+  if (approvalPending) payload.approval_id = pendingQuestion.approval_id;
   const response = await apiFetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ answer: message }),
+    body: JSON.stringify(payload),
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || 'Could not submit the answer.');
+  if (data.job && ['waiting_for_approval', 'waiting_for_user'].includes(data.job.state)) {
+    pendingQuestion = data.job;
+    if (data.job.error) appendMessage('assistant', data.job.error, data.job.id);
+    return;
+  }
+  if (approvalPending) {
+    elements.stream.querySelector(`[data-approval-job="${CSS.escape(jobId)}"]`)?.remove();
+  }
   pendingQuestion = null;
   const activity = appendActivity('Continuing the task…');
   await pollQuestionJob(jobId, activity);
+}
+
+function appendApprovalCard(job) {
+  const approval = job.approval || {};
+  const card = document.createElement('section');
+  card.className = 'approval-card';
+  card.dataset.approvalJob = job.id;
+  card.setAttribute('aria-label', 'HSX action approval');
+
+  const title = document.createElement('h3');
+  title.textContent = 'Hsx wants to:';
+  const summary = document.createElement('p');
+  summary.textContent = approval.summary || 'Run a tool';
+  const why = document.createElement('p');
+  why.textContent = `Why: ${approval.why || 'This action needs your approval.'}`;
+  const risk = document.createElement('p');
+  risk.textContent = `Risk: ${approval.risk || 'UNKNOWN'}${approval.risk === 'DANGEROUS' ? ' (cannot be undone)' : ''}`;
+
+  const details = document.createElement('details');
+  const detailsSummary = document.createElement('summary');
+  detailsSummary.textContent = 'Details';
+  const detailsText = document.createElement('pre');
+  detailsText.textContent = approval.details || 'No additional details.';
+  details.append(detailsSummary, detailsText);
+
+  const actions = document.createElement('div');
+  actions.className = 'approval-actions';
+  for (const [label, answer] of [['Yes', 'yes'], ['No', 'no']]) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.addEventListener('click', async () => {
+      if (submitting) return;
+      submitting = true;
+      elements.send.disabled = true;
+      try {
+        await answerPendingQuestion(answer);
+      } catch (error) {
+        appendMessage('assistant', `Could not continue: ${error.message}`);
+      } finally {
+        submitting = false;
+        elements.send.disabled = false;
+      }
+    });
+    actions.appendChild(button);
+  }
+
+  card.append(title, summary, why, risk, details, actions);
+  elements.welcome.hidden = true;
+  elements.stream.appendChild(card);
+  scrollToLatest();
 }
 
 async function pollQuestionJob(jobId, activity) {
@@ -200,6 +267,12 @@ async function pollQuestionJob(jobId, activity) {
       activity.remove();
       pendingQuestion = job;
       appendMessage('assistant', job.question || 'I need a little more information.', job.id);
+      return;
+    }
+    if (job.state === 'waiting_for_approval') {
+      activity.remove();
+      pendingQuestion = job;
+      appendApprovalCard(job);
       return;
     }
     if (['done', 'failed', 'cancelled'].includes(job.state)) {
@@ -266,6 +339,11 @@ async function submitPrompt() {
           activity?.remove();
           appendMessage('assistant', data.question || 'I need a little more information.', data.id);
         }
+        if (data.state === 'waiting_for_approval') {
+          pendingQuestion = data;
+          activity?.remove();
+          appendApprovalCard(data);
+        }
         if (['done', 'failed', 'cancelled'].includes(data.state)) {
           activity?.remove();
           const text = assistantContent || data.result || data.error || 'The task was cancelled.';
@@ -280,6 +358,8 @@ async function submitPrompt() {
       activity?.remove();
       appendMessage('assistant', 'Task started.', currentJob.id);
     } else if (!assistantCard && currentJob?.state === 'waiting_for_user') {
+      pendingQuestion = currentJob;
+    } else if (!assistantCard && currentJob?.state === 'waiting_for_approval') {
       pendingQuestion = currentJob;
     }
   } catch (error) {
@@ -328,6 +408,19 @@ async function initialize() {
   if (!tokensResponse.ok || !contractResponse.ok) throw new Error('Could not load the HSX interface contract.');
   updateDesignTokens(await tokensResponse.json());
   apiContract = await contractResponse.json();
+  const pendingResponse = await apiFetch(
+    `${apiContract.endpoints.ask_pending}?session_id=${encodeURIComponent(sessionId)}`,
+  );
+  if (pendingResponse.ok) {
+    const pendingData = await pendingResponse.json();
+    if (pendingData.job?.state === 'waiting_for_approval') {
+      pendingQuestion = pendingData.job;
+      appendApprovalCard(pendingQuestion);
+    } else if (pendingData.job?.state === 'waiting_for_user') {
+      pendingQuestion = pendingData.job;
+      appendMessage('assistant', pendingQuestion.question || 'I need a little more information.', pendingQuestion.id);
+    }
+  }
   elements.composer.addEventListener('submit', (event) => {
     event.preventDefault();
     submitPrompt();

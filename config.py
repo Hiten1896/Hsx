@@ -1,4 +1,5 @@
 import ipaddress
+import logging
 import os
 from pathlib import Path
 
@@ -6,8 +7,33 @@ from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
 ENV_FILE = BASE_DIR / ".env"
+LOGGER = logging.getLogger("hsx.config")
 
 load_dotenv(ENV_FILE)
+
+_DEPRECATED_MODEL_IDS = {
+    ("GEMINI_MODEL", "gemini-2.0-flash"): "gemini-3.6-flash",
+    ("GEMINI_MODEL", "gemini-2.0-flash-001"): "gemini-3.6-flash",
+    ("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free"): "google/gemini-3.6-flash",
+}
+_WARNED_DEPRECATED_MODELS: set[tuple[str, str]] = set()
+
+
+def model_setting(name: str, default: str) -> str:
+    configured = os.getenv(name, default).strip()
+    replacement = _DEPRECATED_MODEL_IDS.get((name, configured))
+    if replacement:
+        key = (name, configured)
+        if key not in _WARNED_DEPRECATED_MODELS:
+            LOGGER.warning(
+                "Configured model %r for %s is retired; using supported model %r.",
+                configured,
+                name,
+                replacement,
+            )
+            _WARNED_DEPRECATED_MODELS.add(key)
+        return replacement
+    return configured or default
 
 WORKSPACE_DIR = Path(
     os.getenv("HSX_WORKSPACE", str(BASE_DIR if os.name == "nt" else "/home/hsxshare"))
@@ -43,13 +69,13 @@ PANEL_PROVIDERS = tuple(
     if item.strip()
 )
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = model_setting("GEMINI_MODEL", "gemini-3.6-flash")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "").strip()
 GROK_API_KEY = (os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or "").strip()
 GROK_MODEL = (os.getenv("GROK_MODEL") or os.getenv("XAI_MODEL") or "grok-3-mini").strip()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
+OPENROUTER_MODEL = model_setting("OPENROUTER_MODEL", "google/gemini-3.6-flash")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_COMPATIBLE_URL = os.getenv("OPENAI_COMPATIBLE_URL", "")
@@ -57,6 +83,9 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 MODE = os.getenv("HSX_MODE", "jarvis").strip().lower()
 HOST = os.getenv("HSX_HOST", "127.0.0.1").strip() or "127.0.0.1"
 PORT = int(os.getenv("HSX_PORT", "8000"))
+REMOTE_ACCESS_TOKEN = os.getenv("HSX_REMOTE_TOKEN", "").strip()
+if REMOTE_ACCESS_TOKEN and len(REMOTE_ACCESS_TOKEN) < 32:
+    raise ValueError("HSX_REMOTE_TOKEN must contain at least 32 non-padded characters.")
 ALLOWED_ORIGINS = tuple(
     origin.strip()
     for origin in os.getenv(

@@ -1,3 +1,5 @@
+import hmac
+import ipaddress
 import json
 import logging
 import mimetypes
@@ -6,6 +8,7 @@ import queue
 import re
 import threading
 import time
+import copy
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -16,17 +19,19 @@ from api.chat import ChatStreamRegistry
 from api.devices import resolve_target_device
 from api.files import resolve_output
 from api.jobs import ask_job_payload
-from agent.ask_user import AskUserJobs, AskUserRequest
+from agent.ask_user import ApprovalRequest, AskUserJobs, AskUserRequest
 from agent.jobs import JobQueue
 from agent.approval import ApprovalGuard
 from agent.devices import DeviceRegistry, system_body_state
 from agent.hardware import AUDIO_ALERTS, CAMERA
 from agent.hardware.camera import MAX_FRAME_AGE_SECONDS
 from agent.llm_client import PROVIDER_BANDIT, record_provider_feedback
+from agent.llm.providers import GroqProvider, ProviderError
 from agent.ml.forecaster import FORECASTER, classify_job
 from agent.ml.dataset_exporter import SFT_DATASET
 from agent.ml.intent_learning import UNCERTAIN_INTENTS
 from agent.ml.log_recorder import LOG_RECORDER
+from agent.mesh.node_gateway import MeshGateway
 from agent.ml.memory import EXPERIENCE_MEMORY
 from agent.memory import MemoryManager
 from agent.notifier import Notifier
@@ -40,9 +45,14 @@ from agent.workspace import Workspace, task_output_path, task_output_scope, work
 from config import (
     ALLOWED_ORIGINS,
     DATA_DIR,
+    HOST,
+    GROQ_API_KEY,
+    GROQ_MODEL,
     JOBS_DB,
     MEMORY_DB,
     MODE,
+    PORT,
+    REMOTE_ACCESS_TOKEN,
     UPLOADS_DIR,
     WORKSPACE_DIR,
     WORK_DIR,
@@ -89,6 +99,11 @@ IMPROVEMENTS = SelfImprovement(
 DEVICES = DeviceRegistry(approval_guard=APPROVAL_GUARD)
 WORKSPACE = Workspace(WORKSPACE_DIR, WORK_DIR)
 NOTIFIER = Notifier(DATA_DIR / "notifications.db")
+MESH_GATEWAY = MeshGateway.from_environment()
+TAILSCALE_NETWORKS = (
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("fd7a:115c:a1e0::/48"),
+)
 
 
 def _hardware_audio_alert(*, succeeded: bool, message: str = "") -> None:
@@ -103,6 +118,14 @@ def _hardware_audio_alert(*, succeeded: bool, message: str = "") -> None:
 
 def _emit_chat_event(job_id: str, event: str, payload: dict) -> None:
     CHAT_STREAMS.emit(job_id, event, payload)
+
+
+def _is_tailscale_peer(peer_host: str) -> bool:
+    try:
+        address = ipaddress.ip_address(peer_host)
+    except ValueError:
+        return False
+    return any(address.version == network.version and address in network for network in TAILSCALE_NETWORKS)
 
 
 def _job_error(error: Exception) -> str:
@@ -131,7 +154,20 @@ def _record_job_telemetry(
     sensitive: bool = False,
     response: str = "",
     history: list | None = None,
+    error_message: str = "",
 ) -> None:
+    try:
+        LOG_RECORDER.record_execution(
+            job.get("request", ""),
+            response,
+            run_id=job.get("id", ""),
+            history=history,
+            succeeded=succeeded,
+            error=error_message,
+            sensitive=sensitive,
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        LOGGER.exception("Could not persist DPO execution telemetry for job %s.", job.get("id", ""))
     try:
         if LOG_RECORDER.is_installed:
             LOG_RECORDER.record_event(
@@ -181,6 +217,8 @@ def _fail_job(
             job,
             time.perf_counter() - started_at,
             succeeded=False,
+            history=SESSION_HISTORIES.get(job["session_id"]),
+            error_message=error_message,
         )
     if stream:
         _emit_chat_event(job_id, "job", _ask_job_payload(failed))
@@ -198,11 +236,12 @@ def _resume_ask_job(job_id: str) -> None:
     lock = _session_lock(job["session_id"])
     started_at = time.perf_counter()
     device_actions = list(job.get("device_actions") or [])
+    resume_history = copy.deepcopy(job["checkpoint"])
     try:
         with lock, task_output_scope(WORKSPACE, job["request"], job["task_dir"]):
             response, history = run_agent(
                 job["request"],
-                job["checkpoint"],
+                resume_history,
                 TOOLS,
                 SKILL_MAP,
                 session_id=job["session_id"],
@@ -215,8 +254,26 @@ def _resume_ask_job(job_id: str) -> None:
                 device_actions=device_actions,
                 job_id=job_id,
             )
+    except ApprovalRequest as approval:
+        updated = ASK_JOBS.pause_approval(
+            job_id,
+            {
+                **approval.approval_request,
+                "tool": approval.tool,
+                "arguments": approval.arguments,
+            },
+            approval.checkpoint,
+            approval.tool_call_id,
+        )
+        SESSION_HISTORIES[job["session_id"]] = approval.checkpoint
+        ASK_JOBS.save_device_actions(job_id, device_actions)
+        _emit_chat_event(job_id, "job", _ask_job_payload(updated))
+        POLICY.audit_event("approval_requested", job["session_id"], job_id, approval.approval_request["risk"])
+        NOTIFIER.notify("needs_approval", "Hsx needs approval", job_id=job_id)
+        return
     except AskUserRequest as question:
         updated = ASK_JOBS.pause(job_id, question)
+        SESSION_HISTORIES[job["session_id"]] = question.checkpoint
         ASK_JOBS.save_device_actions(job_id, device_actions)
         if updated["state"] == "waiting_for_user":
             POLICY.audit_event("needs_input", job["session_id"], job_id, "waiting_for_user")
@@ -231,9 +288,11 @@ def _resume_ask_job(job_id: str) -> None:
         NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
         return
     except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
+        SESSION_HISTORIES[job["session_id"]] = resume_history
         _fail_job(job_id, job, error, started_at=started_at)
         return
     except Exception as error:
+        SESSION_HISTORIES[job["session_id"]] = resume_history
         _fail_job(job_id, job, error, started_at=started_at)
         return
     SESSION_HISTORIES[job["session_id"]] = history
@@ -254,6 +313,127 @@ def _resume_ask_job(job_id: str) -> None:
         job_id=job_id,
         result_path=_task_result_path(job),
     )
+
+
+def _resume_approval_job(job_id: str, approved: bool) -> None:
+    job = ASK_JOBS.get(job_id)
+    if job is None or job["state"] != "running":
+        return
+    lock = _session_lock(job["session_id"])
+    started_at = time.perf_counter()
+    device_actions = list(job.get("device_actions") or [])
+    resume_history = copy.deepcopy(job["checkpoint"])
+    approval = job.get("approval") or {}
+    tool_name = str(approval.get("tool", ""))
+    arguments = approval.get("arguments")
+    if not isinstance(arguments, dict) or tool_name not in SKILL_MAP:
+        _fail_job(job_id, job, RuntimeError("The stored approval request is invalid."), started_at=started_at)
+        return
+    skill = next((item for item in TOOLS if item["name"] == tool_name), None)
+    if skill is None:
+        _fail_job(job_id, job, RuntimeError("The approved tool is no longer available."), started_at=started_at)
+        return
+
+    policy_result = POLICY.decide(
+        skill,
+        arguments,
+        job["session_id"],
+        approved=approved,
+        approver="user",
+    )
+    result: dict
+    if not policy_result["allowed"]:
+        result = {
+            "success": False,
+            "error": "The user declined this action."
+            if not approved
+            else "The action is blocked by the host safety policy.",
+        }
+    else:
+        tool_input = dict(arguments)
+        if tool_name in {"audio_play", "camera_record"}:
+            tool_input["target_device"] = job.get("target_device", "local_host")
+        try:
+            result = SKILL_MAP[tool_name](**tool_input)
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            result = {"success": False, "error": str(error)}
+        if isinstance(result, dict) and tool_name in {"audio_play", "camera_record"}:
+            device_actions.append(
+                result.get("browser_action")
+                or {
+                    "type": tool_name,
+                    "target_device": job.get("target_device", "local_host"),
+                    "success": result.get("success", False),
+                    "message": result.get("message", ""),
+                    "path": result.get("path"),
+                    "pid": result.get("pid"),
+                }
+            )
+
+    try:
+        with lock, task_output_scope(WORKSPACE, job["request"], job["task_dir"]):
+            response, history = run_agent(
+                job["request"],
+                resume_history,
+                TOOLS,
+                SKILL_MAP,
+                session_id=job["session_id"],
+                sensitive=job.get("sensitive", False),
+                resume_tool_result={"tool_call_id": job["tool_call_id"], "result": result},
+                target_device=job.get("target_device", "local_host"),
+                device_actions=device_actions,
+                job_id=job_id,
+            )
+    except ApprovalRequest as next_approval:
+        updated = ASK_JOBS.pause_approval(
+            job_id,
+            {
+                **next_approval.approval_request,
+                "tool": next_approval.tool,
+                "arguments": next_approval.arguments,
+            },
+            next_approval.checkpoint,
+            next_approval.tool_call_id,
+        )
+        SESSION_HISTORIES[job["session_id"]] = next_approval.checkpoint
+        ASK_JOBS.save_device_actions(job_id, device_actions)
+        _emit_chat_event(job_id, "job", _ask_job_payload(updated))
+        POLICY.audit_event(
+            "approval_requested",
+            job["session_id"],
+            job_id,
+            next_approval.approval_request["risk"],
+        )
+        return
+    except AskUserRequest as question:
+        updated = ASK_JOBS.pause(job_id, question)
+        SESSION_HISTORIES[job["session_id"]] = question.checkpoint
+        ASK_JOBS.save_device_actions(job_id, device_actions)
+        _emit_chat_event(job_id, "job", _ask_job_payload(updated))
+        return
+    except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
+        SESSION_HISTORIES[job["session_id"]] = resume_history
+        _fail_job(job_id, job, error, started_at=started_at)
+        return
+    except Exception as error:
+        SESSION_HISTORIES[job["session_id"]] = resume_history
+        _fail_job(job_id, job, error, started_at=started_at)
+        return
+
+    SESSION_HISTORIES[job["session_id"]] = history
+    ASK_JOBS.complete(job_id, response, device_actions)
+    _record_job_telemetry(
+        job,
+        time.perf_counter() - started_at,
+        succeeded=True,
+        sensitive=job.get("sensitive", False),
+        response=response,
+        history=history,
+    )
+    _emit_chat_event(job_id, "job", _ask_job_payload(ASK_JOBS.get(job_id)))
+    _emit_chat_event(job_id, "done", {})
+    POLICY.audit_event("job_done", job["session_id"], job_id, "done")
+    NOTIFIER.notify("job_done", "Your Hsx task is complete", job_id=job_id)
 
 
 def _session_lock(session_id: str):
@@ -292,22 +472,46 @@ def _run_chat_job(
     device_actions = list(job.get("device_actions") or [])
     try:
         with lock, task_output_scope(WORKSPACE, job["request"], job["task_dir"]):
-            history = SESSION_HISTORIES.setdefault(job["session_id"], [])
+            history = copy.deepcopy(SESSION_HISTORIES.get(job["session_id"], []))
             response, updated_history = run_agent(
                 job["request"],
                 history,
                 TOOLS,
                 SKILL_MAP,
                 session_id=job["session_id"],
-                approvals=approvals,
+                approvals=None,
                 sensitive=sensitive,
                 target_device=job.get("target_device", target_device),
                 device_actions=device_actions,
                 on_text_delta=on_text_delta,
                 job_id=job_id,
             )
+    except ApprovalRequest as approval:
+        updated = ASK_JOBS.pause_approval(
+            job_id,
+            {
+                **approval.approval_request,
+                "tool": approval.tool,
+                "arguments": approval.arguments,
+            },
+            approval.checkpoint,
+            approval.tool_call_id,
+        )
+        SESSION_HISTORIES[job["session_id"]] = approval.checkpoint
+        ASK_JOBS.save_device_actions(job_id, device_actions)
+        _emit_chat_event(job_id, "job", _ask_job_payload(updated))
+        _emit_chat_event(job_id, "done", {})
+        POLICY.audit_event(
+            "approval_requested",
+            job["session_id"],
+            job_id,
+            approval.approval_request["risk"],
+        )
+        NOTIFIER.notify("needs_approval", "Hsx needs approval", job_id=job_id)
+        return
     except AskUserRequest as question:
         updated = ASK_JOBS.pause(job_id, question)
+        SESSION_HISTORIES[job["session_id"]] = question.checkpoint
         ASK_JOBS.save_device_actions(job_id, device_actions)
         _emit_chat_event(job_id, "job", _ask_job_payload(updated))
         _emit_chat_event(job_id, "done", {})
@@ -360,6 +564,35 @@ class HsxHandler(BaseHTTPRequestHandler):
 
     def _api_access_allowed(self) -> bool:
         if not is_loopback_host(self.client_address[0]):
+            if _is_tailscale_peer(self.client_address[0]):
+                if self.command == "OPTIONS":
+                    if not self._request_path().startswith("/api/"):
+                        self._json({"error": "Only API preflight requests are allowed."}, 403)
+                        return False
+                    return AUTH_SERVICE.allowed(self, self._json)
+                if not AUTH_SERVICE.allowed(self, self._json):
+                    return False
+                scheme, separator, supplied_token = self.headers.get("Authorization", "").partition(" ")
+                if (
+                    not REMOTE_ACCESS_TOKEN
+                    or scheme.casefold() != "bearer"
+                    or not separator
+                    or not hmac.compare_digest(supplied_token, REMOTE_ACCESS_TOKEN)
+                ):
+                    self._json({"error": "Valid Tailscale bearer authentication is required."}, 401)
+                    return False
+                return True
+            if MESH_GATEWAY is not None:
+                allowed, status, message = MESH_GATEWAY.authorize(
+                    self.command,
+                    self._request_path(),
+                    self.headers,
+                    self.client_address[0],
+                )
+                if allowed:
+                    return True
+                self._json({"error": message}, status)
+                return False
             self._json({"error": "Only local HSX requests are allowed."}, 403)
             return False
         return AUTH_SERVICE.allowed(self, self._json)
@@ -373,7 +606,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         if origin in ALLOWED_ORIGINS:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.end_headers()
         self.wfile.write(data)
@@ -454,6 +687,26 @@ class HsxHandler(BaseHTTPRequestHandler):
         if not self._api_access_allowed():
             return
         query = parse_qs(urlsplit(self.path).query)
+        if path == "/api/mesh/info":
+            self._json(
+                {"enabled": False}
+                if MESH_GATEWAY is None
+                else {"enabled": True, **MESH_GATEWAY.node_info()}
+            )
+            return
+        elif path == "/api/mesh/telemetry":
+            telemetry = LLM_TELEMETRY.snapshot()
+            telemetry["provider_stats"] = PROVIDER_BANDIT.snapshot()["providers"]
+            self._json(telemetry)
+            return
+        elif path == "/api/mesh/camera/status":
+            self._json(CAMERA.health_check())
+            return
+        elif path == "/api/mesh/camera/stream":
+            self._stream_camera()
+            return
+        elif path.startswith("/api/mesh/jobs/"):
+            path = "/api/ask-jobs/" + path.removeprefix("/api/mesh/jobs/")
         if path == "/health":
             self._json({"status": "ok"})
         elif path == "/api/skills":
@@ -475,6 +728,12 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"jobs": JOBS.list()})
         elif path == "/api/ask-jobs":
             self._json({"jobs": [_ask_job_payload(job) for job in ASK_JOBS.list()]})
+        elif path == "/api/ask-jobs/pending":
+            session_id = str(query.get("session_id", [""])[0])[:100]
+            if not session_id:
+                self._json({"error": "A session_id is required."}, 400)
+                return
+            self._json({"job": _ask_job_payload(ASK_JOBS.get_pending(session_id))})
         elif path.startswith("/api/ask-jobs/"):
             job = ASK_JOBS.get(path.removeprefix("/api/ask-jobs/"))
             self._json({"job": _ask_job_payload(job)} if job else {"error": "Job not found."}, 200 if job else 404)
@@ -569,6 +828,8 @@ class HsxHandler(BaseHTTPRequestHandler):
         path = self._request_path()
         if not self._api_access_allowed():
             return
+        if path == "/api/mesh/tasks":
+            path = "/api/chat/stream"
         if path == "/api/feedback":
             payload = self._body()
             job_id = str(payload.get("job_id", "")).strip()
@@ -659,8 +920,34 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"success": JOBS.cancel(job_id)})
         elif path.startswith("/api/ask-jobs/") and path.endswith("/answer"):
             job_id = path.removeprefix("/api/ask-jobs/").removesuffix("/answer")
-            answer = str(self._body().get("answer", ""))
+            payload = self._body()
+            answer = str(payload.get("answer", ""))
             try:
+                pending = ASK_JOBS.get(job_id)
+                if pending is None:
+                    raise KeyError("Question job not found.")
+                if pending["state"] == "waiting_for_approval":
+                    job, approved = ASK_JOBS.answer_approval(
+                        job_id,
+                        str(payload.get("approval_id", "")),
+                        answer,
+                    )
+                    if approved is None:
+                        self._json({"job": _ask_job_payload(job)}, 200)
+                        return
+                    POLICY.audit_event(
+                        "approval_answered",
+                        job["session_id"],
+                        job_id,
+                        "approved" if approved else "declined",
+                    )
+                    threading.Thread(
+                        target=_resume_approval_job,
+                        args=(job_id, approved),
+                        daemon=True,
+                    ).start()
+                    self._json({"job": _ask_job_payload(job)}, 202)
+                    return
                 job = ASK_JOBS.answer(job_id, answer)
             except (KeyError, ValueError) as error:
                 self._json({"error": str(error)}, 404 if isinstance(error, KeyError) else 400)
@@ -966,8 +1253,8 @@ class HsxHandler(BaseHTTPRequestHandler):
         if origin in ALLOWED_ORIGINS:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.end_headers()
 
     def do_DELETE(self) -> None:
@@ -1089,5 +1376,10 @@ class HsxHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    if GROQ_API_KEY:
+        try:
+            GroqProvider(GROQ_API_KEY, GROQ_MODEL)
+        except ProviderError as error:
+            LOGGER.warning("Could not validate the Groq model at startup: %s", error)
     print(f"Hsx ready. Loaded {len(TOOLS)} skills: {', '.join(tool['name'] for tool in TOOLS)}")
-    ThreadingHTTPServer(("127.0.0.1", 8000), HsxHandler).serve_forever()
+    ThreadingHTTPServer((HOST, PORT), HsxHandler).serve_forever()
