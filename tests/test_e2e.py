@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import server
@@ -41,6 +42,18 @@ def test_health_allows_requests_without_token():
     status, _, body = _request("/health", tokenless=True)
     assert status == 200
     assert body == b'{"status": "ok"}'
+
+
+def test_healthz_reports_clock_and_api_security_headers():
+    status, headers, body = _request("/healthz")
+    assert status == 200
+    assert "warnings" in json.loads(body)
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert headers["Referrer-Policy"] == "no-referrer"
+    assert headers["Permissions-Policy"] == "camera=(self), microphone=(self)"
+    assert "connect-src 'self'" in headers["Content-Security-Policy"]
+    assert "script-src 'self'" in headers["Content-Security-Policy"]
+    assert headers["Cache-Control"] == "no-store"
 
 
 def test_doctor_report_does_not_print_key_values(monkeypatch, capsys):

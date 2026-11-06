@@ -667,6 +667,19 @@ class HsxHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:
         LOGGER.info("HTTP %s %s", self.client_address[0], format % args)
 
+    def _security_headers(self) -> None:
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; base-uri 'self'; connect-src 'self'; "
+            "font-src 'self' data:; form-action 'self'; "
+            "img-src 'self' data: blob:; media-src 'self' blob:; "
+            "object-src 'none'; script-src 'self' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
+        )
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "camera=(self), microphone=(self)")
+
     def _request_path(self) -> str:
         return urlsplit(self.path).path
 
@@ -722,6 +735,7 @@ class HsxHandler(BaseHTTPRequestHandler):
     def _json(self, payload: dict, status: int = 200) -> None:
         data = json.dumps(payload).encode("utf-8")
         self.send_response(status)
+        self._security_headers()
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
@@ -745,6 +759,7 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"error": "Last-Event-ID must be an integer."}, 400)
             return
         self.send_response(200)
+        self._security_headers()
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
@@ -781,6 +796,7 @@ class HsxHandler(BaseHTTPRequestHandler):
             return
 
         self.send_response(200)
+        self._security_headers()
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
         self.send_header("Connection", "close")
@@ -832,7 +848,12 @@ class HsxHandler(BaseHTTPRequestHandler):
             return
         elif path.startswith("/api/mesh/jobs/"):
             path = "/api/ask-jobs/" + path.removeprefix("/api/mesh/jobs/")
-        if path == "/health":
+        if path == "/healthz":
+            warnings = []
+            if not Path("/run/systemd/timesync/synchronized").exists():
+                warnings.append("System clock sync status is unavailable or not synchronized.")
+            self._json({"status": "ok", "warnings": warnings})
+        elif path == "/health":
             self._json({"status": "ok"})
         elif path == "/api/skills":
             self._json({"skills": [tool["name"] for tool in TOOLS]})
@@ -1342,6 +1363,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                 daemon=True,
             ).start()
             self.send_response(200)
+            self._security_headers()
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
@@ -1574,6 +1596,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         disposition = "inline" if inline else "attachment"
         self.send_response(status)
+        self._security_headers()
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Disposition", f"{disposition}; filename*=UTF-8''{quote(target.name)}")
         self.send_header("Accept-Ranges", "bytes")
@@ -1612,7 +1635,9 @@ class HsxHandler(BaseHTTPRequestHandler):
             ".ico": "image/x-icon",
         }.get(asset.suffix.lower(), "application/octet-stream")
         self.send_response(200)
+        self._security_headers()
         self.send_header("Content-Type", f"{content_type}; charset=utf-8" if "text" in content_type or "javascript" in content_type else content_type)
+        self.send_header("Cache-Control", "no-cache")
         self.send_header("Content-Length", str(len(page)))
         self.end_headers()
         self.wfile.write(page)

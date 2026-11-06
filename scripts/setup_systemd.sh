@@ -57,6 +57,8 @@ cat > "${SERVICE_FILE}.tmp" <<EOF
 Description=Hsx local AI workspace agent
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -68,6 +70,8 @@ EnvironmentFile=${ENV_FILE}
 ExecStart=/bin/bash ${RUNNER}
 Restart=on-failure
 RestartSec=5
+MemoryHigh=1400M
+MemoryMax=1536M
 StandardOutput=append:${LOG_FILE}
 StandardError=append:${LOG_FILE}
 NoNewPrivileges=false

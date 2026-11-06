@@ -132,6 +132,8 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=${VENV_DIR}/bin/python ${REPO_ROOT}/scripts/voice_listener.py
 Restart=on-failure
 RestartSec=5
+MemoryHigh=1400M
+MemoryMax=1536M
 NoNewPrivileges=true
 PrivateTmp=true
 

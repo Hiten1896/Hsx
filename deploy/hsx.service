@@ -2,6 +2,8 @@
 Description=Hsx local AI agent
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -13,6 +15,8 @@ Environment=HSX_VENV_DIR=/opt/hsx/venv
 ExecStart=/bin/bash /opt/hsx/scripts/run_hsx.sh
 Restart=on-failure
 RestartSec=5
+MemoryHigh=1400M
+MemoryMax=1536M
 StandardOutput=append:/opt/hsx/logs/hsx_service.log
 StandardError=append:/opt/hsx/logs/hsx_service.log
 NoNewPrivileges=false
