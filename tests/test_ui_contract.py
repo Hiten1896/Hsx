@@ -265,6 +265,29 @@ def test_web_user_actions_accordion_state_and_camera_reauth_are_wired():
     assert "Math.min(\n    frame.capturedAt * 1000 - cameraClockOffsetMs,\n    Date.now()," in script
 
 
+def test_camera_is_lazy_and_run_state_resets_after_failure_or_stop():
+    html = (BASE_DIR / "web" / "index.html").read_text(encoding="utf-8")
+    css = (BASE_DIR / "web" / "chat.css").read_text(encoding="utf-8")
+    script = (BASE_DIR / "web" / "chat.js").read_text(encoding="utf-8")
+
+    assert 'id="camera-view" class="camera-view" role="button"' in html
+    assert 'id="camera-status">Click to turn on camera</span>' in html
+    assert ".camera-view { position: relative;" in css
+    assert ".camera-badge-standby" in css
+    assert "let cameraEnabled = false;" in script
+    assert "function toggleCamera()" in script
+    assert "if (!cameraEnabled) return;" in script
+    assert "elements.cameraView.addEventListener('click', toggleCamera)" in script
+    assert "elements.cameraView.addEventListener('keydown'" in script
+    assert "elements.send.disabled = isBusy;" in script
+    assert "if (activeChatController === controller)" in script
+    stop_handler = script[script.index("async function stopTask()"):]
+    assert "setBusy(false);" in stop_handler
+    assert "const controller = new AbortController();\n      activeChatController = controller;\n      setBusy(true);" in script
+    assert "async function pollQuestionJob(jobId, activity, signal)" in script
+    assert "if (signal?.aborted) throw new DOMException('Task stopped.', 'AbortError');" in script
+
+
 def test_tui_has_native_feedback_buttons_with_shared_layout():
     async def verify():
         app = HsxTUI("http://127.0.0.1:1")

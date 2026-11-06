@@ -24,6 +24,7 @@ let cameraReconnectTimer = null;
 let cameraRetryDelay = 500;
 let cameraAvailable = false;
 let cameraHasFrame = false;
+let cameraEnabled = false;
 let cameraClockOffsetMs = 0;
 let cameraStreamStartedAt = 0;
 
@@ -41,6 +42,7 @@ const elements = {
   composerDock: document.querySelector('.composer-dock'),
   connection: document.getElementById('connection-label'),
   camera: document.getElementById('live-camera'),
+  cameraView: document.getElementById('camera-view'),
   cameraStatus: document.getElementById('camera-status'),
   cameraPlaceholder: document.getElementById('camera-placeholder'),
   cameraBadge: document.getElementById('camera-badge'),
@@ -514,6 +516,7 @@ async function readStream(response, onEvent) {
 function setBusy(isBusy) {
   submitting = isBusy;
   updateSendButton();
+  elements.send.disabled = isBusy;
   elements.stop.hidden = !isBusy;
 }
 
@@ -695,7 +698,7 @@ function setupComposerOptions() {
   });
 }
 
-async function answerPendingQuestion(message) {
+async function answerPendingQuestion(message, signal) {
   const jobId = pendingQuestion.id;
   const approvalPending = pendingQuestion.state === 'waiting_for_approval';
   if (approvalPending && message.trim().toLowerCase() === 'details') {
@@ -709,6 +712,7 @@ async function answerPendingQuestion(message) {
   const response = await apiFetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal,
     body: JSON.stringify(payload),
   });
   const data = await response.json();
@@ -723,7 +727,7 @@ async function answerPendingQuestion(message) {
   }
   pendingQuestion = null;
   const activity = appendActivity('Continuing the task…');
-  await pollQuestionJob(jobId, activity);
+  await pollQuestionJob(jobId, activity, signal);
 }
 
 function appendApprovalCard(job) {
@@ -756,13 +760,20 @@ function appendApprovalCard(job) {
     button.textContent = label;
     button.addEventListener('click', async () => {
       if (submitting) return;
+      const controller = new AbortController();
+      activeChatController = controller;
       setBusy(true);
       try {
-        await answerPendingQuestion(answer);
-      } catch {
-        appendMessage('assistant', 'Could not continue the task. Please try again.');
+        await answerPendingQuestion(answer, controller.signal);
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          appendMessage('assistant', 'Could not continue the task. Please try again.');
+        }
       } finally {
-        setBusy(false);
+        if (activeChatController === controller) {
+          activeChatController = null;
+          setBusy(false);
+        }
       }
     });
     actions.appendChild(button);
@@ -773,11 +784,12 @@ function appendApprovalCard(job) {
   scrollToLatest();
 }
 
-async function pollQuestionJob(jobId, activity) {
+async function pollQuestionJob(jobId, activity, signal) {
   const endpoint = apiContract.endpoints.ask_job.replace('{job_id}', encodeURIComponent(jobId));
   while (true) {
     await new Promise((resolve) => setTimeout(resolve, 1200));
-    const response = await apiFetch(endpoint);
+    if (signal?.aborted) throw new DOMException('Task stopped.', 'AbortError');
+    const response = await apiFetch(endpoint, { signal });
     const data = await response.json();
     if (!response.ok || !data.job) throw new Error(data.error || 'Could not refresh the task.');
     const job = data.job;
@@ -820,19 +832,25 @@ async function submitPrompt() {
   elements.send.disabled = true;
 
   if (pendingQuestion) {
+    const controller = new AbortController();
+    activeChatController = controller;
     try {
-      await answerPendingQuestion(requestMessage);
+      await answerPendingQuestion(requestMessage, controller.signal);
       elements.prompt.value = '';
       uploadedAttachments = [];
       persistAttachments();
       renderAttachments();
       safeStorageSet('sessionStorage', `hsx-draft-${sessionId}`, '');
-    } catch {
-      appendMessage('assistant', 'Could not submit your answer. Your text is still available in this tab.');
+    } catch (error) {
+      if (error.name !== 'AbortError') {
+        appendMessage('assistant', 'Could not submit your answer. Your text is still available in this tab.');
+      }
       elements.prompt.value = typedMessage;
     } finally {
-      setBusy(false);
-      elements.send.disabled = false;
+      if (activeChatController === controller) {
+        activeChatController = null;
+        setBusy(false);
+      }
     }
     return;
   }
@@ -935,20 +953,44 @@ function setCameraStatus(connected, message) {
   elements.cameraStatus.textContent = message;
   elements.cameraBadge.classList.toggle('camera-badge-online', connected);
   elements.cameraBadge.classList.toggle('camera-badge-offline', !connected);
+  elements.cameraBadge.classList.toggle('camera-badge-standby', !connected && !cameraEnabled);
   elements.cameraBadge.classList.remove('camera-badge-reconnecting');
   elements.cameraBadge.replaceChildren();
   const dot = document.createElement('span');
   dot.className = 'connection-dot';
   const label = document.createElement('span');
-  label.textContent = connected ? (cameraHasFrame ? 'Live' : 'Connecting') : 'Offline';
+  label.textContent = connected ? (cameraHasFrame ? 'Live' : 'Connecting') : cameraEnabled ? 'Offline' : 'Standby';
   elements.cameraBadge.append(dot, label);
-  setConnection('camera-dot', 'camera-state', connected ? 'Live' : 'Offline', connected ? 'connected' : 'disconnected');
-  elements.camera.hidden = !connected;
-  elements.cameraPlaceholder.hidden = connected;
+  const state = connected ? 'connected' : cameraEnabled ? 'disconnected' : 'warning';
+  const status = connected ? (cameraHasFrame ? 'Live' : 'Connecting') : cameraEnabled ? 'Offline' : 'Standby';
+  setConnection('camera-dot', 'camera-state', status, state);
+  elements.camera.hidden = !connected || !cameraHasFrame;
+  elements.cameraPlaceholder.hidden = connected && cameraHasFrame;
+  elements.cameraView.setAttribute('aria-label', cameraEnabled ? 'Turn off camera' : 'Turn on camera');
+  document.getElementById('camera-prompt').textContent = cameraEnabled
+    ? connected ? 'Connecting to camera…' : 'Camera unavailable'
+    : 'Camera is off';
   document.getElementById('camera-clip-time').hidden = !connected || !cameraHasFrame;
 }
 
+function stopCameraAndStandby() {
+  cameraEnabled = false;
+  cameraAvailable = false;
+  cameraHasFrame = false;
+  stopCameraStream();
+  elements.camera.removeAttribute('src');
+  if (cameraObjectUrl) {
+    URL.revokeObjectURL(cameraObjectUrl);
+    cameraObjectUrl = '';
+  }
+  document.getElementById('camera-clip-time').textContent = 'Waiting for video';
+  document.getElementById('camera-clip-time').hidden = true;
+  setCameraLatency(null);
+  setCameraStatus(false, 'Click to turn on camera');
+}
+
 async function refreshCamera() {
+  if (!cameraEnabled) return;
   try {
     const response = await apiFetch(apiContract.endpoints.camera_status);
     const data = await response.json();
@@ -989,8 +1031,18 @@ async function refreshCamera() {
     }
   } catch {
     if (cameraHasFrame) setCameraReconnecting('Camera status unavailable; reconnecting…');
-    else setCameraStatus(false, bearerToken ? 'Camera status is unavailable.' : 'Enter a remote token if the host requires one.');
+    else setCameraStatus(false, 'Camera status is unavailable. Click to retry.');
   }
+}
+
+function toggleCamera() {
+  if (cameraEnabled) {
+    stopCameraAndStandby();
+    return;
+  }
+  cameraEnabled = true;
+  setCameraStatus(false, 'Connecting to the host camera…');
+  refreshCamera();
 }
 
 function findBytes(haystack, needle) {
@@ -1110,7 +1162,7 @@ function scheduleCameraReconnect() {
 }
 
 async function startCameraStream() {
-  if (!cameraAvailable || document.hidden || !navigator.onLine || cameraStreamController || cameraReconnectTimer) return;
+  if (!cameraEnabled || !cameraAvailable || document.hidden || !navigator.onLine || cameraStreamController || cameraReconnectTimer) return;
   const controller = new AbortController();
   cameraStreamController = controller;
   cameraStreamStartedAt = Date.now();
@@ -1212,7 +1264,8 @@ async function refreshConnections() {
       elements.connection.textContent = 'Token needed';
       setConnection('llm-dot', 'llm-state', 'Locked', 'warning');
       document.getElementById('connection-summary').textContent = 'Enter token to connect';
-      await refreshCamera();
+      if (cameraEnabled) await refreshCamera();
+      else setCameraStatus(false, 'Click to turn on camera');
       return;
     }
     setConnection('api-dot', 'api-state', healthResponse.ok ? 'Online' : 'Offline', healthResponse.ok ? 'connected' : 'disconnected');
@@ -1241,7 +1294,8 @@ async function refreshConnections() {
     elements.connection.append(connectionDot, document.createTextNode(' Offline'));
     document.getElementById('connection-summary').textContent = 'Offline';
   }
-  await refreshCamera();
+  if (cameraEnabled) await refreshCamera();
+  else setCameraStatus(false, 'Click to turn on camera');
 }
 
 function closeMobilePanels() {
@@ -1565,6 +1619,7 @@ async function refreshAgentActivity() {
 async function retryCamera() {
   const button = document.getElementById('camera-retry');
   button.disabled = true;
+  cameraEnabled = true;
   stopCameraStream();
   cameraHasFrame = false;
   cameraRetryDelay = 500;
@@ -1595,9 +1650,9 @@ async function stopTask() {
       elements.prompt.value = safeStorageGet('sessionStorage', `hsx-draft-${sessionId}`);
       persistDraft();
     }
-    setBusy(false);
-    elements.send.disabled = false;
   }
+  setBusy(false);
+  elements.send.disabled = false;
   try {
     await apiFetch(apiContract.endpoints.stop, { method: 'POST' });
   } catch {
@@ -1684,15 +1739,28 @@ async function initialize() {
   });
   document.getElementById('camera-toggle').addEventListener('click', () => {
     if (elements.cameraSidebar.classList.contains('is-open')) {
+      stopCameraAndStandby();
       closeMobilePanels();
     } else {
       openMobilePanel(elements.cameraSidebar);
       refreshArtifacts();
-      refreshCamera();
     }
   });
-  document.getElementById('camera-close').addEventListener('click', closeMobilePanels);
-  elements.panelBackdrop.addEventListener('click', closeMobilePanels);
+  document.getElementById('camera-close').addEventListener('click', () => {
+    stopCameraAndStandby();
+    closeMobilePanels();
+  });
+  elements.cameraView.addEventListener('click', toggleCamera);
+  elements.cameraView.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      toggleCamera();
+    }
+  });
+  elements.panelBackdrop.addEventListener('click', () => {
+    if (elements.cameraSidebar.classList.contains('is-open')) stopCameraAndStandby();
+    closeMobilePanels();
+  });
   document.getElementById('refresh-artifacts').addEventListener('click', refreshArtifacts);
   document.getElementById('camera-retry').addEventListener('click', retryCamera);
   document.getElementById('activity-toggle').addEventListener('click', (event) => {
