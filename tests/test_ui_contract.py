@@ -168,7 +168,7 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert 'id="chat-stream"' in html
     assert 'id="conversation-layout"' in html
     assert 'id="greeting-title"' in html
-    assert '<h1 id="greeting-title" aria-busy="true"></h1>' in html
+    assert '<h1 id="greeting-title" aria-busy="false">Good evening, Sir</h1>' in html
     assert 'placeholder="Type / for skills"' in html
     assert 'id="voice-button"' in html
     assert 'id="composer-options-button"' in html
@@ -200,7 +200,7 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert 'class="camera-info"' not in html
     assert 'class="camera-caption"' not in html
     assert 'id="browse-files-button"' not in html
-    assert html.index('id="new-chat-button"') < html.index('class="activity-panel sidebar-activity"') < html.index('class="connections"')
+    assert html.index('id="new-chat-button"') < html.index('class="activity-panel sidebar-activity"') < html.index('class="activity-panel history-panel')
     assert html.count('id="agent-activity-list"') == 1
     assert 'data-feedback="good"' in html
     assert 'data-feedback="bad"' in html
@@ -244,7 +244,7 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert "apiContract.endpoints.notifications" in script
     assert "apiContract.endpoints.notifications_read" in script
     assert "apiContract.endpoints.notifications_stream" in script
-    assert "apiContract.endpoints.greeting" in script
+    assert "function refreshGreeting()" in script
     assert "startNotificationStream()" in script
     assert "speechSynthesis.speak" in script
     assert "elements.activityList.hidden = expanded" in script
@@ -263,7 +263,7 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert ".conversation-layout.is-empty" in css
     assert ".message-card[data-role=\"user\"]" in css
     assert ".message-card { max-width: 790px; margin: 0 auto 25px; padding: 0" in css
-    assert html.index('class="sidebar-bottom"') < html.index('class="connections"')
+    assert html.index('class="activity-panel history-panel') < html.index('class="sidebar-bottom"')
 
     service_worker = (BASE_DIR / "web" / "service-worker.js").read_text(encoding="utf-8")
     assert "'/web/chat.css'" in service_worker

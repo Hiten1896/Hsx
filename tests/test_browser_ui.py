@@ -151,7 +151,7 @@ def test_browser_settings_notifications_and_failure_keep_working(browser_app, br
     page.locator("#notifications-list").get_by_text("Browser test event").wait_for()
     assert page.locator("#notification-count").inner_text() == "1"
     page.locator("#mark-notifications-read").click()
-    page.wait_for_function("document.querySelector('#notification-count').hidden")
+    page.locator("#notification-count").wait_for(state="hidden")
     page.locator("#clear-notifications").click()
     page.locator("#notifications-list").get_by_text("No notifications yet.").wait_for()
     for width in (360, 1280):
