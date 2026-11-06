@@ -5,6 +5,7 @@ import hashlib
 import logging
 import os
 import re
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -375,7 +376,11 @@ class JSONHTTPProvider(Provider):
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         if os.getenv("HSX_DEBUG") == "1":
-            assert_payload_valid(self.name, payload)
+            try:
+                assert_payload_valid(self.name, payload)
+            except ValueError:
+                print(json.dumps(payload, ensure_ascii=False, indent=2, default=str), file=sys.stderr)
+                raise
         request = urllib.request.Request(
             self.endpoint,
             data=json.dumps(payload).encode("utf-8"),
@@ -401,6 +406,8 @@ class JSONHTTPProvider(Provider):
             body = error.read().decode("utf-8", errors="replace")
             detail = self._error_detail(str(error.code), body)
             LOGGER.warning("%s provider HTTP %s response: %s", self.name, error.code, self._redact_body(body))
+            if self.name == "gemini" and error.code == 400 and os.getenv("HSX_DEBUG") == "1":
+                print(json.dumps(payload, ensure_ascii=False, indent=2, default=str), file=sys.stderr)
             if os.getenv("HSX_DEBUG") == "1":
                 message = f"{self.name} request failed (HTTP {error.code}): {detail}"
             elif self.name == "gemini" and error.code == 400:
@@ -434,62 +441,102 @@ def _gemini_response_value(content: Any) -> dict[str, Any]:
     return {"content": content}
 
 
+def _gemini_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _append_gemini_content(contents: list[dict[str, Any]], role: str, parts: list[dict[str, Any]]) -> None:
+    if not parts:
+        return
+    if contents and contents[-1]["role"] == role:
+        contents[-1]["parts"].extend(parts)
+    else:
+        contents.append({"role": role, "parts": parts})
+
+
 def to_gemini_payload(request: LLMRequest) -> dict[str, Any]:
     messages = to_plain_data(request.messages)
     tool_names: dict[str, str] = {}
     contents = []
+    system_text = [_gemini_text(request.system)] if request.system else []
     for message in messages:
+        if not isinstance(message, dict):
+            continue
         parts = []
         raw_content = message.get("content", "")
+        source_role = message.get("role")
+        if source_role in {"system", "developer", "instruction"}:
+            if raw_content:
+                system_text.append(_gemini_text(raw_content))
+            continue
         if message.get("role") == "function":
             function_name = message.get("name", "")
             if not isinstance(function_name, str) or not function_name:
-                raise ProviderError("Gemini legacy tool results require a function name.")
-            contents.append({
-                "role": "user",
-                "parts": [{
-                    "functionResponse": {
-                        "name": function_name,
-                        "response": _gemini_response_value(raw_content),
-                    }
-                }],
-            })
+                function_name = "unknown_function"
+            _append_gemini_content(contents, "user", [{
+                "functionResponse": {
+                    "name": function_name,
+                    "response": _gemini_response_value(raw_content),
+                }
+            }])
             continue
         blocks = raw_content if isinstance(raw_content, list) else [{"type": "text", "text": raw_content}]
         for block in blocks:
+            if not isinstance(block, dict):
+                parts.append({"text": _gemini_text(block)})
+                continue
             block_type = block.get("type")
             if block_type == "text":
-                parts.append({"text": block.get("text", "")})
+                parts.append({"text": _gemini_text(block.get("text", ""))})
             elif block_type == "image":
-                parts.append({
-                    "inlineData": {
-                        "mimeType": block.get("mime_type", ""),
-                        "data": block.get("data", ""),
-                    }
-                })
+                mime_type = block.get("mime_type", "")
+                data = block.get("data", "")
+                if mime_type in {"image/jpeg", "image/png"} and isinstance(data, str):
+                    try:
+                        decoded_image = base64.b64decode(data, validate=True)
+                    except (binascii.Error, ValueError):
+                        decoded_image = b""
+                    if decoded_image and len(decoded_image) <= 2 * 1024 * 1024:
+                        parts.append({"inlineData": {"mimeType": mime_type, "data": data}})
+                    else:
+                        parts.append({"text": "[Invalid image omitted from conversation history.]"})
+                else:
+                    parts.append({"text": "[Unsupported image omitted from conversation history.]"})
             elif block_type == "tool_use":
-                tool_names[block.get("id", "")] = block.get("name", "")
+                call_id = block.get("id", "")
+                function_name = block.get("name", "")
+                if not isinstance(function_name, str) or not function_name:
+                    function_name = "unknown_function"
+                tool_names[call_id] = function_name
+                arguments = block.get("input", {})
                 parts.append({
                     "functionCall": {
-                        "name": block.get("name", ""),
-                        "args": block.get("input", {}),
+                        "name": function_name,
+                        "args": arguments if isinstance(arguments, dict) else {},
                     }
                 })
             elif block_type == "tool_result":
+                name = tool_names.get(block.get("tool_use_id", ""), block.get("name", ""))
                 parts.append({
                     "functionResponse": {
-                        "name": tool_names.get(block.get("tool_use_id", ""), block.get("name", "")),
+                        "name": name if isinstance(name, str) and name else "unknown_function",
                         "response": _gemini_response_value(block.get("content", "")),
                     }
                 })
+            else:
+                # Drop unknown provider-specific history blocks rather than replaying
+                # malformed data into Gemini on every subsequent turn.
+                continue
         has_function_response = any("functionResponse" in part for part in parts)
         # Gemini accepts only user/model content roles; function responses belong to a user turn.
         role = "user" if has_function_response else "model" if message.get("role") == "assistant" else "user"
-        contents.append({"role": role, "parts": parts})
+        _append_gemini_content(contents, role, parts)
 
     payload: dict[str, Any] = {"contents": contents}
-    if request.system:
-        payload["systemInstruction"] = {"parts": [{"text": request.system}]}
+    if system_text:
+        payload["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_text)}]}
     if request.tools:
         payload["tools"] = [{
             "functionDeclarations": [{

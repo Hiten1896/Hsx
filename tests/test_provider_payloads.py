@@ -18,7 +18,6 @@ def test_gemini_payload_uses_native_parts_for_text_turns():
     ])) == {
         "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
     }
-
     assert to_gemini_payload(LLMRequest([
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
@@ -31,6 +30,57 @@ def test_gemini_payload_uses_native_parts_for_text_turns():
         ],
     }
 
+
+def test_gemini_sanitizes_roles_merges_turns_and_extracts_system_messages():
+    payload = to_gemini_payload(LLMRequest([
+        {"role": "system", "content": "Follow the system rules."},
+        {"role": "developer", "content": "Keep answers brief."},
+        {"role": "human", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+        {"role": "assistant", "content": "again"},
+        {"role": "user", "content": "next"},
+    ], system="Base instruction."))
+
+    assert payload["systemInstruction"] == {"parts": [{"text": "Base instruction.\n\nFollow the system rules.\n\nKeep answers brief."}]}
+    assert [item["role"] for item in payload["contents"]] == ["user", "model", "user"]
+    assert payload["contents"][1]["parts"] == [{"text": "hi"}, {"text": "again"}]
+    assert_payload_valid("gemini", payload)
+
+
+def test_gemini_structures_unparseable_function_output_as_json_object():
+    payload = to_gemini_payload(LLMRequest([
+        {"role": "assistant", "content": [{"type": "tool_use", "name": "lookup", "input": {}, "id": "call-1"}]},
+        {"role": "function", "name": "lookup", "content": "plain output"},
+    ]))
+    assert payload["contents"][-1]["parts"] == [{
+        "functionResponse": {"name": "lookup", "response": {"content": "plain output"}}
+    }]
+
+
+def test_gemini_drops_invalid_history_blocks_and_normalizes_tool_args():
+    payload = to_gemini_payload(LLMRequest([
+        {"role": "odd-provider-role", "content": [
+            {"type": "future_block", "value": "bad"}, {"type": "text", "text": "kept"},
+        ]},
+        {"role": "assistant", "content": [{
+            "type": "tool_use", "name": "lookup", "input": ["not", "an", "object"], "id": "call-1"
+        }]},
+    ]))
+    assert payload["contents"] == [
+        {"role": "user", "parts": [{"text": "kept"}]},
+        {"role": "model", "parts": [{"functionCall": {"name": "lookup", "args": {}}}]},
+    ]
+    assert_payload_valid("gemini", payload)
+
+
+def test_gemini_schema_validation_failure_logs_payload_to_stderr(monkeypatch, capsys):
+    from agent.llm.providers import GeminiProvider
+
+    payload = {"contents": [{"role": "system", "parts": [{"text": "bad"}]}]}
+    monkeypatch.setenv("HSX_DEBUG", "1")
+    with pytest.raises(ValueError):
+        GeminiProvider("model", "http://127.0.0.1:1")._post(payload)
+    assert json.loads(capsys.readouterr().err) == payload
 
 def test_gemini_payload_uses_function_call_and_response_parts():
     payload = to_gemini_payload(LLMRequest([
@@ -57,8 +107,7 @@ def test_gemini_payload_uses_function_call_and_response_parts():
                     "name": "search",
                     "response": {"items": ["cat"]},
                 }
-            }]},
-            {"role": "user", "parts": [{"text": "continue"}]},
+            }, {"text": "continue"}]},
         ],
     }
     assert all("type" not in part for content in payload["contents"] for part in content["parts"])
