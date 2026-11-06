@@ -106,6 +106,9 @@ def test_notification_sse_disables_buffering_and_resumes_from_requested_id(monke
         def send_response(self, status):
             self.status = status
 
+        def _security_headers(self):
+            server.HsxHandler._security_headers(self)
+
         def send_header(self, key, value):
             self.response_headers[key] = value
 
@@ -119,6 +122,7 @@ def test_notification_sse_disables_buffering_and_resumes_from_requested_id(monke
     assert handler.status == 200
     assert handler.response_headers["X-Accel-Buffering"] == "no"
     assert handler.response_headers["Cache-Control"] == "no-cache"
+    assert "connect-src 'self'" in handler.response_headers["Content-Security-Policy"]
     assert seen_after[0][0] == 7
     assert b"id: 8\nevent: notification\ndata: " in handler.wfile.data
 

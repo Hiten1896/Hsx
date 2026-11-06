@@ -247,6 +247,9 @@ disabled. Remote browser origins must also be listed exactly in
 The same token can be entered in the browser's access-token control for API
 requests without an Origin. The restricted TLS mesh listener remains separate.
 
+Run `sudo scripts/check.sh` on Debian to check the service, listener, health
+endpoint, Tailscale/serve state, disk headroom, and clock synchronization.
+
 ### Headless Debian hardware (optional)
 
 Grant the HSX service account only the necessary `video` and/or `audio` device

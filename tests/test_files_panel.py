@@ -43,21 +43,23 @@ def _request(
         headers=request_headers,
     )
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            if stop_event:
-                body = []
-                while line := response.readline():
-                    body.append(line)
-                    if line.startswith(f"event: {stop_event}".encode()):
-                        break
-                result = response.status, response.headers, b"".join(body)
-            else:
-                result = response.status, response.headers, response.read()
-    except urllib.error.HTTPError as error:
-        result = error.code, error.headers, error.read()
-    thread.join(timeout=15)
-    httpd.server_close()
-    server.AUTH_SERVICE = previous_auth_service
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                if stop_event:
+                    body = []
+                    while line := response.readline():
+                        body.append(line)
+                        if line.startswith(f"event: {stop_event}".encode()):
+                            break
+                    result = response.status, response.headers, b"".join(body)
+                else:
+                    result = response.status, response.headers, response.read()
+        except urllib.error.HTTPError as error:
+            result = error.code, error.headers, error.read()
+    finally:
+        thread.join(timeout=15)
+        httpd.server_close()
+        server.AUTH_SERVICE = previous_auth_service
     return result
 
 
@@ -232,6 +234,17 @@ def test_files_panel_rejects_traversal(tmp_path: Path, monkeypatch):
 def test_files_panel_requires_bearer_when_origin_is_missing():
     status, _, _ = _request("/api/files", tokenless=True)
     assert status == 401
+
+
+def test_post_request_body_is_bounded():
+    oversized = "x" * (8 * 1024 * 1024 + 1)
+    status, _, body = _request(
+        "/api/chat/stream",
+        method="POST",
+        payload={"message": oversized},
+    )
+    assert status == 413
+    assert b"Request is too large" in body
 
 
 def test_chat_question_card_answer_resumes_job(tmp_path: Path, monkeypatch):

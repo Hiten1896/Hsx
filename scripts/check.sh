@@ -4,6 +4,11 @@ set -u
 PORT="${HSX_PORT:-8000}"
 failures=0
 
+if [[ ! "${PORT}" =~ ^[0-9]+$ ]]; then
+  printf 'HSX_PORT must be numeric.\n' >&2
+  exit 2
+fi
+
 report() {
   local name="$1"
   shift

@@ -987,6 +987,21 @@ class HsxHandler(BaseHTTPRequestHandler):
         path = self._request_path()
         if not self._api_access_allowed():
             return
+        try:
+            request_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self._json({"error": "Request size is invalid."}, 400)
+            return
+        if request_length < 0 or request_length > 8 * 1024 * 1024:
+            if request_length <= 16 * 1024 * 1024:
+                remaining = request_length
+                while remaining:
+                    chunk = self.rfile.read(min(64 * 1024, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+            self._json({"error": "Request is too large. Reduce the upload and try again."}, 413)
+            return
         if path == "/api/mesh/tasks":
             path = "/api/chat/stream"
         if path == "/api/feedback/settings":
@@ -1463,8 +1478,8 @@ class HsxHandler(BaseHTTPRequestHandler):
             except ValueError:
                 self._json({"error": "Content-Length must be an integer."}, 400)
                 return
-            if length <= 0 or length > 100 * 1024 * 1024:
-                self._json({"error": "Media upload must be between 1 byte and 100 MB."}, 413)
+            if length <= 0 or length > 5 * 1024 * 1024:
+                self._json({"error": "Media upload must be between 1 byte and 5 MB."}, 413)
                 return
             filename = Path(
                 self.headers.get("X-Filename", "browser_capture.webm").replace("\\", "/")
@@ -1508,12 +1523,9 @@ class HsxHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:
         if not self._api_access_allowed():
             return
-        if self._request_path().startswith("/api/"):
-            origin = self.headers.get("Origin")
-            if origin and origin not in ALLOWED_ORIGINS:
-                self._json({"error": "Origin is not allowed."}, 403)
-                return
         self.send_response(204)
+        self._security_headers()
+        self.send_header("Cache-Control", "no-store")
         origin = self.headers.get("Origin")
         if origin and origin != "null" and AUTH_SERVICE._origin_key(origin) in AUTH_SERVICE.origins:
             self.send_header("Access-Control-Allow-Origin", origin)
