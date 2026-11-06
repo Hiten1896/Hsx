@@ -159,6 +159,12 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visib
 .approval-actions button { min-width: 86px; min-height: 40px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--surface-raised); font-size: 12px; font-weight: 650; }
 .approval-actions button:first-child { border-color: #87c99a80; }
 .approval-actions button:last-child { border-color: #e28e8880; }
+.permission-dialog { width: min(620px, calc(100vw - 24px)); max-height: min(80dvh, 680px); overflow: auto; padding: 20px; border: 1px solid #78663f; border-radius: 15px; color: var(--text); background: var(--surface); box-shadow: 0 24px 80px #000a; }
+.permission-dialog::backdrop { background: #080b09c9; backdrop-filter: blur(3px); }
+.permission-dialog .approval-card { width: auto; margin: 0; padding: 0; border: 0; background: transparent; }
+.permission-dialog .approval-actions { flex-wrap: wrap; }
+.permission-dialog .approval-actions button { flex: 1 1 145px; }
+.approval-error { color: var(--warning) !important; }
 .activity-spinner { width: 13px; height: 13px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .activity-heading-actions { display: flex; align-items: center; gap: 4px; }

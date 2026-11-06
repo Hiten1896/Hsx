@@ -52,7 +52,7 @@ def test_approval_unknown_answer_reminds_and_keeps_pending(tmp_path):
     updated, decision = jobs.answer_approval(job["id"], job["approval_id"], "details please")
     assert decision is None
     assert updated["state"] == "waiting_for_approval"
-    assert updated["error"] == "I'm waiting for your yes or no on: run rm old-draft.txt"
+    assert updated["error"] == "Choose accept once, accept for this session, or reject for: run rm old-draft.txt"
 
 
 def test_approval_yes_and_no_resolve_once(tmp_path):
@@ -67,6 +67,48 @@ def test_approval_yes_and_no_resolve_once(tmp_path):
     assert decision is False
     assert updated["state"] == "running"
     assert jobs.get(no_job["id"])["answers"] == ["cancel"]
+
+
+def test_session_choice_is_scoped_to_the_pending_approval(tmp_path):
+    jobs = AskUserJobs(tmp_path / "jobs.db")
+    job = _pending(jobs)
+
+    updated, decision = jobs.answer_approval(job["id"], job["approval_id"], "accept_session")
+
+    assert decision is True
+    assert updated["state"] == "running"
+    assert updated["approval"]["grant_scope"] == "session"
+
+
+def test_permission_request_state_is_public_and_uses_the_approval_id(tmp_path):
+    jobs = AskUserJobs(tmp_path / "jobs.db")
+    job = _pending(jobs)
+    with sqlite3.connect(jobs.database_path) as connection:
+        connection.execute("UPDATE ask_jobs SET state = 'running' WHERE id = ?", (job["id"],))
+
+    permission_job = jobs.pause_approval(
+        job["id"],
+        {
+            "request_type": "permission_request",
+            "summary": "Retry with elevated permission?",
+            "why": "The OS denied the command.",
+            "risk": "PRIVILEGED",
+            "details": "cat /root/private-file",
+            "tool": "system_execute",
+            "arguments": {"action": "exec", "command": "cat /root/private-file"},
+        },
+        job["checkpoint"],
+        job["tool_call_id"],
+        state="permission_request",
+    )
+
+    public = ask_job_payload(permission_job)
+    assert public["state"] == "permission_request"
+    assert public["approval"]["request_type"] == "permission_request"
+    assert "arguments" not in public["approval"]
+    resumed, approved = jobs.answer_approval(permission_job["id"], permission_job["approval_id"], "accept_once")
+    assert approved is True
+    assert resumed["state"] == "running"
 
 
 def test_pending_approval_expires_with_clear_message(tmp_path):

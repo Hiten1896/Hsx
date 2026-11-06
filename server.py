@@ -85,6 +85,8 @@ SESSION_HISTORIES = {}
 SESSION_LAST_JOBS = {}
 SESSION_LOCKS = {}
 SESSION_LOCKS_GUARD = threading.Lock()
+SESSION_PRIVILEGE_GRANTS: dict[str, float] = {}
+SESSION_PRIVILEGE_GRANTS_LOCK = threading.Lock()
 RUN_CANCEL_EVENTS: dict[str, threading.Event] = {}
 CHAT_STREAMS = ChatStreamRegistry()
 MEMORY = MemoryManager(MEMORY_DB)
@@ -108,6 +110,20 @@ CONVERSATIONS = ConversationStore(DATA_DIR / "conversations.db")
 _RESOURCE_ALERT_LOCK = threading.Lock()
 _RESOURCE_ALERT_STATE = {"cpu": False, "memory": False, "disk": False}
 MESH_GATEWAY = MeshGateway.from_environment()
+
+
+def _grant_session_privileges(session_id: str) -> None:
+    with SESSION_PRIVILEGE_GRANTS_LOCK:
+        SESSION_PRIVILEGE_GRANTS[session_id] = time.monotonic() + 8 * 60 * 60
+
+
+def _session_privileges_granted(session_id: str) -> bool:
+    with SESSION_PRIVILEGE_GRANTS_LOCK:
+        expires_at = SESSION_PRIVILEGE_GRANTS.get(session_id, 0)
+        if expires_at <= time.monotonic():
+            SESSION_PRIVILEGE_GRANTS.pop(session_id, None)
+            return False
+        return True
 
 
 def _hardware_audio_alert(*, succeeded: bool, message: str = "") -> None:
@@ -374,6 +390,7 @@ def _resume_ask_job(job_id: str) -> None:
                 target_device=job.get("target_device", "client_browser"),
                 device_actions=device_actions,
                 job_id=job_id,
+                elevated_session=_session_privileges_granted(job["session_id"]),
             )
     except ApprovalRequest as approval:
         updated = ASK_JOBS.pause_approval(
@@ -385,12 +402,25 @@ def _resume_ask_job(job_id: str) -> None:
             },
             approval.checkpoint,
             approval.tool_call_id,
+            state=(
+                "permission_request"
+                if approval.approval_request.get("request_type") == "permission_request"
+                else "waiting_for_approval"
+            ),
         )
         SESSION_HISTORIES[job["session_id"]] = approval.checkpoint
         ASK_JOBS.save_device_actions(job_id, device_actions)
         _emit_chat_event(job_id, "job", _ask_job_payload(updated))
-        POLICY.audit_event("approval_requested", job["session_id"], job_id, approval.approval_request["risk"])
-        NOTIFIER.notify("needs_approval", "Hsx needs approval", job_id=job_id)
+        permission_request = approval.approval_request.get("request_type") == "permission_request"
+        POLICY.audit_event(
+            "permission_requested" if permission_request else "approval_requested",
+            job["session_id"], job_id, approval.approval_request["risk"],
+        )
+        NOTIFIER.notify(
+            "needs_approval",
+            "Hsx needs permission" if permission_request else "Hsx needs approval",
+            job_id=job_id,
+        )
         return
     except AskUserRequest as question:
         updated = ASK_JOBS.pause(job_id, question)
@@ -447,6 +477,9 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
     approval = job.get("approval") or {}
     tool_name = str(approval.get("tool", ""))
     arguments = approval.get("arguments")
+    permission_request = approval.get("request_type") == "permission_request"
+    if approved and approval.get("grant_scope") == "session":
+        _grant_session_privileges(job["session_id"])
     if not isinstance(arguments, dict) or tool_name not in SKILL_MAP:
         _fail_job(job_id, job, RuntimeError("The stored approval request is invalid."), started_at=started_at)
         return
@@ -463,7 +496,9 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
         approver="user",
     )
     result: dict
-    if not policy_result["allowed"]:
+    if POLICY.is_stopped():
+        result = {"success": False, "error": "Emergency stop is active; the approved action was not run."}
+    elif not policy_result["allowed"]:
         result = {
             "success": False,
             "error": "The user declined this action."
@@ -472,6 +507,8 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
         }
     else:
         tool_input = dict(arguments)
+        if tool_name in {"system_execute", "shell"} and permission_request and approved:
+            tool_input["_approved_elevation"] = True
         if tool_name in {"audio_play", "camera_record"}:
             tool_input["target_device"] = job.get("target_device", "local_host")
         try:
@@ -504,6 +541,7 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
                 target_device=job.get("target_device", "local_host"),
                 device_actions=device_actions,
                 job_id=job_id,
+                elevated_session=_session_privileges_granted(job["session_id"]),
             )
     except ApprovalRequest as next_approval:
         updated = ASK_JOBS.pause_approval(
@@ -515,17 +553,27 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
             },
             next_approval.checkpoint,
             next_approval.tool_call_id,
+            state=(
+                "permission_request"
+                if next_approval.approval_request.get("request_type") == "permission_request"
+                else "waiting_for_approval"
+            ),
         )
         SESSION_HISTORIES[job["session_id"]] = next_approval.checkpoint
         ASK_JOBS.save_device_actions(job_id, device_actions)
         _emit_chat_event(job_id, "job", _ask_job_payload(updated))
+        request_type = next_approval.approval_request.get("request_type")
         POLICY.audit_event(
-            "approval_requested",
+            "permission_requested" if request_type == "permission_request" else "approval_requested",
             job["session_id"],
             job_id,
             next_approval.approval_request["risk"],
         )
-        NOTIFIER.notify("needs_approval", "Hsx needs approval", job_id=job_id)
+        NOTIFIER.notify(
+            "needs_approval",
+            "Hsx needs permission" if request_type == "permission_request" else "Hsx needs approval",
+            job_id=job_id,
+        )
         return
     except AskUserRequest as question:
         updated = ASK_JOBS.pause(job_id, question)
@@ -620,6 +668,7 @@ def _run_chat_job(
                 on_text_delta=on_text_delta,
                 job_id=job_id,
                 cancel_event=cancel_event,
+                elevated_session=_session_privileges_granted(job["session_id"]),
             )
     except ApprovalRequest as approval:
         updated = ASK_JOBS.pause_approval(
@@ -631,20 +680,33 @@ def _run_chat_job(
             },
             approval.checkpoint,
             approval.tool_call_id,
+            state=(
+                "permission_request"
+                if approval.approval_request.get("request_type") == "permission_request"
+                else "waiting_for_approval"
+            ),
         )
         SESSION_HISTORIES[job["session_id"]] = approval.checkpoint
         ASK_JOBS.save_device_actions(job_id, device_actions)
         _emit_chat_event(job_id, "job", _ask_job_payload(updated))
         _emit_chat_event(job_id, "done", {})
-        if updated["state"] != "waiting_for_approval":
+        if updated["state"] not in {"waiting_for_approval", "permission_request"}:
             return
         POLICY.audit_event(
-            "approval_requested",
+            "permission_requested"
+            if approval.approval_request.get("request_type") == "permission_request"
+            else "approval_requested",
             job["session_id"],
             job_id,
             approval.approval_request["risk"],
         )
-        NOTIFIER.notify("needs_approval", "Hsx needs approval", job_id=job_id)
+        NOTIFIER.notify(
+            "needs_approval",
+            "Hsx needs permission"
+            if approval.approval_request.get("request_type") == "permission_request"
+            else "Hsx needs approval",
+            job_id=job_id,
+        )
         return
     except AskUserRequest as question:
         updated = ASK_JOBS.pause(job_id, question)
@@ -1245,7 +1307,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                 pending = ASK_JOBS.get(job_id)
                 if pending is None:
                     raise KeyError("Question job not found.")
-                if pending["state"] == "waiting_for_approval":
+                if pending["state"] in {"waiting_for_approval", "permission_request"}:
                     job, approved = ASK_JOBS.answer_approval(
                         job_id,
                         str(payload.get("approval_id", "")),

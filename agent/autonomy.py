@@ -10,6 +10,9 @@ from config import WORKSPACE_DIR, WORK_DIR
 
 _YES = ("yes", "y", "ok", "proceed", "approve", "i understand", "i understand proceed")
 _NO = ("no", "n", "cancel", "stop")
+_ONCE = ("accept once", "once", "yes", "y", "ok", "proceed", "approve", "i understand", "i understand proceed")
+_SESSION = ("accept for this session", "accept session", "this session", "session", "allow this session")
+_REJECT = ("reject", "deny", "decline", "no", "n", "cancel", "stop")
 _SAFE_TOOLS = {
     "ask_user", "compress_files", "create_text_file", "disk_usage", "list_files",
     "list_usb", "make_csv", "make_docx", "make_markdown", "make_website",
@@ -67,6 +70,23 @@ def parse_approval_answer(answer: str) -> bool | None:
     for candidate in _NO:
         if normalized == candidate or difflib.SequenceMatcher(None, normalized, candidate).ratio() >= 0.8:
             return False
+    return None
+
+
+def parse_approval_choice(answer: str) -> str | None:
+    normalized = re.sub(r"[^a-z0-9 ]+", " ", answer.casefold())
+    normalized = " ".join(normalized.split())
+    if not normalized:
+        return None
+    for candidate in _SESSION:
+        if normalized == candidate:
+            return "session"
+    for candidate in _ONCE:
+        if normalized == candidate or difflib.SequenceMatcher(None, normalized, candidate).ratio() >= 0.88:
+            return "once"
+    for candidate in _REJECT:
+        if normalized == candidate or difflib.SequenceMatcher(None, normalized, candidate).ratio() >= 0.8:
+            return "reject"
     return None
 
 

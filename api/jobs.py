@@ -13,10 +13,10 @@ def ask_job_payload(job: dict | None) -> dict | None:
         if key in job
     }
     approval = job.get("approval") or {}
-    if job.get("state") == "waiting_for_approval":
+    if job.get("state") in {"waiting_for_approval", "permission_request"}:
         payload["approval"] = {
             key: approval[key]
-            for key in ("summary", "why", "risk", "details")
+            for key in ("summary", "why", "risk", "details", "request_type")
             if key in approval
         }
     return payload

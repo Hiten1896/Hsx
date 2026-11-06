@@ -75,6 +75,8 @@ const elements = {
   activityList: document.getElementById('agent-activity-list'),
   notificationPanel: document.getElementById('notifications-panel'),
   notificationsList: document.getElementById('notifications-list'),
+  permissionDialog: document.getElementById('permission-dialog'),
+  permissionDialogContent: document.getElementById('permission-dialog-content'),
   voiceButton: document.getElementById('voice-button'),
   voiceIndicator: document.getElementById('voice-indicator'),
 };
@@ -919,9 +921,9 @@ function setupComposerOptions() {
 
 async function answerPendingQuestion(message, signal) {
   const jobId = pendingQuestion.id;
-  const approvalPending = pendingQuestion.state === 'waiting_for_approval';
+  const approvalPending = ['waiting_for_approval', 'permission_request'].includes(pendingQuestion.state);
   if (approvalPending && message.trim().toLowerCase() === 'details') {
-    const details = elements.stream.querySelector(`[data-approval-job="${CSS.escape(jobId)}"] details`);
+    const details = elements.permissionDialogContent.querySelector(`[data-approval-job="${CSS.escape(jobId)}"] details`);
     if (details) details.open = true;
     return;
   }
@@ -936,13 +938,15 @@ async function answerPendingQuestion(message, signal) {
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || 'Could not submit the answer.');
-  if (data.job && ['waiting_for_approval', 'waiting_for_user'].includes(data.job.state)) {
+  if (data.job && ['waiting_for_approval', 'permission_request', 'waiting_for_user'].includes(data.job.state)) {
     pendingQuestion = data.job;
-    if (data.job.error) appendMessage('assistant', data.job.error, data.job.id);
+    if (approvalPending) appendApprovalCard(data.job);
+    else if (data.job.error) appendMessage('assistant', data.job.error, data.job.id);
     return;
   }
   if (approvalPending) {
-    elements.stream.querySelector(`[data-approval-job="${CSS.escape(jobId)}"]`)?.remove();
+    elements.permissionDialogContent.querySelector(`[data-approval-job="${CSS.escape(jobId)}"]`)?.remove();
+    if (elements.permissionDialog.open) elements.permissionDialog.close();
   }
   pendingQuestion = null;
   const activity = appendActivity('Continuing the task…');
@@ -953,18 +957,22 @@ function appendApprovalCard(job) {
   elements.welcome.hidden = true;
   setConversationEmpty(false);
   const approval = job.approval || {};
+  const isPermissionRequest = job.state === 'permission_request' || approval.request_type === 'permission_request';
   const card = document.createElement('section');
   card.className = 'approval-card';
   card.dataset.approvalJob = job.id;
   card.setAttribute('aria-label', 'Hsx action approval');
   const title = document.createElement('h3');
-  title.textContent = 'Hsx wants to:';
+  title.id = 'permission-dialog-title';
+  title.textContent = isPermissionRequest ? 'Permission needed' : 'Hsx wants to:';
   const summary = document.createElement('p');
   summary.textContent = approval.summary || 'Run a tool';
   const why = document.createElement('p');
   why.textContent = `Why: ${approval.why || 'This action needs your approval.'}`;
   const risk = document.createElement('p');
-  risk.textContent = `Risk: ${approval.risk || 'UNKNOWN'}${approval.risk === 'DANGEROUS' ? ' (cannot be undone)' : ''}`;
+  risk.textContent = isPermissionRequest
+    ? 'Elevated execution is limited to a non-interactive sudo attempt. Your OS password is never requested or stored.'
+    : `Risk: ${approval.risk || 'UNKNOWN'}${approval.risk === 'DANGEROUS' ? ' (cannot be undone)' : ''}`;
   const details = document.createElement('details');
   const detailsSummary = document.createElement('summary');
   detailsSummary.textContent = 'Details';
@@ -973,7 +981,11 @@ function appendApprovalCard(job) {
   details.append(detailsSummary, detailsText);
   const actions = document.createElement('div');
   actions.className = 'approval-actions';
-  for (const [label, answer] of [['Yes', 'yes'], ['No', 'no']]) {
+  for (const [label, answer] of [
+    ['Accept', 'accept_once'],
+    ['Accept for this session', 'accept_session'],
+    ['Reject', 'reject'],
+  ]) {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = label;
@@ -997,10 +1009,16 @@ function appendApprovalCard(job) {
     });
     actions.appendChild(button);
   }
-  card.append(title, summary, why, risk, details, actions);
-  elements.welcome.hidden = true;
-  elements.stream.appendChild(card);
-  scrollToLatest();
+  card.append(title, summary, why, risk, details);
+  if (job.error) {
+    const error = document.createElement('p');
+    error.className = 'approval-error';
+    error.textContent = job.error;
+    card.appendChild(error);
+  }
+  card.appendChild(actions);
+  elements.permissionDialogContent.replaceChildren(card);
+  if (!elements.permissionDialog.open) elements.permissionDialog.showModal();
 }
 
 async function pollQuestionJob(jobId, activity, signal) {
@@ -1018,7 +1036,7 @@ async function pollQuestionJob(jobId, activity, signal) {
       appendMessage('assistant', job.question || 'I need a little more information.', job.id);
       return;
     }
-    if (job.state === 'waiting_for_approval') {
+    if (['waiting_for_approval', 'permission_request'].includes(job.state)) {
       activity.remove();
       pendingQuestion = job;
       appendApprovalCard(job);
@@ -1133,7 +1151,7 @@ async function submitPrompt() {
           activity?.remove();
           appendMessage('assistant', data.question || 'I need a little more information.', data.id);
         }
-        if (data.state === 'waiting_for_approval') {
+        if (['waiting_for_approval', 'permission_request'].includes(data.state)) {
           pendingQuestion = data;
           activity?.remove();
           appendApprovalCard(data);
@@ -1157,7 +1175,7 @@ async function submitPrompt() {
       appendMessage('assistant', 'Task started.', currentJob.id, { prompt: requestMessage });
     } else if (!assistantCard && currentJob?.state === 'waiting_for_user') {
       pendingQuestion = currentJob;
-    } else if (!assistantCard && currentJob?.state === 'waiting_for_approval') {
+    } else if (!assistantCard && ['waiting_for_approval', 'permission_request'].includes(currentJob?.state)) {
       pendingQuestion = currentJob;
     }
     uploadedAttachments = [];
@@ -1889,9 +1907,9 @@ async function openNotification(notification) {
     const data = await response.json();
     const job = data.job;
     if (!response.ok || !job) return;
-    if (job.state === 'waiting_for_approval') {
+    if (['waiting_for_approval', 'permission_request'].includes(job.state)) {
       pendingQuestion = job;
-      if (!elements.stream.querySelector(`[data-approval-job="${CSS.escape(job.id)}"]`)) {
+      if (!elements.permissionDialogContent.querySelector(`[data-approval-job="${CSS.escape(job.id)}"]`)) {
         appendApprovalCard(job);
       }
     } else if (job.state === 'waiting_for_user') {
@@ -2007,7 +2025,7 @@ async function refreshAgentActivity() {
     const data = await response.json();
     const tasks = Array.isArray(data.tasks) ? data.tasks : [];
     document.getElementById('activity-count').textContent =
-      `${tasks.filter((task) => ['queued', 'running', 'waiting_for_user', 'waiting_for_approval'].includes(task.state)).length} active`;
+      `${tasks.filter((task) => ['queued', 'running', 'waiting_for_user', 'waiting_for_approval', 'permission_request'].includes(task.state)).length} active`;
     if (!tasks.length) {
       empty.textContent = 'No agent tasks in this session yet.';
       elements.activityList.replaceChildren(empty);
@@ -2148,6 +2166,9 @@ function resetConversation(saveCurrent = true) {
 }
 
 async function initialize() {
+  elements.permissionDialog.addEventListener('cancel', (event) => {
+    event.preventDefault();
+  });
   const [tokensResponse, contractResponse] = await Promise.all([
     fetch('/web/design-tokens.json'),
     fetch('/web/api-contract.json'),
@@ -2403,7 +2424,7 @@ async function initialize() {
   );
   if (pendingResponse.ok) {
     const pendingData = await pendingResponse.json();
-    if (pendingData.job?.state === 'waiting_for_approval') {
+    if (['waiting_for_approval', 'permission_request'].includes(pendingData.job?.state)) {
       pendingQuestion = pendingData.job;
       appendApprovalCard(pendingQuestion);
     } else if (pendingData.job?.state === 'waiting_for_user') {

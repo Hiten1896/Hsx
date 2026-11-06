@@ -18,6 +18,7 @@ from agent.ml.prefetch import INTENT_PREFETCHER
 from agent.memory import MemoryManager
 from agent.memory.knowledge_graph import KNOWLEDGE_GRAPH
 from agent.policy import POLICY
+from agent.autonomy import classify_action
 from agent.rag import RAG_INDEX
 from agent.router import INTENT_ROUTER, LLM_TELEMETRY, ROUTER_LOGGER
 from agent.swarm import plan_task, review_proposal, write_proposal
@@ -163,6 +164,7 @@ def run_agent(
     enable_planning: bool = True,
     track_intent: bool = True,
     cancel_event=None,
+    elevated_session: bool = False,
 ):
     if target_device not in {"local_host", "client_browser"}:
         raise ValueError("target_device must be local_host or client_browser.")
@@ -342,6 +344,7 @@ def run_agent(
                             enable_planning=False,
                             track_intent=False,
                             cancel_event=cancel_event,
+                            elevated_session=elevated_session,
                         )
                     except AskUserRequest as question:
                         plan_context = (
@@ -613,7 +616,21 @@ def run_agent(
                 ROUTER_LOGGER.log_tool_execution(session_id, job_id, call.name, call.id, 0, "unknown_tool")
                 results.append({"type": "tool_result", "tool_use_id": call.id, "content": json.dumps({"success": False, "error": "Unknown skill."})})
                 continue
-            decision = POLICY.decide(skill, call.input, session_id, (approvals or {}).get(call.name))
+            if elevated_session and call.name in {"system_execute", "shell"}:
+                decision = POLICY.decide(
+                    skill,
+                    call.input,
+                    session_id,
+                    True,
+                    approver="session_permission",
+                )
+            else:
+                decision = POLICY.decide(
+                    skill,
+                    call.input,
+                    session_id,
+                    (approvals or {}).get(call.name),
+                )
             if not decision["allowed"]:
                 ROUTER_LOGGER.log_tool_execution(session_id, job_id, call.name, call.id, 0, "denied")
                 if decision.get("status") == "waiting_approval":
@@ -652,6 +669,8 @@ def run_agent(
             started = time.perf_counter()
             try:
                 tool_input = dict(call.input)
+                if call.name in {"system_execute", "shell"} and elevated_session:
+                    tool_input["_approved_elevation"] = True
                 if call.name in {"audio_play", "camera_record"}:
                     tool_input["target_device"] = target_device
                 result = skill_map[call.name](**tool_input)
@@ -666,6 +685,10 @@ def run_agent(
                 ROUTER_LOGGER.log_tool_execution(
                     session_id, job_id, call.name, call.id, (time.perf_counter() - started) * 1000, "failed"
                 )
+                if isinstance(error, PermissionError) and call.name in {"system_execute", "shell"} and not elevated_session:
+                    _raise_permission_request(
+                        call, results, tool_calls, call_index, conversation_history, error
+                    )
                 if call.name in {"audio_play", "camera_record"} and device_actions is not None:
                     device_actions.append({
                         "type": call.name,
@@ -691,6 +714,16 @@ def run_agent(
                             "pid": result.get("pid"),
                         }
                     )
+            if (
+                isinstance(result, dict)
+                and call.name in {"system_execute", "shell"}
+                and (call.name == "shell" or call.input.get("action") == "exec")
+                and not elevated_session
+                and _permission_denied_result(result)
+            ):
+                _raise_permission_request(
+                    call, results, tool_calls, call_index, conversation_history
+                )
             results.append({"type": "tool_result", "tool_use_id": call.id, "content": json.dumps(result)})
         conversation_history.append({"role": "user", "content": results})
     if track_intent:
@@ -706,6 +739,59 @@ def _tool_result_failed(content: object) -> bool:
     return isinstance(result, dict) and (
         result.get("success") is False or result.get("allowed") is False
     )
+
+
+def _permission_denied_result(result: dict) -> bool:
+    text = " ".join(
+        str(result.get(key, ""))
+        for key in ("error", "stderr", "stdout", "message")
+    ).casefold()
+    if any(marker in text for marker in ("emergency stop", "kill switch", "safety policy", "host safety")):
+        return False
+    return any(marker in text for marker in (
+        "permission denied", "operation not permitted", "access is denied",
+        "requires administrator", "administrator privileges required", "sudo required",
+        "sudo: a password is required", "not in the sudoers", "requires root", "must be root",
+    ))
+
+
+def _raise_permission_request(
+    call,
+    results: list,
+    tool_calls: list,
+    call_index: int,
+    history: list,
+    cause: Exception | None = None,
+) -> None:
+    classification = classify_action(call.name, call.input)
+    permission = {
+        "request_type": "permission_request",
+        "summary": "Retry this command with non-interactive elevated permission?",
+        "why": "The operating system denied this command. Approval allows one non-interactive sudo attempt; Hsx will never request or store your OS password.",
+        "risk": "PRIVILEGED",
+        "details": classification.get("details", "")[:500],
+    }
+    pending_results = list(results)
+    pending_results.extend(
+        {
+            "type": "tool_result",
+            "tool_use_id": later.id,
+            "content": json.dumps({"success": False, "error": "Waiting for the pending permission decision."}),
+        }
+        for later in tool_calls[call_index + 1 :]
+    )
+    if pending_results:
+        history.append({"role": "user", "content": pending_results})
+    approval = ApprovalRequest(
+        call.name,
+        dict(call.input),
+        permission,
+        _serializable_history(history),
+        call.id,
+    )
+    if cause is not None:
+        raise approval from cause
+    raise approval
 
 
 def _local_response(user_input: str, history: list) -> str:

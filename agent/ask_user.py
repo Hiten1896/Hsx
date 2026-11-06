@@ -196,7 +196,7 @@ class AskUserJobs:
         with self._connect() as connection:
             row = connection.execute(
                 """SELECT * FROM ask_jobs WHERE session_id = ?
-                AND state IN ('waiting_for_user', 'waiting_for_approval')
+                AND state IN ('waiting_for_user', 'waiting_for_approval', 'permission_request')
                 ORDER BY created DESC LIMIT 1""",
                 (session_id,),
             ).fetchone()
@@ -301,11 +301,11 @@ class AskUserJobs:
         now = self._now().isoformat()
         with self._connect() as connection:
             return connection.execute(
-                """UPDATE ask_jobs SET state = 'cancelled',
-                error = CASE WHEN state = 'waiting_for_approval'
+            """UPDATE ask_jobs SET state = 'cancelled',
+                error = CASE WHEN state IN ('waiting_for_approval', 'permission_request')
                     THEN 'Approval expired; the requested action was not run.'
                     ELSE 'Question timed out; the job was cancelled.' END,
-                updated = ? WHERE state IN ('waiting_for_user', 'waiting_for_approval') AND expires_at <= ?""",
+                updated = ? WHERE state IN ('waiting_for_user', 'waiting_for_approval', 'permission_request') AND expires_at <= ?""",
                 (now, now),
             ).rowcount
 
@@ -384,15 +384,25 @@ class AskUserJobs:
             )
         return self.get(job_id)
 
-    def pause_approval(self, job_id: str, approval: dict, checkpoint: list[dict], tool_call_id: str) -> dict:
+    def pause_approval(
+        self,
+        job_id: str,
+        approval: dict,
+        checkpoint: list[dict],
+        tool_call_id: str,
+        state: str = "waiting_for_approval",
+    ) -> dict:
+        if state not in {"waiting_for_approval", "permission_request"}:
+            raise ValueError("Unsupported approval state.")
         now = self._now()
         approval_id = uuid.uuid4().hex
         with self._connect() as connection:
             connection.execute(
-                """UPDATE ask_jobs SET state = 'waiting_for_approval', approval_id = ?,
+                """UPDATE ask_jobs SET state = ?, approval_id = ?,
                 approval_json = ?, checkpoint = ?, tool_call_id = ?, error = '',
                 expires_at = ?, updated = ? WHERE id = ? AND state = 'running'""",
                 (
+                    state,
                     approval_id,
                     json.dumps(approval),
                     json.dumps(checkpoint),
@@ -405,34 +415,40 @@ class AskUserJobs:
         return self.get(job_id)
 
     def answer_approval(self, job_id: str, approval_id: str, answer: str) -> tuple[dict, bool | None]:
-        from agent.autonomy import parse_approval_answer
+        from agent.autonomy import parse_approval_choice
 
         self.expire()
         answer = answer.strip()
         if not answer or len(answer) > 4000:
-            raise ValueError("Answer yes or no to the pending approval.")
+            raise ValueError("Choose accept once, accept for this session, or reject.")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT * FROM ask_jobs WHERE id = ?", (job_id,)).fetchone()
             if row is None:
                 raise KeyError("Approval job not found.")
-            if row["state"] != "waiting_for_approval" or row["approval_id"] != approval_id:
+            if row["state"] not in {"waiting_for_approval", "permission_request"} or row["approval_id"] != approval_id:
                 raise ValueError("This approval is no longer pending.")
             approval = json.loads(row["approval_json"])
-            decision = parse_approval_answer(answer)
+            choice = parse_approval_choice(answer)
+            decision = None if choice is None else choice != "reject"
             now = self._now().isoformat()
             if decision is None:
-                reminder = f"I'm waiting for your yes or no on: {approval.get('summary', 'this action')}"
+                reminder = (
+                    "Choose accept once, accept for this session, or reject for: "
+                    f"{approval.get('summary', 'this action')}"
+                )
                 connection.execute(
                     "UPDATE ask_jobs SET error = ?, updated = ? WHERE id = ?",
                     (reminder, now, job_id),
                 )
             else:
+                if choice == "session":
+                    approval["grant_scope"] = "session"
                 answers = json.loads(row["answers"])
                 answers.append(answer)
                 connection.execute(
-                    "UPDATE ask_jobs SET state = 'running', answers = ?, error = '', updated = ? WHERE id = ?",
-                    (json.dumps(answers), now, job_id),
+                    "UPDATE ask_jobs SET state = 'running', answers = ?, approval_json = ?, error = '', updated = ? WHERE id = ?",
+                    (json.dumps(answers), json.dumps(approval), now, job_id),
                 )
             updated = connection.execute("SELECT * FROM ask_jobs WHERE id = ?", (job_id,)).fetchone()
         return self._public(updated), decision

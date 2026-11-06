@@ -3,11 +3,28 @@ import subprocess
 from pathlib import Path
 
 
-def _run_command(command: str, timeout: int = 30, cwd: str | None = None, shell: bool = False) -> dict:
+def _run_command(
+    command: str,
+    timeout: int = 30,
+    cwd: str | None = None,
+    shell: bool = False,
+    elevated: bool = False,
+) -> dict:
     try:
+        if elevated and os.name == "nt":
+            return {
+                "success": False,
+                "returncode": None,
+                "stdout": "",
+                "stderr": "Non-interactive elevation is unavailable on this host; continue with a non-admin alternative.",
+            }
+        if elevated:
+            invocation = ["sudo", "-n", "--", "bash", "-lc", command]
+        else:
+            invocation = command if shell else ["bash", "-lc", command] if os.name != "nt" else command
         completed = subprocess.run(
-            command if shell else ["bash", "-lc", command] if os.name != "nt" else command,
-            shell=shell,
+            invocation,
+            shell=shell and not elevated,
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -19,6 +36,7 @@ def _run_command(command: str, timeout: int = 30, cwd: str | None = None, shell:
             "returncode": completed.returncode,
             "stdout": completed.stdout[:200000],
             "stderr": completed.stderr[:200000],
+            "elevated": elevated,
         }
     except subprocess.TimeoutExpired as error:
         return {
@@ -149,11 +167,12 @@ def run(
     service_action: str | None = None,
     limit: int = 50,
     recursive: bool = False,
+    _approved_elevation: bool = False,
 ) -> dict:
     if action == "exec":
         if not command:
             raise ValueError("A command is required for exec actions.")
-        return _run_command(command, timeout=timeout, cwd=cwd, shell=shell)
+        return _run_command(command, timeout=timeout, cwd=cwd, shell=shell, elevated=_approved_elevation)
     if action == "read_file":
         if not path:
             raise ValueError("A file path is required for read_file actions.")
