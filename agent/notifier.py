@@ -9,7 +9,15 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 
-EVENTS = {"job_done", "needs_input", "needs_approval", "job_failed", "health_alert", "heartbeat"}
+EVENTS = {
+    "job_done",
+    "needs_input",
+    "needs_approval",
+    "job_failed",
+    "health_alert",
+    "camera_motion",
+    "heartbeat",
+}
 PUSH_HOSTS = {
     "fcm.googleapis.com",
     "updates.push.services.mozilla.com",
@@ -21,6 +29,7 @@ DEFAULT_ROUTES = {
     "needs_approval": ("inapp", "webpush"),
     "job_failed": ("inapp", "webpush"),
     "health_alert": ("inapp", "webpush", "telegram"),
+    "camera_motion": ("inapp", "webpush"),
     "heartbeat": ("telegram",),
 }
 

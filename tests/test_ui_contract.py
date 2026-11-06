@@ -1,6 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import server
 from agent.ask_user import AskUserJobs
@@ -8,6 +9,118 @@ from agent.tui import HsxTUI
 from tests.test_files_panel import _request
 
 BASE_DIR = Path(__file__).resolve().parents[1]
+
+
+def test_cloud_greeting_uses_only_a_configured_cloud_provider(monkeypatch):
+    providers = [SimpleNamespace(name="ollama"), SimpleNamespace(name="gemini")]
+    router = SimpleNamespace(providers=providers.copy())
+    calls = []
+
+    def fake_call_llm(messages, tools, **kwargs):
+        calls.append((messages, tools, kwargs))
+        router.providers = [providers[1]]
+        return SimpleNamespace(content=[SimpleNamespace(type="text", text="Good morning, Sir.")])
+
+    monkeypatch.setattr(server, "default_router", lambda: router)
+    monkeypatch.setattr(server, "call_llm", fake_call_llm)
+
+    assert server._generate_greeting("morning") == "Good morning, Sir."
+    assert calls[0][2]["required_provider"] == "gemini"
+    assert calls[0][2]["disable_panel"] is True
+    assert "morning" in calls[0][0][0]["content"]
+    assert router.providers == providers
+
+
+def test_generated_artifact_filter_excludes_current_and_legacy_upload_paths():
+    assert server._is_user_upload_path("Hsx Work/Uploads/screenshot.png")
+    assert server._is_user_upload_path("Hsx Work/2025-01-03 1215 Uploads/screenshot.png")
+    assert not server._is_user_upload_path("Hsx Work/2025-01-03 1215 Report/report.pdf")
+
+
+def test_resource_notifications_fire_once_per_high_resource_episode(monkeypatch):
+    sent = []
+
+    class FakeNotifier:
+        def notify(self, event, title, **kwargs):
+            sent.append((event, title, kwargs))
+
+    monkeypatch.setattr(server, "NOTIFIER", FakeNotifier())
+    disk_used = [90]
+    monkeypatch.setattr(
+        server.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(used=disk_used[0], total=100),
+    )
+    monkeypatch.setattr(server, "_RESOURCE_ALERT_STATE", {"cpu": False, "memory": False, "disk": False})
+
+    high = server.SystemMetrics(cpu_percent=99, ram_percent=95, temperature_c=None, outbound_connections=0)
+    normal = server.SystemMetrics(cpu_percent=10, ram_percent=20, temperature_c=None, outbound_connections=0)
+    server._notify_resource_alerts(high)
+    server._notify_resource_alerts(high)
+    assert len(sent) == 3
+
+    disk_used[0] = 50
+    server._notify_resource_alerts(normal)
+    disk_used[0] = 90
+    server._notify_resource_alerts(high)
+    assert len(sent) == 6
+    assert all(event == "health_alert" for event, _, _ in sent)
+
+
+def test_notification_sse_disables_buffering_and_resumes_from_requested_id(monkeypatch):
+    seen_after = []
+
+    class FakeNotifier:
+        def wait_for_notifications(self, after_id, timeout):
+            seen_after.append((after_id, timeout))
+            if len(seen_after) == 1:
+                return [{
+                    "id": 8,
+                    "event": "job_done",
+                    "title": "Task complete",
+                    "job_id": "job-1",
+                    "result_path": "",
+                    "created": "2026-01-01T00:00:00+00:00",
+                    "read": 0,
+                }]
+            raise BrokenPipeError
+
+    class FakeWriter:
+        def __init__(self):
+            self.data = bytearray()
+
+        def write(self, data):
+            self.data.extend(data)
+
+        def flush(self):
+            pass
+
+    class FakeHandler:
+        headers = {}
+        wfile = FakeWriter()
+
+        def __init__(self):
+            self.status = None
+            self.response_headers = {}
+
+        def send_response(self, status):
+            self.status = status
+
+        def send_header(self, key, value):
+            self.response_headers[key] = value
+
+        def end_headers(self):
+            pass
+
+    monkeypatch.setattr(server, "NOTIFIER", FakeNotifier())
+    handler = FakeHandler()
+    server.HsxHandler._stream_notifications(handler, {"after": ["7"]})
+
+    assert handler.status == 200
+    assert handler.response_headers["X-Accel-Buffering"] == "no"
+    assert handler.response_headers["Cache-Control"] == "no-cache"
+    assert seen_after[0][0] == 7
+    assert b"id: 8\nevent: notification\ndata: " in handler.wfile.data
 
 
 def test_web_and_tui_load_the_same_design_and_api_contract():
@@ -49,6 +162,8 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert 'id="camera-retry"' in html
     assert 'id="notifications-toggle"' in html
     assert 'id="notifications-panel"' in html
+    assert 'id="activity-toggle"' in html
+    assert 'id="notification-toast"' in html
     assert 'id="camera-clock"' in html
     assert 'id="camera-latency"' in html
     assert 'id="camera-clip-time"' in html
@@ -62,6 +177,10 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert html.count('id="agent-activity-list"') == 1
     assert 'data-feedback="good"' in html
     assert 'data-feedback="bad"' in html
+    assert 'data-action="speak"' in html
+    assert 'data-action="retry"' in html
+    assert 'data-action="edit"' in html
+    assert 'class="message-time"' in html
     assert "marked.parse" in script
     assert "function updateGreeting()" in script
     assert "function setConversationEmpty(isEmpty)" in script
@@ -90,6 +209,11 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert "target_device: 'local_host'" in script
     assert "apiContract.endpoints.notifications" in script
     assert "apiContract.endpoints.notifications_read" in script
+    assert "apiContract.endpoints.notifications_stream" in script
+    assert "apiContract.endpoints.greeting" in script
+    assert "startNotificationStream()" in script
+    assert "speechSynthesis.speak" in script
+    assert "elements.activityList.hidden = expanded" in script
     assert "function openMobilePanel" in script
     assert "X-Hsx-Captured-At" in script
     assert "WORKSPACE</span>" not in html

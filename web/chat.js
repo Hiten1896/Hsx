@@ -3,6 +3,12 @@ let apiContract;
 let pendingQuestion = null;
 let submitting = false;
 let activeChatController = null;
+let notificationController = null;
+let notificationLastId = 0;
+let notificationInitialized = false;
+let notificationReconnectTimer = null;
+let notificationRetryDelay = 500;
+let notificationToastTimer = null;
 let voiceRecognition = null;
 let voiceIsListening = false;
 let voiceDraft = '';
@@ -127,6 +133,26 @@ function updateGreeting() {
   elements.greeting.textContent = `${greeting}, Sir`;
 }
 
+async function refreshGreeting() {
+  updateGreeting();
+  const hour = new Date().getHours();
+  const timeOfDay = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
+  try {
+    const response = await apiFetch(apiContract.endpoints.greeting, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ time_of_day: timeOfDay }),
+    });
+    if (!response.ok) return;
+    const result = await response.json();
+    if (typeof result.greeting === 'string' && result.greeting.trim()) {
+      elements.greeting.textContent = result.greeting.trim();
+    }
+  } catch {
+    // Keep the local-time greeting when the cloud service is unavailable.
+  }
+}
+
 function setConversationEmpty(isEmpty) {
   const wasEmpty = elements.conversationLayout.classList.contains('is-empty');
   if (wasEmpty === isEmpty) return;
@@ -158,6 +184,27 @@ function setConnection(id, labelId, value, state) {
   if (label) label.textContent = value;
 }
 
+function relativeMessageTime(timestamp) {
+  const elapsedSeconds = Math.round((timestamp - Date.now()) / 1000);
+  if (Math.abs(elapsedSeconds) < 60) return 'now';
+  const elapsedMinutes = Math.round(elapsedSeconds / 60);
+  if (Math.abs(elapsedMinutes) < 60) {
+    return new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(elapsedMinutes, 'minute');
+  }
+  const elapsedHours = Math.round(elapsedMinutes / 60);
+  if (Math.abs(elapsedHours) < 24) {
+    return new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(elapsedHours, 'hour');
+  }
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(timestamp);
+}
+
+function updateMessageTimes() {
+  document.querySelectorAll('.message-time[data-timestamp]').forEach((time) => {
+    const timestamp = new Date(time.dataset.timestamp);
+    if (!Number.isNaN(timestamp.getTime())) time.textContent = relativeMessageTime(timestamp);
+  });
+}
+
 function appendMessage(role, text, jobId = '', options = {}) {
   elements.welcome.hidden = true;
   setConversationEmpty(false);
@@ -166,30 +213,79 @@ function appendMessage(role, text, jobId = '', options = {}) {
   const content = fragment.querySelector('.message-content');
   article.dataset.role = role;
   article.dataset.response = String(text || '');
+  article.dataset.editText = String(options.editText ?? text ?? '');
+  article.dataset.prompt = String(options.prompt || '');
+  const createdAt = new Date();
+  article.dataset.createdAt = createdAt.toISOString();
   if (jobId) article.dataset.jobId = jobId;
   renderMarkdown(text, content);
 
   const copyButton = fragment.querySelector('.copy-button');
-  copyButton.textContent = role === 'assistant' ? 'Copy' : 'Copy message';
-  copyButton.setAttribute('aria-label', role === 'assistant' ? 'Copy response' : 'Copy message');
+  if (role === 'assistant') {
+    fragment.querySelector('.edit-button').remove();
+    const timestamp = fragment.querySelector('.message-time');
+    timestamp.dateTime = createdAt.toISOString();
+    timestamp.dataset.timestamp = createdAt.toISOString();
+    timestamp.textContent = relativeMessageTime(createdAt);
+    timestamp.title = createdAt.toLocaleString();
+    fragment.querySelector('.message-feedback').hidden = Boolean(options.noFeedback);
+    fragment.querySelector('.retry-button').disabled = !article.dataset.prompt;
+  } else {
+    fragment.querySelector('.speak-button').remove();
+    fragment.querySelector('.message-feedback').remove();
+    fragment.querySelector('.retry-button').remove();
+    fragment.querySelector('.message-time').remove();
+  }
   copyButton.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(article.dataset.response || '');
-      copyButton.textContent = 'Copied';
-      window.setTimeout(() => { copyButton.textContent = 'Copy'; }, 1400);
+      copyButton.title = 'Copied';
+      window.setTimeout(() => { copyButton.title = role === 'assistant' ? 'Copy response' : 'Copy message'; }, 1400);
     } catch {
-      copyButton.textContent = 'Copy unavailable';
+      copyButton.title = 'Copy unavailable';
     }
   });
 
+  const editButton = fragment.querySelector('.edit-button');
+  editButton?.addEventListener('click', () => {
+    elements.prompt.value = article.dataset.editText || '';
+    elements.prompt.dispatchEvent(new Event('input', { bubbles: true }));
+    elements.prompt.focus();
+  });
+  const speakButton = fragment.querySelector('.speak-button');
+  speakButton?.addEventListener('click', () => {
+    if (!('speechSynthesis' in window) || !('SpeechSynthesisUtterance' in window)) {
+      speakButton.title = 'Read-aloud is not available in this browser';
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(article.dataset.response || '');
+    utterance.onend = () => speakButton.removeAttribute('aria-pressed');
+    utterance.onerror = () => speakButton.removeAttribute('aria-pressed');
+    speakButton.setAttribute('aria-pressed', 'true');
+    window.speechSynthesis.speak(utterance);
+  });
+  const retryButton = fragment.querySelector('.retry-button');
+  retryButton?.addEventListener('click', () => {
+    if (!article.dataset.prompt || submitting) return;
+    elements.prompt.value = article.dataset.prompt;
+    elements.prompt.dispatchEvent(new Event('input', { bubbles: true }));
+    elements.composer.requestSubmit();
+  });
+
   const feedback = fragment.querySelector('.message-feedback');
-  if (role === 'assistant' && jobId && !options.noFeedback) {
+  if (role === 'assistant' && !options.noFeedback) {
     feedback.hidden = false;
     feedback.querySelectorAll('[data-feedback]').forEach((button) => {
-      button.addEventListener('click', () => submitFeedback(article, button.dataset.feedback));
+      button.disabled = !jobId;
+      if (jobId) {
+        button.addEventListener('click', () => submitFeedback(article, button.dataset.feedback));
+      } else {
+        button.title = 'Feedback is unavailable for this message';
+      }
     });
   } else {
-    feedback.remove();
+    feedback?.remove();
   }
   elements.stream.appendChild(fragment);
   scrollToLatest();
@@ -580,7 +676,7 @@ async function submitPrompt() {
   const displayMessage = readyAttachments.length
     ? `${userMessage}\n\nAttached: ${readyAttachments.map((item) => item.name).join(', ')}`
     : userMessage;
-  appendMessage('user', displayMessage);
+  appendMessage('user', displayMessage, '', { editText: userMessage });
   setBusy(true);
   safeStorageSet('sessionStorage', `hsx-draft-${sessionId}`, typedMessage);
   elements.send.disabled = true;
@@ -624,6 +720,9 @@ async function submitPrompt() {
       const error = await response.json();
       throw new Error(error.error || (response.status === 401 ? 'Set the remote access token to continue.' : 'The request could not be completed.'));
     }
+    uploadedAttachments = [];
+    persistAttachments();
+    renderAttachments();
     elements.prompt.value = '';
     activity = appendActivity('Thinking…');
     await readStream(response, ({ event, data }) => {
@@ -653,7 +752,7 @@ async function submitPrompt() {
           activity?.remove();
           const text = assistantContent || data.result || data.error || 'The task was cancelled.';
           assistantCard?.remove();
-          appendMessage('assistant', text, data.id);
+          appendMessage('assistant', text, data.id, { prompt: requestMessage });
         }
       } else if (event === 'error') {
         throw new Error(data.message || 'The task failed.');
@@ -661,7 +760,7 @@ async function submitPrompt() {
     });
     if (!assistantCard && currentJob && currentJob.state === 'running') {
       activity?.remove();
-      appendMessage('assistant', 'Task started.', currentJob.id);
+      appendMessage('assistant', 'Task started.', currentJob.id, { prompt: requestMessage });
     } else if (!assistantCard && currentJob?.state === 'waiting_for_user') {
       pendingQuestion = currentJob;
     } else if (!assistantCard && currentJob?.state === 'waiting_for_approval') {
@@ -1016,7 +1115,7 @@ async function refreshNotifications() {
       empty.className = 'artifacts-empty';
       empty.textContent = 'No notifications yet.';
       elements.notificationsList.replaceChildren(empty);
-      return;
+      return 0;
     }
     const fragment = document.createDocumentFragment();
     for (const notification of notifications) {
@@ -1040,12 +1139,100 @@ async function refreshNotifications() {
       fragment.append(item);
     }
     elements.notificationsList.replaceChildren(fragment);
+    return notifications.reduce((highest, item) => Math.max(highest, Number(item.id) || 0), 0);
   } catch {
     const error = document.createElement('p');
     error.className = 'artifacts-empty';
     error.textContent = 'Notifications are unavailable right now.';
     elements.notificationsList.replaceChildren(error);
+    return 0;
   }
+}
+
+function showNotificationToast(title) {
+  const toast = document.getElementById('notification-toast');
+  toast.textContent = title;
+  toast.hidden = false;
+  window.clearTimeout(notificationToastTimer);
+  notificationToastTimer = window.setTimeout(() => { toast.hidden = true; }, 5000);
+}
+
+function handleLiveNotification(notification) {
+  const supportedEvents = new Set([
+    'job_done', 'job_failed', 'needs_input', 'needs_approval', 'health_alert', 'camera_motion',
+  ]);
+  if (!supportedEvents.has(notification.event)) return;
+  showNotificationToast(String(notification.title || 'Hsx update'));
+  refreshNotifications();
+  refreshAgentActivity();
+}
+
+function abortNotificationStream() {
+  if (notificationController) notificationController.abort();
+  notificationController = null;
+  window.clearTimeout(notificationReconnectTimer);
+  notificationReconnectTimer = null;
+}
+
+async function consumeNotificationStream(controller) {
+  const headers = new Headers();
+  if (bearerToken) headers.set('Authorization', `Bearer ${bearerToken}`);
+  headers.set('Last-Event-ID', String(notificationLastId));
+  const response = await fetch(apiContract.endpoints.notifications_stream, {
+    headers,
+    signal: controller.signal,
+    cache: 'no-store',
+  });
+  if (!response.ok) throw new Error('Notification stream is unavailable.');
+  if (!response.body) throw new Error('Notification stream returned no body.');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (!controller.signal.aborted) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop() || '';
+    for (const block of blocks) {
+      if (block.startsWith(':')) continue;
+      const id = Number(block.match(/^id:\s*(\d+)/m)?.[1]);
+      const event = parseSseBlock(block);
+      if (!event || event.event !== 'notification' || !Number.isInteger(id) || id <= notificationLastId) continue;
+      notificationLastId = id;
+      handleLiveNotification(event.data);
+    }
+    if (done) return;
+  }
+}
+
+async function startNotificationStream() {
+  abortNotificationStream();
+  if (!notificationInitialized) {
+    notificationLastId = Math.max(notificationLastId, await refreshNotifications());
+    notificationInitialized = true;
+  } else {
+    await refreshNotifications();
+  }
+  const connect = async () => {
+    if (document.hidden || notificationController) return;
+    const controller = new AbortController();
+    notificationController = controller;
+    try {
+      await consumeNotificationStream(controller);
+      notificationRetryDelay = 500;
+    } catch {
+      if (controller.signal.aborted) return;
+    } finally {
+      if (notificationController === controller) notificationController = null;
+    }
+    if (!document.hidden) {
+      notificationReconnectTimer = window.setTimeout(() => {
+        notificationRetryDelay = Math.min(notificationRetryDelay * 2, 15000);
+        connect();
+      }, notificationRetryDelay);
+    }
+  };
+  connect();
 }
 
 async function openNotification(notification) {
@@ -1228,7 +1415,7 @@ function resetConversation() {
   uploadedAttachments = [];
   elements.stream.querySelectorAll('.message-card, .approval-card, .activity-card').forEach((item) => item.remove());
   elements.welcome.hidden = false;
-  updateGreeting();
+  refreshGreeting();
   elements.prompt.value = '';
   elements.prompt.style.height = 'auto';
   renderAttachments();
@@ -1255,6 +1442,7 @@ function setupTokenControls() {
     elements.tokenInput.value = '';
     elements.tokenForm.hidden = true;
     refreshConnections();
+    startNotificationStream();
   });
   document.getElementById('clear-token-button').addEventListener('click', () => {
     bearerToken = '';
@@ -1262,6 +1450,7 @@ function setupTokenControls() {
     elements.tokenInput.value = '';
     elements.tokenForm.hidden = true;
     refreshConnections();
+    startNotificationStream();
   });
 }
 
@@ -1292,6 +1481,14 @@ async function initialize() {
   elements.panelBackdrop.addEventListener('click', closeMobilePanels);
   document.getElementById('refresh-artifacts').addEventListener('click', refreshArtifacts);
   document.getElementById('camera-retry').addEventListener('click', retryCamera);
+  document.getElementById('activity-toggle').addEventListener('click', (event) => {
+    const button = event.currentTarget;
+    const expanded = button.getAttribute('aria-expanded') === 'true';
+    button.setAttribute('aria-expanded', String(!expanded));
+    button.setAttribute('aria-label', expanded ? 'Expand agent activity' : 'Collapse agent activity');
+    button.title = expanded ? 'Expand agent activity' : 'Collapse agent activity';
+    elements.activityList.hidden = expanded;
+  });
   document.getElementById('notifications-toggle').addEventListener('click', async () => {
     const opening = elements.notificationPanel.hidden;
     elements.notificationPanel.hidden = !opening;
@@ -1392,31 +1589,43 @@ async function initialize() {
       if (eventName === 'drop' && event.dataTransfer?.files.length) uploadFiles([...event.dataTransfer.files]);
     });
   }
-  window.addEventListener('online', refreshConnections);
+  window.addEventListener('online', () => {
+    refreshConnections();
+    startNotificationStream();
+  });
   window.addEventListener('offline', () => {
     stopCameraStream();
     if (cameraAvailable) setCameraReconnecting('Network offline; waiting to reconnect…');
     refreshConnections();
   });
-  window.addEventListener('pagehide', stopCameraStream);
+  window.addEventListener('pagehide', () => {
+    stopCameraStream();
+    abortNotificationStream();
+  });
   window.addEventListener('pageshow', () => {
-    if (!document.hidden) refreshConnections();
+    if (!document.hidden) {
+      refreshConnections();
+      startNotificationStream();
+    }
   });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       stopCameraStream();
+      abortNotificationStream();
     } else {
       cameraRetryDelay = 500;
       refreshConnections();
+      startNotificationStream();
     }
   });
   await refreshConnections();
+  refreshGreeting();
   refreshArtifacts();
   refreshAgentActivity();
-  refreshNotifications();
+  startNotificationStream();
   window.setInterval(refreshConnections, 15000);
   window.setInterval(refreshAgentActivity, 5000);
-  window.setInterval(refreshNotifications, 5000);
+  window.setInterval(updateMessageTimes, 60000);
   updateCameraClock();
   window.setInterval(updateCameraClock, 1000);
 }

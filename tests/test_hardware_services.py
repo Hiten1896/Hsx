@@ -103,11 +103,13 @@ def test_mjpeg_api_streams_without_an_agent_job(monkeypatch):
 
 def test_motion_monitor_writes_headless_config_and_bounds_snapshots(tmp_path):
     snapshot_dir = tmp_path / "snapshots"
+    published_events = []
     monitor = MotionMonitor(
         snapshot_dir=snapshot_dir,
         events_path=tmp_path / "motion_events.json",
         config_path=tmp_path / "motion.conf",
         max_snapshots=10,
+        on_event=published_events.append,
     )
     monitor._write_config()
     config = (tmp_path / "motion.conf").read_text(encoding="utf-8")
@@ -125,6 +127,7 @@ def test_motion_monitor_writes_headless_config_and_bounds_snapshots(tmp_path):
     assert len(list(snapshot_dir.glob("*.jpg"))) == 10
     assert len(events) == 10
     assert events[0]["event"] == "motion_snapshot"
+    assert published_events == events
 
 
 def test_vision_capture_requires_opt_in_and_atomically_writes_jpeg(tmp_path, monkeypatch):

@@ -49,8 +49,12 @@ controls, responsive sizing, and reduced-motion behavior are part of the design.
 - The empty chat centers a local-time greeting and composer; after the first turn the
   composer animates to the bottom below the scrollable transcript. User messages use
   a subtle right-aligned bubble while assistant replies remain unboxed and unlabeled.
+- The welcome greeting is requested from a configured cloud provider with the browser's
+  local time-of-day context. If no cloud provider is available, the local-time greeting
+  remains in place and chat startup is not blocked.
 - The file picker accepts any file type up to 1 MB. Uploads go through `/api/upload`
-  and preserve file bytes inside the Hsx workspace.
+  and preserve file bytes inside the Hsx workspace. Uploads live under
+  `Hsx Work/Uploads` and are excluded from generated artifacts.
 - Uploaded file paths are included with the prompt so workspace tools can read the
   uploaded files. Draft text and attachment references are scoped to the current
   browser tab.
@@ -58,7 +62,8 @@ controls, responsive sizing, and reduced-motion behavior are part of the design.
   text to the draft for review and never submits it automatically; unsupported
   browsers do not show a nonfunctional microphone control.
 - Assistant output is sanitized before Markdown display. Copy uses the Clipboard API;
-  feedback controls call the existing feedback endpoint.
+  assistant actions include browser read-aloud, job feedback, and retry. User actions
+  copy or place the original prompt back into the composer for editing.
 - Stop uses the existing server stop endpoint. A new chat creates a new session ID;
   it does not claim to provide a server-side conversation-history browser.
 
@@ -90,9 +95,11 @@ internet reachability test.
 Browser chat requests explicitly target `local_host`, so tools execute on the Hsx
 server. Remote callers must first pass the existing Tailscale bearer or mesh
 authorization; action policy and approval gates are still enforced server-side. The
-desktop/mobile notification bell reads the persisted in-app notification feed,
-displays unread items, and opens related pending approval or task cards without
-exposing raw event payloads.
+desktop/mobile notification bell reads the persisted in-app feed over authenticated,
+reconnecting SSE and opens related approval or task cards without exposing raw event
+payloads. Sources are real task, approval, camera-motion, anomaly, and resource events.
+Camera motion is opt-in; the resource monitor can be disabled with
+`HSX_ENABLE_SYSTEM_MONITOR=0`.
 
 ## Approval and prompts
 

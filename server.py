@@ -8,6 +8,7 @@ import mimetypes
 import os
 import queue
 import re
+import shutil
 import threading
 import time
 import copy
@@ -25,10 +26,12 @@ from agent.ask_user import ApprovalRequest, AskUserJobs, AskUserRequest
 from agent.jobs import JobQueue
 from agent.approval import ApprovalGuard
 from agent.devices import DeviceRegistry, system_body_state
-from agent.hardware import AUDIO_ALERTS, CAMERA
+from agent.hardware import AUDIO_ALERTS, CAMERA, MOTION_MONITOR
 from agent.hardware.camera import MAX_FRAME_AGE_SECONDS
-from agent.llm_client import PROVIDER_BANDIT, record_provider_feedback
+from agent.llm.router import default_router
+from agent.llm_client import PROVIDER_BANDIT, call_llm, record_provider_feedback
 from agent.llm.providers import GroqProvider, ProviderError
+from agent.ml.anomaly import ANOMALY_MONITOR, SystemMetrics
 from agent.ml.forecaster import FORECASTER, classify_job
 from agent.ml.dataset_exporter import SFT_DATASET
 from agent.ml.intent_learning import UNCERTAIN_INTENTS
@@ -43,7 +46,7 @@ from agent.router import INTENT_ROUTER, LLM_TELEMETRY, ROUTER_LOGGER
 from agent.self_improvement import SelfImprovement
 from agent.skill_loader import load_skills, set_runtime_registry
 from agent.tools.dynamic_registry import DYNAMIC_TOOLS, register_meta_tool
-from agent.workspace import Workspace, task_output_path, task_output_scope, workspace_search
+from agent.workspace import Workspace, task_output_scope, workspace_search
 from config import (
     ALLOWED_ORIGINS,
     DATA_DIR,
@@ -101,6 +104,8 @@ IMPROVEMENTS = SelfImprovement(
 DEVICES = DeviceRegistry(approval_guard=APPROVAL_GUARD)
 WORKSPACE = Workspace(WORKSPACE_DIR, WORK_DIR)
 NOTIFIER = Notifier(DATA_DIR / "notifications.db")
+_RESOURCE_ALERT_LOCK = threading.Lock()
+_RESOURCE_ALERT_STATE = {"cpu": False, "memory": False, "disk": False}
 MESH_GATEWAY = MeshGateway.from_environment()
 TAILSCALE_NETWORKS = (
     ipaddress.ip_network("100.64.0.0/10"),
@@ -197,6 +202,91 @@ def _record_job_telemetry(
             )
     except (OSError, RuntimeError, TypeError, ValueError):
         LOGGER.exception("Could not persist local ML task telemetry for job %s.", job["id"])
+
+
+def _notify_motion_event(event: dict) -> None:
+    snapshot = str(event.get("snapshot", "")).strip()
+    if snapshot:
+        NOTIFIER.notify(
+            "camera_motion",
+            "Motion detected by the Hsx host camera",
+            dedupe_key=f"camera-motion:{snapshot}",
+        )
+
+
+def _notify_resource_alerts(metrics: SystemMetrics) -> None:
+    disk = shutil.disk_usage(DATA_DIR)
+    values = {
+        "cpu": (metrics.cpu_percent >= 95, "CPU use is unusually high on the Hsx host"),
+        "memory": (metrics.ram_percent >= 90, "Memory use is unusually high on the Hsx host"),
+        "disk": (
+            disk.used / max(1, disk.total) >= 0.85,
+            "Hsx host storage is at least 85% full",
+        ),
+    }
+    new_alerts = []
+    with _RESOURCE_ALERT_LOCK:
+        for resource, (is_high, title) in values.items():
+            if is_high and not _RESOURCE_ALERT_STATE[resource]:
+                new_alerts.append((resource, title))
+            _RESOURCE_ALERT_STATE[resource] = is_high
+    for resource, title in new_alerts:
+        NOTIFIER.notify("health_alert", title, dedupe_key=f"resource:{resource}:{time.time_ns()}")
+
+
+def _notify_system_anomaly(_event: dict) -> None:
+    NOTIFIER.notify(
+        "health_alert",
+        "Unusual system behavior detected on the Hsx host",
+        dedupe_key=f"system-anomaly:{int(time.time() // 300)}",
+    )
+
+
+def _generate_greeting(time_of_day: str) -> str:
+    if time_of_day not in {"morning", "afternoon", "evening"}:
+        raise ValueError("A valid local time of day is required.")
+    router = default_router()
+    providers = getattr(router, "providers", [])
+    cloud_providers = [provider for provider in providers if provider.name.lower() != "ollama"]
+    if not cloud_providers:
+        raise RuntimeError("No cloud provider is configured.")
+    provider = PROVIDER_BANDIT.rank(cloud_providers, prefer_cloud=True)[0]
+    original_providers = list(providers)
+    try:
+        response = call_llm(
+            [{
+                "role": "user",
+                "content": (
+                    "Write one warm, concise welcome greeting for a returning user of a private "
+                    f"assistant. It is local {time_of_day}. Use a natural time-appropriate greeting, "
+                    "address them as Sir, and do not mention models, providers, or system details."
+                ),
+            }],
+            [],
+            target_device="local_host",
+            prefer_cloud=True,
+            disable_panel=True,
+            required_provider=provider.name,
+        )
+    finally:
+        router.providers = original_providers
+    text = " ".join(
+        " ".join(str(getattr(block, "text", "")).split())
+        for block in response.content
+        if getattr(block, "type", "") == "text"
+    )
+    if not text:
+        raise RuntimeError("The cloud provider returned an empty greeting.")
+    return text[:180]
+
+
+def _is_user_upload_path(raw_path: str) -> bool:
+    parts = Path(raw_path).parts
+    return any(
+        part.casefold() == "uploads"
+        or re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{4} uploads(?: \(\d+\))?", part.casefold())
+        for part in parts
+    )
 
 
 def _fail_job(
@@ -406,12 +496,24 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
             job_id,
             next_approval.approval_request["risk"],
         )
+        NOTIFIER.notify("needs_approval", "Hsx needs approval", job_id=job_id)
         return
     except AskUserRequest as question:
         updated = ASK_JOBS.pause(job_id, question)
         SESSION_HISTORIES[job["session_id"]] = question.checkpoint
         ASK_JOBS.save_device_actions(job_id, device_actions)
         _emit_chat_event(job_id, "job", _ask_job_payload(updated))
+        if updated["state"] == "waiting_for_user":
+            POLICY.audit_event("needs_input", job["session_id"], job_id, "waiting_for_user")
+            NOTIFIER.notify(
+                "needs_input",
+                "Hsx needs your input",
+                job_id=job_id,
+                dedupe_key=f"{job_id}:question:{updated['question_count']}",
+            )
+        else:
+            POLICY.audit_event("question_limit", job["session_id"], job_id, "cancelled")
+            NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
         return
     except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
         SESSION_HISTORIES[job["session_id"]] = resume_history
@@ -612,6 +714,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
         origin = self.headers.get("Origin")
         if origin in ALLOWED_ORIGINS:
             self.send_header("Access-Control-Allow-Origin", origin)
@@ -812,6 +915,7 @@ class HsxHandler(BaseHTTPRequestHandler):
             files = [
                 {"name": item["name"], "path": item["path"], "type": item["type"]}
                 for item in workspace_search(WORKSPACE, directory=WORK_DIR.relative_to(WORKSPACE_DIR), limit=200)
+                if not _is_user_upload_path(item["path"])
             ]
             self._json({"files": files})
         elif self.path == "/api/video/jobs":
@@ -848,7 +952,20 @@ class HsxHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/mesh/tasks":
             path = "/api/chat/stream"
-        if path == "/api/feedback":
+        if path == "/api/greeting":
+            payload = self._body()
+            time_of_day = str(payload.get("time_of_day", "")).strip().lower()
+            try:
+                greeting = _generate_greeting(time_of_day)
+            except ValueError as error:
+                self._json({"error": str(error)}, 400)
+                return
+            except (RuntimeError, OSError, TypeError):
+                LOGGER.warning("Could not generate the greeting with a cloud provider.")
+                self._json({"error": "A cloud-generated greeting is temporarily unavailable."}, 503)
+                return
+            self._json({"greeting": greeting})
+        elif path == "/api/feedback":
             payload = self._body()
             job_id = str(payload.get("job_id", "")).strip()
             feedback = str(payload.get("feedback", "")).strip().lower()
@@ -1227,7 +1344,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                 self._json({"error": "A file is required."}, 400)
                 return
             try:
-                destination = task_output_path(WORKSPACE, filename, "Uploads")
+                destination = WORKSPACE.unique_write_path(Path("Uploads") / filename)
                 with destination.open("xb") as uploaded_file:
                     uploaded_file.write(content)
             except (OSError, ValueError) as error:
@@ -1428,5 +1545,12 @@ if __name__ == "__main__":
             GroqProvider(GROQ_API_KEY, GROQ_MODEL)
         except ProviderError as error:
             LOGGER.warning("Could not validate the Groq model at startup: %s", error)
+    if os.getenv("HSX_ENABLE_SYSTEM_MONITOR", "1").strip().lower() not in {"0", "false", "off", "no"}:
+        ANOMALY_MONITOR.on_sample = _notify_resource_alerts
+        ANOMALY_MONITOR.on_anomaly = _notify_system_anomaly
+        ANOMALY_MONITOR.start()
+    if MOTION_MONITOR.enabled():
+        MOTION_MONITOR.on_event = _notify_motion_event
+        MOTION_MONITOR.start()
     print(f"Hsx ready. Loaded {len(TOOLS)} skills: {', '.join(tool['name'] for tool in TOOLS)}")
     ThreadingHTTPServer((HOST, PORT), HsxHandler).serve_forever()

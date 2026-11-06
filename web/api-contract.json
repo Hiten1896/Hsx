@@ -1,6 +1,7 @@
 {
   "endpoints": {
     "health": "/health",
+    "greeting": "/api/greeting",
     "chat_stream": "/api/chat/stream",
     "camera_stream": "/api/camera/stream",
     "camera_status": "/api/camera/status",
@@ -13,6 +14,7 @@
     "activity": "/api/activity",
     "notifications": "/api/notifications",
     "notifications_read": "/api/notifications/read",
+    "notifications_stream": "/api/notifications/stream",
     "stop": "/api/stop"
   },
   "stream_events": ["job", "text_delta", "done", "error"]

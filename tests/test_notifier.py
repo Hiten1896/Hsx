@@ -31,6 +31,20 @@ def test_notification_routes_deduplicate_and_store_titles_only(tmp_path: Path):
     assert "report.pdf" not in json.dumps(sent[0][1]).lower()
 
 
+def test_camera_motion_events_are_persisted_for_the_live_web_center(tmp_path: Path):
+    notifier = Notifier(tmp_path / "notifications.db", routes={"camera_motion": ["inapp"]})
+    notification = notifier.notify(
+        "camera_motion",
+        "Motion detected by the Hsx host camera",
+        dedupe_key="camera-motion:snapshot.jpg",
+    )
+    rows, unread = notifier.list_notifications()
+
+    assert notification["sent"] == ["inapp"]
+    assert rows[0]["event"] == "camera_motion"
+    assert unread == 1
+
+
 def test_quiet_hours_keep_inapp_but_suppress_external_delivery(tmp_path: Path):
     sent = []
     notifier = Notifier(

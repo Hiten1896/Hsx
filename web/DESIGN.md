@@ -11,6 +11,10 @@ for shared design and server contracts.
   first turn the composer transitions to the bottom beneath a scrollable transcript.
   User messages are right-aligned soft bubbles, while assistant replies are unboxed
   and have no speaker label.
+- The greeting is generated through a configured cloud provider using the browser's
+  local time-of-day; a local-time greeting is retained when cloud generation is
+  unavailable. Assistant messages have copy, browser read-aloud, feedback, retry, and
+  relative-time controls. User messages have edit and copy controls.
 - Right rail on desktop: the Hsx host camera feed and its availability state.
 - Mobile: focused chat and sticky composer, a navigation drawer with live connection
   states, and a camera drawer with host feed, timing information, and generated
@@ -25,12 +29,16 @@ for shared design and server contracts.
   local-host execution requires the existing authenticated access path; dangerous
   actions still pause for approval in the page.
 - The notification bell is available on desktop and mobile. It reads Hsx's persisted
-  in-app notifications, shows unread counts, and opens approval/job notifications in
-  the page.
+  in-app notifications over authenticated, reconnecting SSE, shows unread counts, and
+  opens approval/job notifications in the page. It also reports real task, approval,
+  camera-motion, anomaly, and resource-threshold events. Camera motion notifications
+  require the opt-in Motion monitor; host resource alerts can be disabled with
+  `HSX_ENABLE_SYSTEM_MONITOR=0`.
 
 Only features backed by the current API are shown. Any file type up to 1 MB can be
 attached. Uploads preserve bytes through `/api/upload`; the resulting workspace paths
-are included in the chat request. The microphone is shown only in secure browsers that
+are included in the chat request and are excluded from generated artifacts. The
+microphone is shown only in secure browsers that
 support speech recognition, and recognized text remains in the draft until the user
 sends it. The options menu opens the file picker or host camera panel.
 

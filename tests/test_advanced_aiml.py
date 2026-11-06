@@ -162,6 +162,26 @@ def test_swarm_coder_critic_and_local_static_checks():
             lambda prompt: '{"approved": true, "tests_reviewed": true}',
         )
 
+    safe_os_proposal = "```python\nimport os.path\nname = os.path.basename('/tmp/report.txt')\n```"
+    assert review_proposal(
+        "Format a path",
+        "Use path helpers",
+        safe_os_proposal,
+        lambda prompt: '{"approved": true, "tests_reviewed": true, "rationale": "Safe path helper."}',
+    )["approved"]
+
+    for source in (
+        "import os\nos.system('id')",
+        "from os import getenv\nvalue = getenv('TOKEN')",
+    ):
+        with pytest.raises(ValueError, match="restricted system or filesystem operation"):
+            review_proposal(
+                "Inspect files",
+                "Use safe path helpers",
+                f"```python\n{source}\n```",
+                lambda prompt: '{"approved": true, "tests_reviewed": true}',
+            )
+
     with pytest.raises(ValueError, match="did not approve"):
         review_proposal(
             "Change files",

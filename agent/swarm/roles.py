@@ -8,11 +8,15 @@ from collections.abc import Callable
 MAX_PROPOSAL_CHARS = 12_000
 PYTHON_BLOCK = re.compile(r"```python\s*(.*?)```", re.IGNORECASE | re.DOTALL)
 UNFENCED_CODE = re.compile(r"(?m)^\s*\+?\s*(?:import\s|from\s+\S+\s+import\s|def\s+\w+\s*\(|class\s+\w+)")
-FORBIDDEN_IMPORTS = {"subprocess", "socket", "ctypes", "os", "sys"}
+FORBIDDEN_IMPORTS = {"subprocess", "socket", "ctypes", "sys"}
 FORBIDDEN_CALLS = {"eval", "exec", "compile", "__import__", "open", "input", "getattr"}
 FORBIDDEN_ATTRIBUTES = {
     "unlink", "rmdir", "write_text", "write_bytes", "rename", "replace",
-    "chmod", "chown", "system", "popen", "run", "Popen",
+    "chmod", "chown", "system", "popen", "run", "Popen", "remove",
+    "getenv", "putenv", "unsetenv", "environ", "execv", "execve",
+    "execl", "execle", "execlp", "execlpe", "execvp", "execvpe", "fork",
+    "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve",
+    "spawnvp", "spawnvpe", "startfile",
 }
 
 
@@ -42,6 +46,17 @@ def _validate_python_blocks(proposal: str) -> None:
             tree = ast.parse(source, mode="exec")
         except SyntaxError as error:
             raise ValueError(f"Coder proposal contains invalid Python: {error.msg}") from error
+        forbidden_os_names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "os":
+                forbidden_os_names.update(
+                    name
+                    for alias in node.names
+                    for name in (alias.name, alias.asname or alias.name)
+                )
+        if forbidden_os_names & FORBIDDEN_ATTRIBUTES:
+            raise ValueError("Coder proposal uses a restricted system or filesystem operation.")
+
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 if any(alias.name.split(".", 1)[0] in FORBIDDEN_IMPORTS for alias in node.names):

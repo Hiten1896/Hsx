@@ -10,6 +10,7 @@ import subprocess
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
+from collections.abc import Callable
 
 from agent.ml.storage import atomic_write_json
 from config import DATA_DIR
@@ -35,6 +36,7 @@ class MotionMonitor:
         poll_seconds: float = 3.0,
         restart_seconds: float = 10.0,
         max_snapshots: int = 500,
+        on_event: Callable[[dict], None] | None = None,
     ):
         self.device = device or os.getenv("HSX_CAMERA_DEVICE", "/dev/video0")
         self.snapshot_dir = snapshot_dir or DATA_DIR / "snapshots" / "motion"
@@ -43,6 +45,7 @@ class MotionMonitor:
         self.poll_seconds = poll_seconds
         self.restart_seconds = restart_seconds
         self.max_snapshots = max_snapshots
+        self.on_event = on_event
         if not re.fullmatch(r"/dev/video\d+", self.device):
             raise ValueError("Motion camera device must be a /dev/videoN path.")
         self._stop = threading.Event()
@@ -170,16 +173,19 @@ class MotionMonitor:
         if not isinstance(existing, list):
             LOGGER.error("Motion event log has an invalid JSON shape; refusing to overwrite it.")
             return
+        new_events = []
         for path in new_paths:
             try:
                 timestamp = datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat()
             except OSError:
                 continue
-            existing.append({
+            event = {
                 "timestamp": timestamp,
                 "event": "motion_snapshot",
                 "snapshot": path.name,
-            })
+            }
+            existing.append(event)
+            new_events.append(event)
             try:
                 os.chmod(path, 0o600)
             except OSError:
@@ -190,6 +196,13 @@ class MotionMonitor:
             os.chmod(self.events_path, 0o600)
         except (OSError, TypeError, ValueError):
             LOGGER.exception("Could not persist Motion snapshot events.")
+            return
+        if self.on_event is not None:
+            for event in new_events:
+                try:
+                    self.on_event(event)
+                except Exception:
+                    LOGGER.exception("Could not publish Motion event %s.", event["snapshot"])
 
     def _supervise(self) -> None:
         binary = shutil.which("motion")
