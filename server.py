@@ -706,10 +706,10 @@ class HsxHandler(BaseHTTPRequestHandler):
     def _security_headers(self) -> None:
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; base-uri 'self'; connect-src 'self'; "
+            "default-src 'self'; base-uri 'self'; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com; "
             "font-src 'self' data:; form-action 'self'; "
             "img-src 'self' data: blob:; media-src 'self' blob:; "
-            "object-src 'none'; script-src 'self' https://cdn.jsdelivr.net; "
+            "object-src 'none'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; "
             "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
         )
         self.send_header("X-Content-Type-Options", "nosniff")

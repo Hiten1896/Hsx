@@ -30,6 +30,18 @@ let cameraEnabled = false;
 let cameraClockOffsetMs = 0;
 let cameraStreamStartedAt = 0;
 let cameraAutoOffTimer = null;
+let cameraVisionWorker = null;
+let cameraVisionObserver = null;
+let cameraVisionFrameId = 0;
+let cameraVisionLastFrameAt = 0;
+let cameraVisionLastDrawAt = 0;
+let cameraVisionLastTimestamp = 0;
+let cameraVisionInFlight = false;
+let cameraVisionReady = false;
+let cameraVisionFailed = false;
+let cameraVisionGeneration = 0;
+let cameraVisionDetections = [];
+let cameraVisionSourceSize = { width: 0, height: 0 };
 let conversationSaveTimer = null;
 let restoringConversation = false;
 
@@ -48,6 +60,7 @@ const elements = {
   connection: document.getElementById('connection-label'),
   camera: document.getElementById('live-camera'),
   cameraView: document.getElementById('camera-view'),
+  cameraAiCanvas: document.getElementById('camera_ai_canvas'),
   cameraStatus: document.getElementById('camera-status'),
   cameraPlaceholder: document.getElementById('camera-placeholder'),
   cameraBadge: document.getElementById('camera-badge'),
@@ -1206,6 +1219,7 @@ function setCameraStatus(connected, message) {
 
 function stopCameraAndStandby() {
   cameraEnabled = false;
+  stopCameraVision(true);
   window.clearTimeout(cameraAutoOffTimer);
   cameraAutoOffTimer = null;
   if (apiContract) void apiFetch(apiContract.endpoints.camera_stop, { method: 'POST' });
@@ -1267,6 +1281,7 @@ function toggleCamera() {
     return;
   }
   cameraEnabled = true;
+  startCameraVision();
   window.clearTimeout(cameraAutoOffTimer);
   cameraAutoOffTimer = window.setTimeout(stopCameraAndStandby, 5 * 60 * 1000);
   setCameraStatus(false, 'Connecting to the host camera…');
@@ -1351,6 +1366,185 @@ function showCameraFrame(frame) {
   document.getElementById('camera-clip-time').hidden = false;
   setCameraLatency(frame.capturedAt);
   setCameraStatus(true, 'Live from the Hsx host');
+  startCameraVision();
+}
+
+function isCameraVisionVisible() {
+  if (!cameraEnabled || document.hidden || !cameraHasFrame || elements.camera.hidden) return false;
+  const rect = elements.cameraView.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0
+    && rect.bottom > 0 && rect.right > 0
+    && rect.top < window.innerHeight && rect.left < window.innerWidth;
+}
+
+function clearCameraVisionCanvas() {
+  const canvas = elements.cameraAiCanvas;
+  const context = canvas.getContext('2d');
+  if (context) context.clearRect(0, 0, canvas.width, canvas.height);
+  canvas.hidden = true;
+  cameraVisionDetections = [];
+}
+
+function stopCameraVision(shutdown = false) {
+  if (cameraVisionFrameId) cancelAnimationFrame(cameraVisionFrameId);
+  cameraVisionFrameId = 0;
+  clearCameraVisionCanvas();
+  if (shutdown) {
+    cameraVisionGeneration += 1;
+    cameraVisionInFlight = false;
+    cameraVisionReady = false;
+    cameraVisionFailed = false;
+    if (cameraVisionWorker) {
+      cameraVisionWorker.postMessage({ type: 'stop' });
+      cameraVisionWorker.terminate();
+      cameraVisionWorker = null;
+    }
+  }
+}
+
+function ensureCameraVisionWorker() {
+  if (cameraVisionWorker || cameraVisionFailed || !('Worker' in window) || !('createImageBitmap' in window)) return;
+  const generation = cameraVisionGeneration;
+  try {
+    cameraVisionWorker = new Worker('/web/camera-vision-worker.js', { type: 'module', name: 'hsx-camera-vision' });
+    cameraVisionWorker.onmessage = (event) => {
+      if (!cameraEnabled || generation !== cameraVisionGeneration) return;
+      const data = event.data || {};
+      if (data.type === 'ready') {
+        cameraVisionReady = true;
+        if (!cameraVisionFrameId) cameraVisionFrameId = requestAnimationFrame(drawCameraVision);
+      } else if (data.type === 'detections') {
+        cameraVisionSourceSize = { width: data.width, height: data.height };
+        const previous = cameraVisionDetections;
+        cameraVisionDetections = Array.isArray(data.detections) ? data.detections.map((detection, index) => {
+          const prior = previous.find((item, priorIndex) => item.label === detection.label && priorIndex === index);
+          if (!prior) return detection;
+          const blend = (oldValue, newValue) => oldValue * 0.35 + newValue * 0.65;
+          return {
+            ...detection,
+            x: blend(prior.x, detection.x),
+            y: blend(prior.y, detection.y),
+            width: blend(prior.width, detection.width),
+            height: blend(prior.height, detection.height),
+          };
+        }) : [];
+        cameraVisionInFlight = false;
+      } else if (data.type === 'error') {
+        cameraVisionInFlight = false;
+        cameraVisionReady = false;
+        cameraVisionFailed = true;
+        clearCameraVisionCanvas();
+        console.warn(data.message || 'Camera detection is unavailable.');
+      }
+    };
+    cameraVisionWorker.onerror = () => {
+      cameraVisionReady = false;
+      cameraVisionInFlight = false;
+      cameraVisionFailed = true;
+      clearCameraVisionCanvas();
+      cameraVisionWorker?.terminate();
+      cameraVisionWorker = null;
+    };
+    cameraVisionWorker.postMessage({ type: 'init' });
+  } catch (error) {
+    console.warn('Camera detection worker could not start.', error);
+  }
+}
+
+async function sendCameraVisionFrame(timestamp) {
+  if (!cameraVisionWorker || !cameraVisionReady || cameraVisionInFlight || !isCameraVisionVisible()) return;
+  if (timestamp - cameraVisionLastFrameAt < 500 || !elements.camera.complete || !elements.camera.naturalWidth) return;
+  cameraVisionLastFrameAt = timestamp;
+  cameraVisionInFlight = true;
+  const generation = cameraVisionGeneration;
+  try {
+    const scale = Math.min(1, 640 / elements.camera.naturalWidth, 360 / elements.camera.naturalHeight);
+    const bitmap = await createImageBitmap(elements.camera, {
+      resizeWidth: Math.max(1, Math.round(elements.camera.naturalWidth * scale)),
+      resizeHeight: Math.max(1, Math.round(elements.camera.naturalHeight * scale)),
+      resizeQuality: 'low',
+    });
+    if (generation !== cameraVisionGeneration || !isCameraVisionVisible() || !cameraVisionWorker) {
+      bitmap.close();
+      cameraVisionInFlight = false;
+      return;
+    }
+    const nextTimestamp = Math.max(Math.round(performance.now()), cameraVisionLastTimestamp + 1);
+    cameraVisionLastTimestamp = nextTimestamp;
+    cameraVisionWorker.postMessage({ type: 'frame', bitmap, timestamp: nextTimestamp }, [bitmap]);
+  } catch {
+    cameraVisionInFlight = false;
+  }
+}
+
+function drawCameraVision() {
+  cameraVisionFrameId = 0;
+  if (cameraVisionFailed) {
+    clearCameraVisionCanvas();
+    return;
+  }
+  if (!isCameraVisionVisible()) {
+    stopCameraVision(false);
+    return;
+  }
+  const now = performance.now();
+  if (now - cameraVisionLastDrawAt < 33) {
+    cameraVisionFrameId = requestAnimationFrame(drawCameraVision);
+    return;
+  }
+  cameraVisionLastDrawAt = now;
+  if (!cameraVisionWorker) ensureCameraVisionWorker();
+  if (cameraVisionReady) {
+    const canvas = elements.cameraAiCanvas;
+    const rect = elements.cameraView.getBoundingClientRect();
+    const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+    const width = Math.max(1, Math.round(rect.width * ratio));
+    const height = Math.max(1, Math.round(rect.height * ratio));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    canvas.hidden = false;
+    const context = canvas.getContext('2d');
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.clearRect(0, 0, rect.width, rect.height);
+    const source = cameraVisionSourceSize;
+    if (source.width && source.height) {
+      const scale = Math.max(rect.width / source.width, rect.height / source.height);
+      const offsetX = (rect.width - source.width * scale) / 2;
+      const offsetY = (rect.height - source.height * scale) / 2;
+      context.lineWidth = 2;
+      context.font = '600 11px system-ui, sans-serif';
+      for (const detection of cameraVisionDetections) {
+        const x = detection.x * scale + offsetX;
+        const y = detection.y * scale + offsetY;
+        const boxWidth = detection.width * scale;
+        const boxHeight = detection.height * scale;
+        const color = detection.label === 'face' ? '#a9dcff' : '#a8e6ad';
+        context.strokeStyle = color;
+        context.fillStyle = color;
+        context.strokeRect(x, y, boxWidth, boxHeight);
+        const label = `${detection.label} ${Math.round(detection.score * 100)}%`;
+        const labelWidth = context.measureText(label).width + 12;
+        const labelY = Math.max(0, y - 21);
+        context.fillRect(x, labelY, labelWidth, 19);
+        context.fillStyle = '#101713';
+        context.fillText(label, x + 6, labelY + 13);
+      }
+    }
+  }
+  void sendCameraVisionFrame(now);
+  cameraVisionFrameId = requestAnimationFrame(drawCameraVision);
+}
+
+function startCameraVision() {
+  if (!cameraEnabled || cameraVisionFailed || !isCameraVisionVisible()) return;
+  ensureCameraVisionWorker();
+  if (!cameraVisionFrameId) cameraVisionFrameId = requestAnimationFrame(drawCameraVision);
+}
+
+function pauseCameraVision() {
+  stopCameraVision(false);
 }
 
 function setCameraReconnecting(message) {
@@ -2286,6 +2480,7 @@ async function initialize() {
     if (document.hidden) {
       if (cameraEnabled) stopCameraAndStandby();
       else stopCameraStream();
+      pauseCameraVision();
       abortNotificationStream();
     } else {
       cameraRetryDelay = 500;
@@ -2293,6 +2488,14 @@ async function initialize() {
       startNotificationStream();
     }
   });
+  if ('IntersectionObserver' in window) {
+    cameraVisionObserver = new IntersectionObserver((entries) => {
+      const entry = entries[entries.length - 1];
+      if (entry?.isIntersecting) startCameraVision();
+      else pauseCameraVision();
+    });
+    cameraVisionObserver.observe(elements.cameraView);
+  }
   await refreshConnections();
   refreshFeedbackSettings();
   refreshArtifacts();

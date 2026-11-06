@@ -278,6 +278,7 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 .camera-view:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: -3px; }
 .camera-view:hover .camera-placeholder-icon { border-color: #59695b; color: var(--accent); }
 .camera-frame { display: block; width: 100%; height: 100%; object-fit: cover; background: #0c100e; }
+.camera-ai-canvas { position: absolute; z-index: 2; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .camera-clip-time { position: absolute; bottom: 10px; left: 10px; padding: 5px 8px; border: 1px solid #ffffff24; border-radius: 6px; color: #f3f5f2; background: #080b09c9; font: 10px var(--font-code); }
 .camera-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 6px 12px; border-top: 1px solid #313a33; }
 .camera-metrics > div { display: grid; gap: 2px; min-width: 0; }
