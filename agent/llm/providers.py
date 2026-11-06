@@ -282,12 +282,14 @@ def _validate_gemini_payload(payload: dict[str, Any]) -> None:
             part_path = f"{path}.parts[{part_index}]"
             if not isinstance(part, dict):
                 raise _shape_error(provider, part_path, "part", "must contain exactly one native part")
-            unknown = set(part) - {"text", "functionCall", "functionResponse", "inlineData"}
+            unknown = set(part) - {"text", "functionCall", "functionResponse", "inlineData", "thoughtSignature"}
             if unknown:
                 raise _shape_error(provider, part_path, sorted(unknown)[0])
-            if len(part) != 1:
+            if len(set(part) - {"thoughtSignature"}) != 1:
                 raise _shape_error(provider, part_path, "part", "must contain exactly one native part")
-            kind = next(iter(part))
+            if "thoughtSignature" in part and not isinstance(part["thoughtSignature"], str):
+                raise _shape_error(provider, part_path, "thoughtSignature", "must be an opaque string")
+            kind = next(key for key in part if key != "thoughtSignature")
             if kind == "text":
                 if not isinstance(part["text"], str):
                     raise _shape_error(provider, part_path, "text", "must be a string")
@@ -316,7 +318,7 @@ def _validate_gemini_payload(payload: dict[str, Any]) -> None:
                 function = part[kind]
                 if not isinstance(function, dict):
                     raise _shape_error(provider, part_path, kind, "must be an object")
-                _require_keys(provider, function, f"{part_path}.functionCall", {"name", "args"}, {"name", "args"})
+                _require_keys(provider, function, f"{part_path}.functionCall", {"name", "args"}, {"name", "args", "id"})
                 if (
                     not isinstance(function["name"], str)
                     or not _GEMINI_FUNCTION_NAME.fullmatch(function["name"])
@@ -327,7 +329,7 @@ def _validate_gemini_payload(payload: dict[str, Any]) -> None:
                 function = part[kind]
                 if not isinstance(function, dict):
                     raise _shape_error(provider, part_path, kind, "must be an object")
-                _require_keys(provider, function, f"{part_path}.functionResponse", {"name", "response"}, {"name", "response"})
+                _require_keys(provider, function, f"{part_path}.functionResponse", {"name", "response"}, {"name", "response", "id"})
                 if (
                     not isinstance(function["name"], str)
                     or not _GEMINI_FUNCTION_NAME.fullmatch(function["name"])
@@ -644,6 +646,20 @@ def _append_gemini_content(contents: list[dict[str, Any]], role: str, parts: lis
 def to_gemini_payload(request: LLMRequest) -> dict[str, Any]:
     messages = to_plain_data(request.messages)
     tool_names: dict[str, str] = {}
+    tool_request_ids: dict[str, str | None] = {}
+    legacy_calls: dict[str, str] = {}
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        raw = message.get("content", "")
+        tool_blocks = [
+            block for block in raw if isinstance(block, dict) and block.get("type") == "tool_use"
+        ] if isinstance(raw, list) else []
+        if tool_blocks and not any(
+            (block.get("provider_meta") or {}).get("gemini_thought_signature") for block in tool_blocks
+        ):
+            for block in tool_blocks:
+                legacy_calls[str(block.get("id", ""))] = str(block.get("name", "unknown_function"))
     contents = []
     system_text = [_gemini_text(request.system)] if request.system else []
     for message in messages:
@@ -674,7 +690,11 @@ def to_gemini_payload(request: LLMRequest) -> dict[str, Any]:
                 continue
             block_type = block.get("type")
             if block_type == "text":
-                parts.append({"text": _gemini_text(block.get("text", ""))})
+                part = {"text": _gemini_text(block.get("text", ""))}
+                signature = (block.get("provider_meta") or {}).get("gemini_thought_signature")
+                if isinstance(signature, str) and signature:
+                    part["thoughtSignature"] = signature
+                parts.append(part)
             elif block_type == "image":
                 mime_type = block.get("mime_type", "")
                 data = block.get("data", "")
@@ -695,21 +715,39 @@ def to_gemini_payload(request: LLMRequest) -> dict[str, Any]:
                 if not isinstance(function_name, str) or not function_name:
                     function_name = "unknown_function"
                 tool_names[call_id] = function_name
+                provider_meta = block.get("provider_meta") or {}
+                request_id = provider_meta.get("gemini_function_call_id", call_id)
+                tool_request_ids[call_id] = request_id if isinstance(request_id, str) and request_id else None
+                if call_id in legacy_calls:
+                    parts.append({"text": f"Previous unsigned tool call: {function_name}."})
+                    continue
                 arguments = block.get("input", {})
-                parts.append({
-                    "functionCall": {
-                        "name": function_name,
-                        "args": arguments if isinstance(arguments, dict) else {},
-                    }
-                })
+                function_call = {
+                    "name": function_name,
+                    "args": arguments if isinstance(arguments, dict) else {},
+                }
+                request_id = tool_request_ids.get(call_id)
+                if request_id:
+                    function_call["id"] = request_id
+                part = {"functionCall": function_call}
+                signature = (block.get("provider_meta") or {}).get("gemini_thought_signature")
+                if isinstance(signature, str) and signature:
+                    part["thoughtSignature"] = signature
+                parts.append(part)
             elif block_type == "tool_result":
-                name = tool_names.get(block.get("tool_use_id", ""), block.get("name", ""))
-                parts.append({
-                    "functionResponse": {
+                call_id = block.get("tool_use_id", "")
+                name = tool_names.get(call_id, legacy_calls.get(call_id, block.get("name", "")))
+                if call_id in legacy_calls:
+                    parts.append({"text": f"Previous tool result for {name}: {_gemini_text(block.get('content', ''))}"})
+                else:
+                    response = {
                         "name": name if isinstance(name, str) and name else "unknown_function",
                         "response": _gemini_response_value(block.get("content", "")),
                     }
-                })
+                    request_id = tool_request_ids.get(call_id, call_id)
+                    if isinstance(request_id, str) and request_id:
+                        response["id"] = request_id
+                    parts.append({"functionResponse": response})
             else:
                 # Drop unknown provider-specific history blocks rather than replaying
                 # malformed data into Gemini on every subsequent turn.
@@ -853,15 +891,19 @@ class GeminiProvider(JSONHTTPProvider):
         data = self._post(to_gemini_payload(request))
         parts = data["candidates"][0]["content"].get("parts", [])
         for part in parts:
+            signature = part.get("thoughtSignature")
+            provider_meta = {"gemini_thought_signature": signature} if isinstance(signature, str) and signature else {}
             if part.get("text"):
-                yield LLMEvent(type="text_delta", text=part["text"])
+                yield LLMEvent(type="text_delta", text=part["text"], provider_meta=provider_meta)
             if part.get("functionCall"):
                 function = part["functionCall"]
+                provider_meta["gemini_function_call_id"] = function.get("id")
                 yield LLMEvent(
                     type="tool_call",
                     tool_name=function.get("name", ""),
                     tool_input=function.get("args", {}),
-                    tool_call_id=f"gemini-{function.get('name', '')}",
+                    tool_call_id=function.get("id") or f"gemini-{function.get('name', '')}",
+                    provider_meta=provider_meta,
                 )
         yield LLMEvent(type="stop", stop_reason="stop")
 

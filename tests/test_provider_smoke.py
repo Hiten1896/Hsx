@@ -166,7 +166,9 @@ class _FileConversationHandler(BaseHTTPRequestHandler):
                     "functionCall": {
                         "name": "ask_user",
                         "args": {"question": "What text should I write?"},
-                    }
+                        "id": "ask-call",
+                    },
+                    "thoughtSignature": "ask-signature",
                 }]}}]}
             else:
                 body = {"choices": [{"message": {"content": None, "tool_calls": [{
@@ -180,7 +182,9 @@ class _FileConversationHandler(BaseHTTPRequestHandler):
                     "functionCall": {
                         "name": "create_text_file",
                         "args": {"path": "note.txt", "content": "hello"},
-                    }
+                        "id": "create-call",
+                    },
+                    "thoughtSignature": "create-signature",
                 }]}}]}
             else:
                 body = {"choices": [{"message": {"content": None, "tool_calls": [{
@@ -281,9 +285,10 @@ def test_file_creation_conversation_uses_native_tool_result_roles(provider_kind,
         assert answer == "Created note.txt."
         assert created == [("note.txt", "hello")]
         assert len(handler.requests) == 3
-        json.dumps(resumed_history)
+        assert json.loads(json.dumps(resumed_history)) == resumed_history
         if provider_kind == "gemini":
             assert handler.requests[1]["contents"][2]["parts"][0]["functionResponse"]["name"] == "ask_user"
+            assert handler.requests[1]["contents"][1]["parts"][0]["thoughtSignature"] == "ask-signature"
         else:
             tool_result = next(
                 message for message in handler.requests[1]["messages"]

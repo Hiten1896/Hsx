@@ -146,6 +146,36 @@ def test_healthz_reports_clock_and_api_security_headers():
     assert headers["Cache-Control"] == "no-store"
 
 
+def test_provider_health_probes_each_provider_without_tools(monkeypatch):
+    from agent.llm.types import LLMEvent
+
+    probed = []
+
+    class FakeProvider:
+        def __init__(self, name):
+            self.name = name
+            self.model = f"{name}-model"
+
+        def generate(self, request):
+            assert request.tools == []
+            assert request.messages == [{"role": "user", "content": "Reply with OK."}]
+            probed.append(self.name)
+            yield LLMEvent(type="text_delta", text="OK")
+            yield LLMEvent(type="stop")
+
+    class FakeRouter:
+        providers = [FakeProvider("gemini"), FakeProvider("groq")]
+
+    monkeypatch.setattr(server, "default_router", lambda: FakeRouter())
+    status, _, body = _request("/healthz/providers")
+    assert status == 200
+    assert probed == ["gemini", "groq"]
+    assert json.loads(body) == {"providers": [
+        {"provider": "gemini", "model": "gemini-model", "status": "ok"},
+        {"provider": "groq", "model": "groq-model", "status": "ok"},
+    ]}
+
+
 def test_doctor_report_does_not_print_key_values(monkeypatch, capsys):
     from doctor import _key_checks, print_report
 

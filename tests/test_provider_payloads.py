@@ -52,6 +52,97 @@ def test_gemini_payload_uses_native_parts_for_text_turns():
     ])) == {
         "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
     }
+
+
+def test_gemini_replays_thought_signature_on_original_parts_and_ids():
+    payload = to_gemini_payload(LLMRequest([
+        {"role": "user", "content": "What is the CPU?"},
+        {"role": "assistant", "content": [
+            {"type": "text", "text": "Checking.", "provider_meta": {"gemini_thought_signature": "sig-text"}},
+            {"type": "tool_use", "name": "system_info", "input": {}, "id": "call-1",
+             "provider_meta": {"gemini_thought_signature": "sig-call"}},
+            {"type": "tool_use", "name": "disk_usage", "input": {}, "id": "call-2"},
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "call-1", "content": {"cpu": "Test CPU"}},
+            {"type": "tool_result", "tool_use_id": "call-2", "content": {"disk": "Test disk"}},
+        ]},
+    ]))
+
+    model_parts = payload["contents"][1]["parts"]
+    assert model_parts == [
+        {"text": "Checking.", "thoughtSignature": "sig-text"},
+        {"functionCall": {"name": "system_info", "args": {}, "id": "call-1"},
+         "thoughtSignature": "sig-call"},
+        {"functionCall": {"name": "disk_usage", "args": {}, "id": "call-2"}},
+    ]
+    assert payload["contents"][2]["parts"] == [
+        {"functionResponse": {"name": "system_info", "response": {"cpu": "Test CPU"}, "id": "call-1"}},
+        {"functionResponse": {"name": "disk_usage", "response": {"disk": "Test disk"}, "id": "call-2"}},
+    ]
+    assert_payload_valid("gemini", payload)
+
+
+def test_gemini_summarizes_legacy_unsigned_tool_turns():
+    payload = to_gemini_payload(LLMRequest([
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "name": "system_info", "input": {}, "id": "old-call"},
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "old-call", "content": {"cpu": "Old CPU"}},
+        ]},
+    ]))
+
+    assert all("functionCall" not in part and "functionResponse" not in part
+               for content in payload["contents"] for part in content["parts"])
+    assert "system_info" in json.dumps(payload)
+    assert "Old CPU" in json.dumps(payload)
+
+
+def test_gemini_captures_response_part_thought_signature():
+    from agent.llm.providers import GeminiProvider
+
+    class FakeGemini(GeminiProvider):
+        def _post(self, _payload):
+            return {"candidates": [{"content": {"parts": [
+                {"text": "Checking.", "thoughtSignature": "opaque-text"},
+                {"functionCall": {"name": "system_info", "args": {}, "id": "exact-id"},
+                 "thoughtSignature": "opaque-call"},
+            ]}}]}
+
+    events = list(FakeGemini("model", "http://localhost").generate(LLMRequest([])))
+    assert events[0].provider_meta == {"gemini_thought_signature": "opaque-text"}
+    assert events[1].provider_meta == {
+        "gemini_thought_signature": "opaque-call", "gemini_function_call_id": "exact-id"
+    }
+    assert events[1].tool_call_id == "exact-id"
+
+
+def test_provider_meta_survives_normalization_and_is_ignored_by_groq(monkeypatch):
+    from agent import llm_client
+    from agent.llm.types import LLMEvent
+
+    class CaptureRouter:
+        providers = None
+        active_provider = "gemini"
+        active_model = "test"
+
+        def generate(self, _request):
+            yield LLMEvent(
+                type="tool_call", tool_name="system_info", tool_input={}, tool_call_id="call-1",
+                provider_meta={"gemini_thought_signature": "opaque-signature"},
+            )
+            yield LLMEvent(type="stop")
+
+    monkeypatch.setattr(llm_client, "default_router", CaptureRouter)
+    response = llm_client.call_llm([], [], sensitive=True)
+    history_block = json.loads(json.dumps(response.content[0].to_dict()))
+    assert history_block["provider_meta"] == {"gemini_thought_signature": "opaque-signature"}
+
+    payload = to_openai_payload(LLMRequest([
+        {"role": "assistant", "content": [history_block]},
+    ]), "groq-model")
+    assert "thoughtSignature" not in json.dumps(payload)
     assert to_gemini_payload(LLMRequest([
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
@@ -97,12 +188,16 @@ def test_gemini_drops_invalid_history_blocks_and_normalizes_tool_args():
             {"type": "future_block", "value": "bad"}, {"type": "text", "text": "kept"},
         ]},
         {"role": "assistant", "content": [{
-            "type": "tool_use", "name": "lookup", "input": ["not", "an", "object"], "id": "call-1"
+            "type": "tool_use", "name": "lookup", "input": ["not", "an", "object"], "id": "call-1",
+            "provider_meta": {"gemini_thought_signature": "sig"},
         }]},
     ]))
     assert payload["contents"] == [
         {"role": "user", "parts": [{"text": "kept"}]},
-        {"role": "model", "parts": [{"functionCall": {"name": "lookup", "args": {}}}]},
+        {"role": "model", "parts": [{
+            "functionCall": {"name": "lookup", "args": {}, "id": "call-1"},
+            "thoughtSignature": "sig",
+        }]},
     ]
     assert_payload_valid("gemini", payload)
 
@@ -120,7 +215,8 @@ def test_gemini_payload_uses_function_call_and_response_parts():
     payload = to_gemini_payload(LLMRequest([
         {"role": "user", "content": "search"},
         {"role": "assistant", "content": [{
-            "type": "tool_use", "name": "search", "input": {"query": "cats"}, "id": "call-1"
+            "type": "tool_use", "name": "search", "input": {"query": "cats"}, "id": "call-1",
+            "provider_meta": {"gemini_thought_signature": "sig"},
         }]},
         {"role": "user", "content": [{
             "type": "tool_result",
@@ -134,12 +230,14 @@ def test_gemini_payload_uses_function_call_and_response_parts():
         "contents": [
             {"role": "user", "parts": [{"text": "search"}]},
             {"role": "model", "parts": [{
-                "functionCall": {"name": "search", "args": {"query": "cats"}}
+                "functionCall": {"name": "search", "args": {"query": "cats"}, "id": "call-1"},
+                "thoughtSignature": "sig",
             }]},
             {"role": "user", "parts": [{
                 "functionResponse": {
                     "name": "search",
                     "response": {"items": ["cat"]},
+                    "id": "call-1",
                 }
             }, {"text": "continue"}]},
         ],
@@ -174,7 +272,8 @@ def test_gemini_file_creation_conversation_uses_only_native_roles():
     history = [
         {"role": "user", "content": "Create a file called note.txt with hello."},
         {"role": "assistant", "content": [{
-            "type": "tool_use", "name": "ask_user", "input": {"question": "What text?"}, "id": "ask-1"
+            "type": "tool_use", "name": "ask_user", "input": {"question": "What text?"}, "id": "ask-1",
+            "provider_meta": {"gemini_thought_signature": "ask-signature"},
         }]},
         {"role": "user", "content": [{
             "type": "tool_result", "tool_use_id": "ask-1", "content": '{"answer": "hello"}'
@@ -183,7 +282,8 @@ def test_gemini_file_creation_conversation_uses_only_native_roles():
         {"role": "user", "content": "Actually, use hello."},
         {"role": "assistant", "content": [{
             "type": "tool_use", "name": "create_text_file",
-            "input": {"path": "note.txt", "content": "hello"}, "id": "create-1"
+            "input": {"path": "note.txt", "content": "hello"}, "id": "create-1",
+            "provider_meta": {"gemini_thought_signature": "create-signature"},
         }]},
         {"role": "user", "content": [{
             "type": "tool_result", "tool_use_id": "create-1", "content": '{"success": true}'

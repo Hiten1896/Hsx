@@ -28,6 +28,7 @@ from agent.feedback import FeedbackStore
 from agent.hardware import AUDIO_ALERTS, CAMERA, MOTION_MONITOR
 from agent.hardware.camera import MAX_FRAME_AGE_SECONDS
 from agent.llm.router import default_router
+from agent.llm.types import LLMRequest
 from agent.llm_client import PROVIDER_BANDIT, call_llm, record_provider_feedback
 from agent.llm.providers import GroqProvider, ProviderError
 from agent.ml.anomaly import ANOMALY_MONITOR, SystemMetrics
@@ -841,6 +842,29 @@ class HsxHandler(BaseHTTPRequestHandler):
             if not Path("/run/systemd/timesync/synchronized").exists():
                 warnings.append("System clock sync status is unavailable or not synchronized.")
             self._json({"status": "ok", "warnings": warnings})
+        elif path == "/healthz/providers":
+            try:
+                providers = default_router().providers
+            except (RuntimeError, ValueError, OSError) as error:
+                self._json({"providers": [], "error": str(error)}, 503)
+                return
+            results = []
+            request = LLMRequest(messages=[{"role": "user", "content": "Reply with OK."}], system="Reply with OK.")
+            for provider in providers:
+                result = {
+                    "provider": provider.name,
+                    "model": getattr(provider, "model", "unknown"),
+                }
+                try:
+                    events = list(provider.generate(request))
+                    if not any(event.type in {"text_delta", "tool_call"} for event in events):
+                        raise ProviderError("Provider returned no response content.", provider=provider.name)
+                except Exception as error:
+                    result.update({"status": "failed", "reason": str(error)[:240]})
+                else:
+                    result["status"] = "ok"
+                results.append(result)
+            self._json({"providers": results})
         elif path == "/health":
             self._json({"status": "ok"})
         elif path == "/api/skills":

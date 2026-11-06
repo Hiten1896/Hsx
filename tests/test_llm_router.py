@@ -357,8 +357,8 @@ def test_gemini_sends_key_header_and_maps_roles_and_system_instruction():
 def test_provider_completes_tool_call_loop_with_local_http_server(provider_kind):
     received = []
     responses = {
-        "gemini": [
-            {"candidates": [{"content": {"parts": [{"functionCall": {"name": "search", "args": {"query": "news"}}}]}}]},
+            "gemini": [
+                {"candidates": [{"content": {"parts": [{"functionCall": {"name": "search", "args": {"query": "news"}}, "thoughtSignature": "search-signature"}]}}]},
             {"candidates": [{"content": {"parts": [{"text": "Here is the result."}]}}]},
         ],
         "groq": [
@@ -417,6 +417,7 @@ def test_provider_completes_tool_call_loop_with_local_http_server(provider_kind)
                 "id": tool_call.tool_call_id,
                 "name": tool_call.tool_name,
                 "input": tool_call.tool_input,
+                "provider_meta": tool_call.provider_meta,
             }],
         })
         history.append({
@@ -440,7 +441,7 @@ def test_provider_completes_tool_call_loop_with_local_http_server(provider_kind)
             contents = received[1]["contents"]
             assert contents[1] == {
                 "role": "model",
-                "parts": [{"functionCall": {"name": "search", "args": {"query": "news"}}}],
+                "parts": [{"functionCall": {"name": "search", "args": {"query": "news"}}, "thoughtSignature": "search-signature"}],
             }
             assert contents[2] == {
                 "role": "user",

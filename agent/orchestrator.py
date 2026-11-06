@@ -118,14 +118,20 @@ def _serializable_history(history: list) -> list:
         if isinstance(value, list):
             return [convert(item) for item in value]
         if getattr(value, "type", "") == "tool_use":
-            return {
+            result = {
                 "type": "tool_use",
                 "id": value.id,
                 "name": value.name,
                 "input": convert(value.input),
             }
+            if getattr(value, "provider_meta", None):
+                result["provider_meta"] = convert(value.provider_meta)
+            return result
         if getattr(value, "type", "") == "text":
-            return {"type": "text", "text": value.text}
+            result = {"type": "text", "text": value.text}
+            if getattr(value, "provider_meta", None):
+                result["provider_meta"] = convert(value.provider_meta)
+            return result
         if hasattr(value, "__dict__"):
             return {key: convert(item) for key, item in value.__dict__.items()}
         return value

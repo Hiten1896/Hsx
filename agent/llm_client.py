@@ -153,17 +153,24 @@ class NormalizedBlock:
     id: str = ""
     content: str = ""
     tool_use_id: str = ""
+    provider_meta: dict = None
 
     def to_dict(self) -> dict:
         if self.type == "text":
-            return {"type": "text", "text": self.text}
+            result = {"type": "text", "text": self.text}
+            if self.provider_meta:
+                result["provider_meta"] = self.provider_meta
+            return result
         if self.type == "tool_use":
-            return {
+            result = {
                 "type": "tool_use",
                 "id": self.id,
                 "name": self.name,
                 "input": self.input or {},
             }
+            if self.provider_meta:
+                result["provider_meta"] = self.provider_meta
+            return result
         if self.type == "tool_result":
             return {
                 "type": "tool_result",
@@ -287,7 +294,9 @@ def call_llm(
                 if on_text_delta is not None:
                     on_text_delta(event.text)
                 output_characters += len(event.text)
-                blocks.append(NormalizedBlock(type="text", text=event.text))
+                blocks.append(NormalizedBlock(
+                    type="text", text=event.text, provider_meta=event.provider_meta or {}
+                ))
             elif event.type == "tool_call":
                 blocks.append(
                     NormalizedBlock(
@@ -295,6 +304,7 @@ def call_llm(
                         name=event.tool_name,
                         input=event.tool_input,
                         id=event.tool_call_id,
+                        provider_meta=event.provider_meta or {},
                     )
                 )
             elif event.type == "stop":
