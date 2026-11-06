@@ -127,14 +127,7 @@ function scrollToLatest() {
   elements.stream.scrollTo({ top: elements.stream.scrollHeight, behavior: 'smooth' });
 }
 
-function updateGreeting() {
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-  elements.greeting.textContent = `${greeting}, Sir`;
-}
-
 async function refreshGreeting() {
-  updateGreeting();
   const hour = new Date().getHours();
   const timeOfDay = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
   try {
@@ -143,13 +136,20 @@ async function refreshGreeting() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ time_of_day: timeOfDay }),
     });
-    if (!response.ok) return;
+    if (!response.ok) {
+      elements.greeting.setAttribute('aria-busy', 'false');
+      return;
+    }
     const result = await response.json();
     if (typeof result.greeting === 'string' && result.greeting.trim()) {
       elements.greeting.textContent = result.greeting.trim();
+      elements.greeting.setAttribute('aria-busy', 'false');
+    } else {
+      elements.greeting.setAttribute('aria-busy', 'false');
     }
   } catch {
-    // Keep the local-time greeting when the cloud service is unavailable.
+    elements.greeting.textContent = '';
+    elements.greeting.setAttribute('aria-busy', 'false');
   }
 }
 
@@ -1704,6 +1704,8 @@ function resetConversation() {
   uploadedAttachments = [];
   elements.stream.replaceChildren(elements.welcome);
   elements.welcome.hidden = false;
+  elements.greeting.textContent = '';
+  elements.greeting.setAttribute('aria-busy', 'true');
   refreshGreeting();
   elements.prompt.value = '';
   elements.prompt.style.height = 'auto';
@@ -1729,8 +1731,8 @@ async function initialize() {
   ]);
   if (!tokensResponse.ok || !contractResponse.ok) throw new Error('Could not load the Hsx interface contract.');
   apiContract = await contractResponse.json();
+  refreshGreeting();
   await refreshEmergencyStop();
-  updateGreeting();
   setupVoiceInput();
   setupComposerOptions();
   document.getElementById('sidebar-toggle').addEventListener('click', () => {
@@ -1951,7 +1953,6 @@ async function initialize() {
   });
   await refreshConnections();
   refreshFeedbackSettings();
-  refreshGreeting();
   refreshArtifacts();
   refreshAgentActivity();
   startNotificationStream();

@@ -31,6 +31,23 @@ def test_cloud_greeting_uses_only_a_configured_cloud_provider(monkeypatch):
     assert router.providers == providers
 
 
+def test_greeting_api_returns_the_single_generated_line(monkeypatch):
+    monkeypatch.setattr(server, "_generate_greeting", lambda time_of_day: f"{time_of_day.title()} finds you well, Sir.")
+    status, _, body = _request(
+        "/api/greeting", method="POST", payload={"time_of_day": "afternoon"}
+    )
+    assert status == 200
+    assert json.loads(body) == {"greeting": "Afternoon finds you well, Sir."}
+
+
+def test_cli_displays_the_server_generated_greeting(monkeypatch, capsys):
+    import cli
+
+    monkeypatch.setattr(cli, "_request", lambda path, payload: {"greeting": "Good afternoon, Sir."})
+    cli._show_greeting()
+    assert capsys.readouterr().out.strip() == "HSX > Good afternoon, Sir."
+
+
 def test_generated_artifact_filter_excludes_current_and_legacy_upload_paths():
     assert server._is_user_upload_path("Hsx Work/Uploads/screenshot.png")
     assert server._is_user_upload_path("Hsx Work/2025-01-03 1215 Uploads/screenshot.png")
@@ -151,6 +168,7 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert 'id="chat-stream"' in html
     assert 'id="conversation-layout"' in html
     assert 'id="greeting-title"' in html
+    assert '<h1 id="greeting-title" aria-busy="true"></h1>' in html
     assert 'placeholder="Type / for skills"' in html
     assert 'id="voice-button"' in html
     assert 'id="composer-options-button"' in html
@@ -188,7 +206,9 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert 'data-action="edit"' in html
     assert 'class="message-time"' in html
     assert "marked.parse" in script
-    assert "function updateGreeting()" in script
+    assert "function updateGreeting()" not in script
+    assert "Good morning" not in script
+    assert script.count("refreshGreeting();") == 2
     assert "function setConversationEmpty(isEmpty)" in script
     assert "function setupVoiceInput()" in script
     assert "window.webkitSpeechRecognition" in script
@@ -300,8 +320,10 @@ def test_camera_is_lazy_and_run_state_resets_after_failure_or_stop():
 def test_tui_has_native_feedback_buttons_with_shared_layout():
     async def verify():
         app = HsxTUI("http://127.0.0.1:1")
+        app._fetch_greeting = lambda: "Good afternoon, Sir."
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
+            assert "Good afternoon, Sir." in app.query_one("#welcome-card").render().plain
             await app.refresh_telemetry()
             assert "Could not reach HSX server" in app.query_one("#connection").render().plain
             app._new_message("assistant", "Hello **there**.", "test-job")

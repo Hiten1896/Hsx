@@ -46,12 +46,13 @@ controls, responsive sizing, and reduced-motion behavior are part of the design.
 
 - Enter sends on desktop; Shift+Enter inserts a newline. The textarea grows to a
   bounded height and remains visible above the mobile keyboard.
-- The empty chat centers a local-time greeting and composer; after the first turn the
+- The empty chat centers one generated, time-aware greeting and the composer; after the first turn the
   composer animates to the bottom below the scrollable transcript. User messages use
   a subtle right-aligned bubble while assistant replies remain unboxed and unlabeled.
-- The welcome greeting is requested from a configured cloud provider with the browser's
-  local time-of-day context. If no cloud provider is available, the local-time greeting
-  remains in place and chat startup is not blocked.
+- The welcome greeting is requested once from a configured provider with the browser's
+  local time-of-day context. The web heading stays empty until the generated line is
+  ready, preventing an initial placeholder from being replaced. CLI clients use the
+  same greeting endpoint; they show a brief ready prompt if generation is unavailable.
 - The file picker accepts any file type up to 1 MB. Uploads go through `/api/upload`
   and preserve file bytes inside the Hsx workspace. Uploads live under
   `Hsx Work/Uploads` and are excluded from generated artifacts.

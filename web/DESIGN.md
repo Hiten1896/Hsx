@@ -7,13 +7,14 @@ for shared design and server contracts.
 ## Current layout
 
 - Sidebar: Hsx branding, new chat, agent activity, and live connection health.
-- Center: a local-time greeting and centered composer for an empty chat; after the
+- Center: a generated, time-aware greeting and centered composer for an empty chat; after the
   first turn the composer transitions to the bottom beneath a scrollable transcript.
   User messages are right-aligned soft bubbles, while assistant replies are unboxed
   and have no speaker label.
-- The greeting is generated through a configured cloud provider using the browser's
-  local time-of-day; a local-time greeting is retained when cloud generation is
-  unavailable. Assistant messages have copy, browser read-aloud, feedback, retry, and
+- The greeting is generated once through the configured provider using the browser's
+  local time-of-day. The heading stays visually reserved but empty until the response
+  arrives, so placeholder text never flashes or gets replaced. The CLI and terminal UI
+  use the same endpoint. Assistant messages have copy, browser read-aloud, feedback, retry, and
   relative-time controls. User messages have edit and copy controls.
 - Right rail on desktop: the Hsx host camera feed and its availability state.
 - Mobile: focused chat and sticky composer, a navigation drawer with live connection

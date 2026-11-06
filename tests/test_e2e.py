@@ -1,4 +1,5 @@
 import json
+import io
 import time
 from pathlib import Path
 
@@ -113,10 +114,23 @@ def test_emergency_stop_is_separate_from_run_stop(monkeypatch):
             calls.append("resume")
 
     monkeypatch.setattr(server, "POLICY", FakePolicy())
-    status, _, _ = _request("/api/emergency-stop", method="POST", payload={})
-    assert status == 200
-    status, _, _ = _request("/api/resume", method="POST", payload={})
-    assert status == 200
+
+    def post(path):
+        handler = server.HsxHandler.__new__(server.HsxHandler)
+        handler.path = path
+        handler.command = "POST"
+        handler.client_address = ("127.0.0.1", 12345)
+        handler.headers = {"Content-Length": "2"}
+        handler.rfile = io.BytesIO(b"{}")
+        handler.wfile = io.BytesIO()
+        handler.send_response = lambda status: setattr(handler, "response_status", status)
+        handler.send_header = lambda *_args: None
+        handler.end_headers = lambda: None
+        handler.do_POST()
+        return handler.response_status, json.loads(handler.wfile.getvalue())
+
+    assert post("/api/emergency-stop")[0] == 200
+    assert post("/api/resume")[0] == 200
     assert calls == ["stop", "resume"]
 
 

@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import urllib.error
+from datetime import datetime
 from urllib.parse import quote
 import urllib.request
 import uuid
@@ -12,6 +13,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual import on
 from textual.widgets import Button, Footer, Input, Markdown, Static
+from textual.worker import WorkerFailed
 
 from config import BASE_DIR, HOST, PORT
 
@@ -213,8 +215,7 @@ class HsxTUI(App):
         with Vertical(id="conversation"):
             with VerticalScroll(id="message-stream"):
                 yield Static(
-                    "HSX WORKSPACE READY\n\nWhat can I help you with?\n"
-                    "Ask a question, search your workspace, or create something new.",
+                    "",
                     id="welcome-card",
                     classes="welcome-card",
                 )
@@ -230,8 +231,36 @@ class HsxTUI(App):
     async def on_mount(self) -> None:
         self.set_interval(2.5, self.refresh_telemetry)
         self.set_interval(5, self.refresh_workspace_activity)
+        self.run_worker(self.refresh_greeting(), name="initial-greeting")
         self.run_worker(self.refresh_telemetry(), name="initial-telemetry")
         self.run_worker(self.refresh_workspace_activity(), name="initial-workspace-activity")
+
+    def _fetch_greeting(self) -> str:
+        hour = datetime.now().astimezone().hour
+        time_of_day = "morning" if hour < 12 else "afternoon" if hour < 18 else "evening"
+        response = self._api_request(
+            _API["endpoints"]["greeting"], {"time_of_day": time_of_day}
+        )
+        return str(response.get("greeting", "")).strip()
+
+    async def refresh_greeting(self) -> None:
+        try:
+            worker = self.run_worker(
+                self._fetch_greeting,
+                thread=True,
+                name="welcome-greeting",
+                exit_on_error=False,
+            )
+            greeting = await worker.wait()
+        except (RuntimeError, ValueError, LookupError, WorkerFailed):
+            greeting = ""
+        if not self.is_running:
+            return
+        if not greeting:
+            greeting = "What would you like to work on?"
+        self.query_one("#welcome-card", Static).update(
+            f"HSX WORKSPACE READY\n\n{greeting}"
+        )
 
     def _fetch_workspace_activity(self) -> tuple[dict, dict]:
         try:

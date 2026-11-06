@@ -1,4 +1,5 @@
 import argparse
+from datetime import datetime
 import json
 import os
 import re
@@ -255,6 +256,18 @@ def _show_artifacts() -> None:
         print(f"- {item.get('name', 'file')} ({item.get('type', 'file')}): {item.get('path', '')}")
 
 
+def _show_greeting() -> None:
+    hour = datetime.now().astimezone().hour
+    time_of_day = "morning" if hour < 12 else "afternoon" if hour < 18 else "evening"
+    try:
+        greeting = str(_request("/api/greeting", {"time_of_day": time_of_day}).get("greeting", "")).strip()
+    except (RuntimeError, ValueError):
+        greeting = ""
+    if not greeting:
+        greeting = "HSX is ready. What would you like to work on?"
+    print(f"HSX > {greeting}")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="HSX terminal chat client")
     parser.add_argument("command", nargs="?", choices={"doctor"})
@@ -276,6 +289,7 @@ def main(argv: list[str] | None = None) -> None:
             if time.monotonic() >= deadline:
                 raise SystemExit(str(error)) from error
             time.sleep(2)
+    _show_greeting()
     while True:
         try:
             message = input("You > ").strip()

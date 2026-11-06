@@ -244,9 +244,10 @@ def _generate_greeting(time_of_day: str) -> str:
             [{
                 "role": "user",
                 "content": (
-                    "Write one warm, concise welcome greeting for a returning user of a private "
-                    f"assistant. It is local {time_of_day}. Use a natural time-appropriate greeting, "
-                    "address them as Sir, and do not mention models, providers, or system details."
+                    "Write one natural, warm welcome line for the owner's Hsx chat home, no more than "
+                    f"8 words. It is local {time_of_day}; mention the time only if it sounds natural. "
+                    "Address the owner as Sir. Avoid canned wording, made-up personal context, tasks, "
+                    "mood, or jokes. No markdown, quotation marks, or explanation."
                 ),
             }],
             [],
