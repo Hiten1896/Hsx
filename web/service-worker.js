@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hsx-shell-v3';
+const CACHE_NAME = 'hsx-shell-v5';
 const SHELL = [
   '/web/',
   '/web/chat.css',
@@ -7,6 +7,7 @@ const SHELL = [
   '/web/api-contract.json',
   '/web/manifest.webmanifest',
   '/web/icon.svg',
+  '/web/favicon.svg',
 ];
 
 self.addEventListener('install', (event) => {
@@ -28,13 +29,13 @@ self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET' || requestUrl.pathname.startsWith('/api/')) return;
   if (!requestUrl.pathname.startsWith('/web/')) return;
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
+    fetch(event.request).then((response) => {
       if (response.ok) {
         const copy = response.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
       }
       return response;
-    })),
+    }).catch(() => caches.match(event.request)),
   );
 });
 

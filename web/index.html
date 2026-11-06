@@ -2,93 +2,162 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#0b1220">
-    <title>HSX · Workspace assistant</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#111513">
+    <meta name="description" content="Hsx — your private, local-first AI workspace.">
+    <title>Hsx — Workspace</title>
+    <link rel="icon" type="image/svg+xml" href="/web/favicon.svg">
+    <link rel="manifest" href="/web/manifest.webmanifest">
     <link rel="stylesheet" href="/web/chat.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css">
     <script defer src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
-    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
     <script defer src="/web/chat.js"></script>
   </head>
   <body>
     <div class="app-shell">
-      <header id="status-header" class="status-header">
-        <a class="brand" href="/" aria-label="HSX home">
-          <span class="brand-mark">H</span>
-          <span>Hsx <span class="brand-subtitle">Workspace</span></span>
+      <aside class="sidebar" aria-label="Workspace navigation">
+        <a class="brand" href="/web/" aria-label="Hsx home">
+          <img src="/web/icon.svg" width="36" height="36" alt="">
+          <span class="brand-name">Hsx</span>
         </a>
-        <div class="status-cluster" aria-label="Connection and navigation status">
-          <span class="status-chip status-chip-ready"><span class="status-dot"></span> Ready</span>
-          <span class="status-chip status-chip-muted">Chat</span>
-          <span class="status-chip status-chip-muted">Files</span>
-          <span class="status-chip status-chip-muted">Artifacts</span>
-          <span class="status-chip status-chip-muted">Jobs</span>
-          <span class="status-chip status-chip-muted">Settings</span>
+
+        <button id="new-chat-button" class="new-chat-button" type="button">
+          <span aria-hidden="true">＋</span> New chat
+        </button>
+
+        <div class="sidebar-caption">WORKSPACE</div>
+        <div class="sidebar-nav" aria-label="Workspace sections">
+          <a class="nav-item nav-item-active" href="#chat-stream" aria-current="page">
+            <span class="nav-icon" aria-hidden="true">◌</span> Chat
+          </a>
+          <button id="browse-files-button" class="nav-item" type="button">
+            <span class="nav-icon" aria-hidden="true">▤</span> Attach a text file
+          </button>
         </div>
-        <div class="connection-status"><span class="status-dot"></span><span id="connection-label">Connecting</span></div>
-        <div class="telemetry" aria-label="Runtime telemetry">
-          <div class="metric"><span class="metric-label">MODEL / PROVIDER</span><strong id="metric-provider">—</strong></div>
-          <div class="metric"><span class="metric-label">ROUTER</span><strong id="metric-confidence">—</strong></div>
-          <div class="metric"><span class="metric-label">TOKENS IN / OUT*</span><strong id="metric-tokens">0 / 0</strong></div>
-          <div class="metric"><span class="metric-label">LATENCY</span><strong id="metric-latency">—</strong></div>
+
+        <section class="connections" aria-labelledby="connections-title">
+          <div class="connections-heading">
+            <h2 id="connections-title">Connections</h2>
+            <span id="connection-summary" class="connection-summary">Checking</span>
+          </div>
+          <ul class="connection-list">
+            <li><span class="connection-dot" id="api-dot"></span><span>Hsx server</span><strong id="api-state">Checking</strong></li>
+            <li><span class="connection-dot" id="llm-dot"></span><span>LLM provider</span><strong id="llm-state">Standby</strong></li>
+            <li><span class="connection-dot" id="camera-dot"></span><span>Host camera</span><strong id="camera-state">Checking</strong></li>
+            <li><span class="connection-dot" id="tailnet-dot"></span><span>Tailnet path</span><strong id="tailnet-state">Checking</strong></li>
+            <li><span class="connection-dot" id="internet-dot"></span><span>Browser network</span><strong id="internet-state">Online</strong></li>
+          </ul>
+          <p class="connection-note">Status reflects this browser's route and the host's reported health.</p>
+        </section>
+
+        <div class="sidebar-bottom">
+          <button id="access-token-button" class="token-button" type="button">Set remote access token</button>
+          <form id="access-token-form" class="token-form" hidden>
+            <label for="access-token-input">Remote bearer token</label>
+            <input id="access-token-input" type="password" autocomplete="off" spellcheck="false">
+            <div class="token-actions">
+              <button type="submit">Save for this tab</button>
+              <button id="clear-token-button" type="button">Clear</button>
+            </div>
+            <p>Kept in this tab only. Never added to the URL.</p>
+          </form>
+          <div class="local-note"><span class="local-note-dot"></span> Your workspace stays on your Hsx host</div>
         </div>
-      </header>
-      <main class="conversation-layout">
-        <aside class="camera-panel" aria-label="Live camera">
+      </aside>
+
+      <main class="chat-area">
+        <header class="chat-header">
+          <div>
+            <div class="chat-title">Chat</div>
+            <div id="chat-subtitle" class="chat-subtitle">A private workspace assistant</div>
+          </div>
+          <div class="header-right">
+            <span id="provider-chip" class="provider-chip">Provider standby</span>
+            <span id="connection-label" class="connection-label"><span class="connection-dot"></span> Connecting</span>
+          </div>
+        </header>
+
+        <section id="chat-stream" class="message-stream" aria-label="Conversation" role="log" aria-live="polite" aria-relevant="additions text">
+          <section class="welcome-card" id="welcome-card">
+            <div class="welcome-mark"><img src="/web/icon.svg" width="48" height="48" alt=""></div>
+            <p class="welcome-eyebrow">YOUR LOCAL WORKSPACE</p>
+            <h1>What would you like to work on?</h1>
+            <p class="welcome-description">Ask a question, explore a file, or create something useful.</p>
+            <div class="suggestions" aria-label="Suggested prompts">
+              <button class="suggestion" type="button" data-prompt="What is on this machine?">What is on this machine?</button>
+              <button class="suggestion" type="button" data-prompt="Search my workspace for recent reports">Search my workspace</button>
+              <button class="suggestion" type="button" data-prompt="Summarize a file in my workspace">Summarize a file</button>
+              <button class="suggestion" type="button" data-prompt="Make a report from my files">Make a report</button>
+            </div>
+          </section>
+        </section>
+
+        <div class="composer-dock">
+          <div id="drop-hint" class="drop-hint" hidden>Drop a supported text file to attach it</div>
+          <div id="attachment-list" class="attachment-list" aria-live="polite"></div>
+          <form id="composer-form" class="composer">
+            <div class="composer-input-row">
+              <button id="attach-button" class="icon-button attach-button" type="button" aria-label="Attach a text file" title="Attach a text file">＋</button>
+              <label class="sr-only" for="prompt-input">Message Hsx</label>
+              <textarea id="prompt-input" rows="1" placeholder="Message Hsx…" autocomplete="off"></textarea>
+              <button id="send-button" class="send-button" type="submit" aria-label="Send message" title="Send message">
+                <span class="send-label">Send</span><span aria-hidden="true">↑</span>
+              </button>
+              <button id="stop-button" class="stop-button" type="button" title="Stop the current task" hidden>Stop</button>
+            </div>
+            <div class="composer-footer">
+              <span><kbd>Enter</kbd> to send <span class="footer-divider">·</span> <kbd>Shift</kbd> + <kbd>Enter</kbd> for a new line</span>
+              <span id="composer-status" role="status">Text files up to 1 MB</span>
+            </div>
+          </form>
+          <input id="file-input" class="sr-only" type="file" multiple accept=".txt,.md,.csv,.json,.log,.py,.html,.xml,.yaml,.yml,.toml">
+          <p class="privacy-note">Hsx runs on your host. Files are saved in its workspace before use.</p>
+        </div>
+      </main>
+
+      <aside class="camera-sidebar" aria-label="Host camera">
+        <div class="camera-panel">
           <div class="camera-heading">
             <div>
-              <strong>Live camera</strong>
-              <span id="camera-status" role="status">Connecting…</span>
+              <p class="panel-eyebrow">HOST HARDWARE</p>
+              <h2>Live camera</h2>
             </div>
-            <span class="camera-live"><span class="status-dot"></span> LIVE</span>
+            <span id="camera-badge" class="camera-badge camera-badge-offline"><span class="connection-dot"></span> Offline</span>
           </div>
-          <img
-            id="live-camera"
-            class="camera-frame"
-            alt="Live 640 by 480 camera feed"
-          >
-        </aside>
-        <section class="conversation-panel" aria-label="Conversation">
-          <div id="chat-stream" class="message-stream" role="log" aria-live="polite" aria-relevant="additions text">
-            <section class="welcome-card" id="welcome-card">
-              <div class="welcome-kicker"><span class="status-dot"></span> LOCAL WORKSPACE READY</div>
-              <h1>What can I help you with?</h1>
-              <p>Ask a question, search your workspace, or create something new.</p>
-              <div class="suggestions">
-                <button class="suggestion" type="button" data-prompt="Show my workspace files">Browse workspace files</button>
-                <button class="suggestion" type="button" data-prompt="Check system status">Check system status</button>
-                <button class="suggestion" type="button" data-prompt="Search my notes">Search my notes</button>
-              </div>
-            </section>
+          <div class="camera-view">
+            <img id="live-camera" class="camera-frame" alt="Live feed from the Hsx host camera" hidden>
+            <div id="camera-clip-time" class="camera-clip-time" hidden>Waiting for video</div>
+            <div id="camera-placeholder" class="camera-placeholder">
+              <span class="camera-placeholder-icon" aria-hidden="true">◉</span>
+              <strong>Host camera feed</strong>
+              <span id="camera-status">Waiting for camera status…</span>
+            </div>
           </div>
-          <div class="composer-dock">
-            <form id="composer-form" class="composer">
-              <label class="sr-only" for="prompt-input">Message HSX</label>
-              <textarea id="prompt-input" rows="1" placeholder="Message HSX…" autocomplete="off"></textarea>
-              <div class="composer-actions">
-                <div class="composer-hint"><kbd>Enter</kbd> to send <span>·</span> <kbd>Shift</kbd> + <kbd>Enter</kbd> for a new line</div>
-                <div class="button-row">
-                  <button id="stop-button" class="button button-quiet" type="button" title="Stop the current task">Stop</button>
-                  <button id="send-button" class="button button-primary" type="submit"><span>Send</span><span aria-hidden="true">↗</span></button>
-                </div>
-              </div>
-            </form>
-            <p class="privacy-note">Your prompts and files stay in your local workspace.</p>
+          <div class="camera-metrics" aria-live="polite">
+            <div><span>Current time</span><strong id="camera-clock">—</strong></div>
+            <div><span>Video delay</span><strong id="camera-latency">Waiting</strong></div>
           </div>
-        </section>
-      </main>
+          <p class="camera-caption">This is the camera attached to the Hsx host, not your phone or laptop camera.</p>
+        </div>
+        <div class="camera-info">
+          <span class="info-icon" aria-hidden="true">i</span>
+          <p>Camera access is managed by the host. A missing device or disabled capture service will show as offline.</p>
+        </div>
+      </aside>
     </div>
+
     <template id="message-template">
       <article class="message-card">
-        <div class="message-heading"><span class="avatar"></span><strong class="message-author"></strong><span class="message-time"></span></div>
+        <div class="message-heading"><span class="avatar" aria-hidden="true"></span><strong class="message-author"></strong><span class="message-time"></span></div>
         <div class="message-content markdown-body"></div>
-        <div class="message-feedback" hidden>
-          <span>Helpful?</span>
-          <button type="button" class="feedback-button" data-feedback="good" aria-label="Good response" title="Good response">👍</button>
-          <button type="button" class="feedback-button" data-feedback="bad" aria-label="Bad response" title="Bad response">👎</button>
-          <span class="feedback-status" role="status"></span>
+        <div class="message-actions">
+          <button type="button" class="copy-button" aria-label="Copy response">Copy</button>
+          <div class="message-feedback" hidden>
+            <span>Helpful?</span>
+            <button type="button" class="feedback-button" data-feedback="good" aria-label="Good response" title="Good response">👍</button>
+            <button type="button" class="feedback-button" data-feedback="bad" aria-label="Bad response" title="Bad response">👎</button>
+            <span class="feedback-status" role="status"></span>
+          </div>
         </div>
       </article>
     </template>

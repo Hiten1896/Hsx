@@ -1,25 +1,26 @@
 {
   "colors": {
-    "background": "#0b1220",
-    "surface": "#111b2e",
-    "surface_raised": "#17243a",
-    "surface_input": "#0f192a",
-    "border": "#243650",
-    "text": "#e6f0ff",
-    "muted": "#8fa4bf",
-    "blue": "#38bdf8",
-    "teal": "#2dd4bf",
-    "danger": "#fb7185",
-    "code_background": "#08101d"
+    "background": "#111513",
+    "surface": "#1c231e",
+    "surface_raised": "#242d28",
+    "surface_input": "#1b211e",
+    "border": "#303a34",
+    "text": "#edf2eb",
+    "muted": "#9aa79d",
+    "blue": "#b2d8b7",
+    "teal": "#87c99a",
+    "warning": "#e6bd77",
+    "danger": "#e28e88",
+    "code_background": "#101411"
   },
   "typography": {
     "body": "Inter, Segoe UI, sans-serif",
     "code": "JetBrains Mono, Consolas, monospace"
   },
   "layout": {
-    "header_height": 64,
-    "content_width": 880,
-    "composer_max_width": 880,
-    "message_gap": 16
+    "header_height": 67,
+    "content_width": 790,
+    "composer_max_width": 790,
+    "message_gap": 20
   }
 }

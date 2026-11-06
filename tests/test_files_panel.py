@@ -75,6 +75,24 @@ def test_files_panel_lists_workspace_files_and_serves_ranges(tmp_path: Path, mon
     assert body == b"2345"
 
 
+def test_text_upload_returns_workspace_path_for_chat_attachment(tmp_path: Path, monkeypatch):
+    root = tmp_path / "share"
+    root.mkdir()
+    monkeypatch.setattr(server, "WORKSPACE", Workspace(root, "Hsx Work"))
+
+    status, _, body = _request(
+        "/api/upload",
+        method="POST",
+        payload={"filename": "notes.txt", "content": "local attachment content"},
+    )
+    result = json.loads(body)
+    assert status == 200
+    assert result["success"] is True
+    assert result["path"].startswith("Hsx Work/")
+    uploaded = server.WORKSPACE.resolve_read(result["path"])
+    assert uploaded.read_text(encoding="utf-8") == "local attachment content"
+
+
 def test_chat_stream_forwards_model_text_deltas(tmp_path: Path, monkeypatch):
     root = tmp_path / "share"
     root.mkdir()

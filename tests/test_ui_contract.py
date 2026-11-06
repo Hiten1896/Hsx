@@ -27,28 +27,35 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     css = (BASE_DIR / "web" / "chat.css").read_text(encoding="utf-8")
     script = (BASE_DIR / "web" / "chat.js").read_text(encoding="utf-8")
 
-    assert 'id="status-header"' in html
-    assert "MODEL / PROVIDER" in html
+    assert 'id="connections-title"' in html
     assert 'id="chat-stream"' in html
     assert 'id="composer-form"' in html
+    assert 'id="live-camera"' in html
+    assert 'id="camera-clock"' in html
+    assert 'id="camera-latency"' in html
+    assert 'id="camera-clip-time"' in html
+    assert 'id="file-input"' in html
     assert 'data-feedback="good"' in html
     assert 'data-feedback="bad"' in html
     assert "marked.parse" in script
-    assert "highlightElement" in script
-    assert "Authorization" not in script
+    assert "Authorization" in script
     assert "login-panel" not in html
-    assert "auth-token" not in html
-    assert "data.model" in script
-    assert "token_usage_estimated" in script
+    assert "bearerToken" in script
+    assert "telemetry.model" in script
+    assert "hsx-bearer-token" in script
     assert "elements.composer.addEventListener('submit'" in script
     assert "elements.stop.addEventListener('click', stopTask)" in script
-    assert "button.addEventListener('click', () => submitFeedback" in script
+    assert "submitFeedback(article, button.dataset.feedback)" in script
     assert "apiContract.endpoints.chat_stream" in script
     assert "apiContract.endpoints.feedback" in script
     assert "apiContract.endpoints.telemetry" in script
+    assert "visibilitychange" in script
+    assert "scheduleCameraReconnect" in script
+    assert "X-Hsx-Captured-At" in script
+    assert "WORKSPACE</span>" not in html
     assert "var(--background)" in css
-    assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in css
-    assert ".metric:nth-child(3)" not in css
+    assert "grid-template-columns: 258px minmax(0, 1fr) 340px" in css
+    assert "grid-template-columns: minmax(0, 1fr)" in css
 
     service_worker = (BASE_DIR / "web" / "service-worker.js").read_text(encoding="utf-8")
     assert "'/web/chat.css'" in service_worker

@@ -565,6 +565,12 @@ class HsxHandler(BaseHTTPRequestHandler):
     def _api_access_allowed(self) -> bool:
         if not is_loopback_host(self.client_address[0]):
             if _is_tailscale_peer(self.client_address[0]):
+                path = self._request_path()
+                if self.command == "GET" and (
+                    path in {"/", "/web"}
+                    or path.startswith("/web/")
+                ):
+                    return True
                 if self.command == "OPTIONS":
                     if not self._request_path().startswith("/api/"):
                         self._json({"error": "Only API preflight requests are allowed."}, 403)
@@ -662,6 +668,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
         self.send_header("Connection", "close")
         self.send_header("X-Accel-Buffering", "no")
+        self.send_header("X-Hsx-Server-Time", f"{time.time():.6f}")
         self.end_headers()
         version = -1
         try:
@@ -670,7 +677,8 @@ class HsxHandler(BaseHTTPRequestHandler):
                 self.wfile.write(
                     b"--frame\r\n"
                     b"Content-Type: image/jpeg\r\n"
-                    + f"Content-Length: {len(frame.data)}\r\n\r\n".encode("ascii")
+                    + f"Content-Length: {len(frame.data)}\r\n".encode("ascii")
+                    + f"X-Hsx-Captured-At: {frame.captured_at_wall or time.time():.6f}\r\n\r\n".encode("ascii")
                     + frame.data
                     + b"\r\n"
                 )
@@ -1178,6 +1186,14 @@ class HsxHandler(BaseHTTPRequestHandler):
                 return
             self._json({"fact": fact})
         elif path == "/api/upload":
+            try:
+                body_length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self._json({"error": "Upload size is invalid."}, 400)
+                return
+            if body_length <= 0 or body_length > 6 * 1024 * 1024:
+                self._json({"error": "Text file uploads must be 1 MB or smaller."}, 413)
+                return
             payload = self._body()
             filename = Path(str(payload.get("filename", "upload.txt"))).name
             content = str(payload.get("content", ""))
@@ -1191,7 +1207,12 @@ class HsxHandler(BaseHTTPRequestHandler):
             except (OSError, ValueError) as error:
                 self._json({"error": str(error)}, 400)
                 return
-            self._json({"success": True, "name": destination.name, "type": destination.suffix[1:]})
+            self._json({
+                "success": True,
+                "name": destination.name,
+                "path": destination.relative_to(WORKSPACE.root).as_posix(),
+                "type": destination.suffix[1:],
+            })
         elif path == "/api/media/upload":
             try:
                 length = int(self.headers.get("Content-Length", "0"))

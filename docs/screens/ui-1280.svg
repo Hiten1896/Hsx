@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-label="Hsx desktop workspace layout at 1280 pixels wide">
+  <defs>
+    <style>
+      .bg { fill: #111513; }
+      .sidebar { fill: #171c19; }
+      .surface { fill: #1c231e; }
+      .raised { fill: #242d28; }
+      .border { stroke: #303a34; }
+      .text { fill: #edf2eb; font: 600 13px 'Segoe UI', sans-serif; }
+      .muted { fill: #9aa79d; font: 500 10px 'Segoe UI', sans-serif; }
+      .accent { fill: #b2d8b7; }
+      .green { fill: #87c99a; }
+      .amber { fill: #e6bd77; }
+      .camera { fill: #0c100e; }
+    </style>
+  </defs>
+  <rect class="bg" width="1280" height="720"/>
+  <rect class="sidebar border" width="258" height="720" stroke-width="1"/>
+  <rect x="22" y="22" width="36" height="36" rx="11" fill="#263129" stroke="#516553"/>
+  <path d="M31 31v18m0-9h13m0-9v18m5-18v18" fill="none" stroke="#b2d8b7" stroke-width="3" stroke-linecap="round"/>
+  <text class="text" x="68" y="43" style="font-size: 17px;">Hsx</text>
+  <rect class="raised border" x="17" y="79" width="224" height="44" rx="10" stroke-width="1"/>
+  <text class="text" x="78" y="106">＋  New chat</text>
+  <text class="muted" x="25" y="158" style="font: 8px monospace; letter-spacing: 1px;">WORKSPACE</text>
+  <rect x="18" y="172" width="222" height="42" rx="8" fill="#29332c"/>
+  <text class="text" x="36" y="198">◌  Chat</text>
+  <text class="muted" x="36" y="244">▤  Attach a text file</text>
+  <rect class="surface border" x="16" y="438" width="226" height="205" rx="12" stroke-width="1"/>
+  <text class="text" x="30" y="464">Connections</text>
+  <text class="muted" x="180" y="464" style="font-size: 8px;">Host reachable</text>
+  <circle class="green" cx="30" cy="490" r="4"/><text class="muted" x="43" y="494">Hsx server</text><text class="muted" x="185" y="494">Online</text>
+  <circle class="amber" cx="30" cy="518" r="4"/><text class="muted" x="43" y="522">LLM provider</text><text class="muted" x="185" y="522">Standby</text>
+  <circle cx="30" cy="546" r="4" fill="#e28e88"/><text class="muted" x="43" y="550">Host camera</text><text class="muted" x="185" y="550">Offline</text>
+  <circle class="amber" cx="30" cy="574" r="4"/><text class="muted" x="43" y="578">Tailnet path</text><text class="muted" x="173" y="578">Local access</text>
+  <circle class="green" cx="30" cy="602" r="4"/><text class="muted" x="43" y="606">Browser network</text><text class="muted" x="185" y="606">Online</text>
+  <text class="muted" x="24" y="671">Your workspace stays on your Hsx host</text>
+  <rect class="border" x="258" y="0" width="682" height="720" fill="none" stroke-width="1"/>
+  <rect class="border" x="258" y="0" width="682" height="67" fill="#171c19" stroke-width="1"/>
+  <text class="text" x="285" y="31">Chat</text>
+  <text class="muted" x="285" y="49">A private workspace assistant</text>
+  <text class="muted" x="774" y="39">Provider standby</text>
+  <circle class="green" cx="914" cy="34" r="4"/>
+  <text class="muted" x="923" y="39">Connected</text>
+  <rect class="surface border" x="300" y="130" width="596" height="292" rx="15" stroke-width="1"/>
+  <text class="muted" x="598" y="166" text-anchor="middle" style="font: 8px monospace; letter-spacing: 1px;">YOUR LOCAL WORKSPACE</text>
+  <text class="text" x="598" y="214" text-anchor="middle" style="font-size: 26px;">What would you like to work on?</text>
+  <text class="muted" x="598" y="240" text-anchor="middle">Ask a question, explore a file, or create something useful.</text>
+  <rect class="raised border" x="330" y="274" width="258" height="48" rx="10" stroke-width="1"/>
+  <text class="muted" x="346" y="303">What is on this machine?</text>
+  <rect class="raised border" x="600" y="274" width="258" height="48" rx="10" stroke-width="1"/>
+  <text class="muted" x="616" y="303">Search my workspace</text>
+  <rect class="raised border" x="330" y="334" width="258" height="48" rx="10" stroke-width="1"/>
+  <text class="muted" x="346" y="363">Summarize a file</text>
+  <rect class="raised border" x="600" y="334" width="258" height="48" rx="10" stroke-width="1"/>
+  <text class="muted" x="616" y="363">Make a report</text>
+  <rect class="surface border" x="282" y="540" width="636" height="98" rx="15" stroke-width="1"/>
+  <circle cx="308" cy="579" r="16" fill="#242d28" stroke="#455147"/>
+  <text class="text" x="308" y="584" text-anchor="middle" style="font-size: 19px;">+</text>
+  <text class="muted" x="338" y="574">Message Hsx…</text>
+  <rect class="accent" x="820" y="559" width="80" height="40" rx="10"/>
+  <text x="860" y="584" text-anchor="middle" fill="#18211a" style="font: 700 11px 'Segoe UI', sans-serif;">Send ↑</text>
+  <text class="muted" x="892" y="623" text-anchor="end" style="font-size: 8px;">Text files up to 1 MB</text>
+  <rect class="sidebar border" x="940" y="0" width="340" height="720" stroke-width="1"/>
+  <rect class="surface border" x="958" y="22" width="304" height="398" rx="13" stroke-width="1"/>
+  <text class="muted" x="976" y="48" style="font: 8px monospace; letter-spacing: 1px;">HOST HARDWARE</text>
+  <text class="text" x="976" y="70">Live camera</text>
+  <rect x="1171" y="39" width="75" height="21" rx="11" fill="#242d28" stroke="#4b554d"/>
+  <circle cx="1184" cy="49" r="3" fill="#e28e88"/>
+  <text class="muted" x="1192" y="53" style="font: 8px monospace;">Offline</text>
+  <rect class="camera" x="959" y="86" width="302" height="226"/>
+  <rect x="1083" y="160" width="52" height="52" rx="16" fill="#19201b" stroke="#39433b"/>
+  <text x="1109" y="193" text-anchor="middle" fill="#a9b6aa" style="font: 25px 'Segoe UI', sans-serif;">◉</text>
+  <text class="text" x="1110" y="239" text-anchor="middle" style="font-size: 10px;">Host camera feed</text>
+  <text class="muted" x="1110" y="257" text-anchor="middle" style="font-size: 8px;">No host camera device is available.</text>
+  <rect x="970" y="285" width="82" height="18" rx="5" fill="#080b09" opacity=".88"/>
+  <text x="978" y="297" fill="#edf2eb" style="font: 8px monospace;">Clip 12:42:18</text>
+  <text class="muted" x="976" y="337" style="font: 8px monospace;">CURRENT TIME</text>
+  <text class="text" x="976" y="354" style="font: 10px monospace;">12:42:19</text>
+  <text class="muted" x="1110" y="337" style="font: 8px monospace;">VIDEO DELAY</text>
+  <text class="text" x="1110" y="354" style="font: 10px monospace;">0.2 s behind</text>
+  <text class="muted" x="976" y="388" style="font-size: 8px;">Shows the Hsx host camera, not the browser camera.</text>
+  <rect class="surface border" x="958" y="437" width="304" height="72" rx="10" stroke-width="1"/>
+  <circle cx="980" cy="460" r="8" fill="none" stroke="#9aa79d"/>
+  <text class="muted" x="980" y="463" text-anchor="middle" style="font: 8px monospace;">i</text>
+  <text class="muted" x="997" y="460">Reconnecting video syncs to</text>
+  <text class="muted" x="997" y="477">the newest host frame.</text>
+</svg>

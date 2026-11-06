@@ -95,6 +95,28 @@ never run. Approval requests persist across restarts and are resumed from the st
 tool call. See [docs/approvals.md](docs/approvals.md) for action tiers and response
 handling.
 
+## Open Hsx from your phone or laptop
+
+Hsx is designed to run as one product across a browser and the terminal. On the same
+host, open the local web UI for a richer mobile-friendly experience or run the
+terminal client over SSH for keyboard-first work on the HP itself.
+
+- Browser: `http://127.0.0.1:8000` or the Tailscale URL published by `tailscale serve`.
+- Terminal: `python cli.py` from the project environment; it keeps the local execution
+  target and the same approval language as the web client.
+- Access rules: same-origin requests are allowed only for configured hosts; no-origin
+  requests require a bearer token, and all browser traffic keeps credentials out of the
+  URL and logs.
+- Data stays local by default: feedback is stored on this computer only unless the user
+  opts in to a broader export.
+
+## Web vs terminal at a glance
+
+| Surface | Best for | Shared behaviors |
+| --- | --- | --- |
+| Web UI | Mobile, screenshots, artifact browsing, uploads, camera-safe views | Same chat flow, approvals, status chips, and human-readable prompts |
+| Terminal UI | SSH sessions, direct local work, narrow consoles, scripting | Same local execution target, plain-English decisions, and job recovery |
+
 ## Supported model providers
 
 Configure one or more providers in `.env`. The router discovers configured credentials;

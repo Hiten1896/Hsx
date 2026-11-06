@@ -1,7 +1,17 @@
-const sessionId = 'web';
+let sessionId = loadSessionId();
 let apiContract;
 let pendingQuestion = null;
 let submitting = false;
+let bearerToken = loadBearerToken();
+let uploadedAttachments = [];
+let cameraObjectUrl = '';
+let cameraStreamController = null;
+let cameraReconnectTimer = null;
+let cameraRetryDelay = 500;
+let cameraAvailable = false;
+let cameraHasFrame = false;
+let cameraClockOffsetMs = 0;
+let cameraStreamStartedAt = 0;
 
 const elements = {
   composer: document.getElementById('composer-form'),
@@ -15,42 +25,65 @@ const elements = {
   connection: document.getElementById('connection-label'),
   camera: document.getElementById('live-camera'),
   cameraStatus: document.getElementById('camera-status'),
+  cameraPlaceholder: document.getElementById('camera-placeholder'),
+  cameraBadge: document.getElementById('camera-badge'),
+  fileInput: document.getElementById('file-input'),
+  attachmentList: document.getElementById('attachment-list'),
+  composerStatus: document.getElementById('composer-status'),
+  dropHint: document.getElementById('drop-hint'),
+  tokenForm: document.getElementById('access-token-form'),
+  tokenInput: document.getElementById('access-token-input'),
 };
 
-function initializeCameraFeed() {
-  if (!elements.camera) return;
-  let retryTimer;
-  const connect = () => {
-    const streamUrl = new URL(apiContract.endpoints.camera_stream, window.location.origin);
-    streamUrl.searchParams.set('retry', Date.now());
-    elements.camera.src = streamUrl.toString();
-  };
-  elements.camera.addEventListener('load', () => {
-    elements.cameraStatus.textContent = 'Camera connected';
-    window.clearTimeout(retryTimer);
-  });
-  elements.camera.addEventListener('error', () => {
-    elements.cameraStatus.textContent = 'Camera unavailable; retrying…';
-    window.clearTimeout(retryTimer);
-    retryTimer = window.setTimeout(connect, 5000);
-  });
-  connect();
+function safeStorageGet(storage, key) {
+  try {
+    return window[storage].getItem(key) || '';
+  } catch {
+    return '';
+  }
 }
 
-function updateDesignTokens(tokens) {
-  const root = document.documentElement;
-  for (const [name, value] of Object.entries(tokens.colors || {})) {
-    root.style.setProperty(`--${name.replaceAll('_', '-')}`, value);
+function safeStorageSet(storage, key, value) {
+  try {
+    window[storage].setItem(key, value);
+  } catch {
+    return false;
   }
-  for (const [name, value] of Object.entries(tokens.typography || {})) {
-    root.style.setProperty(`--font-${name}`, value);
-  }
-  root.style.setProperty('--content-width', `${tokens.layout?.content_width || 880}px`);
-  root.style.setProperty('--header-height', `${tokens.layout?.header_height || 64}px`);
+  return true;
 }
 
-async function apiFetch(url, options = {}) {
-  return fetch(url, options);
+function makeSessionId() {
+  return `web-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+}
+
+function loadSessionId() {
+  return safeStorageGet('sessionStorage', 'hsx-session-id') || makeSessionId();
+}
+
+function loadBearerToken() {
+  return safeStorageGet('sessionStorage', 'hsx-bearer-token');
+}
+
+function persistSessionId() {
+  safeStorageSet('sessionStorage', 'hsx-session-id', sessionId);
+}
+
+function persistDraft() {
+  safeStorageSet('sessionStorage', `hsx-draft-${sessionId}`, elements.prompt.value);
+}
+
+function persistAttachments() {
+  safeStorageSet(
+    'sessionStorage',
+    `hsx-attachments-${sessionId}`,
+    JSON.stringify(uploadedAttachments.filter((item) => item.status === 'ready')),
+  );
+}
+
+function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (bearerToken) headers.set('Authorization', `Bearer ${bearerToken}`);
+  return fetch(url, { ...options, headers });
 }
 
 function renderMarkdown(text, container) {
@@ -58,9 +91,10 @@ function renderMarkdown(text, container) {
   if (window.marked && window.DOMPurify) {
     const html = window.marked.parse(source, { breaks: true, gfm: true });
     container.innerHTML = window.DOMPurify.sanitize(html);
-    if (window.hljs) {
-      container.querySelectorAll('pre code').forEach((block) => window.hljs.highlightElement(block));
-    }
+    container.querySelectorAll('a[href]').forEach((link) => {
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+    });
   } else {
     container.textContent = source;
   }
@@ -70,21 +104,41 @@ function scrollToLatest() {
   elements.stream.scrollTo({ top: elements.stream.scrollHeight, behavior: 'smooth' });
 }
 
+function setConnection(id, labelId, value, state) {
+  const dot = document.getElementById(id);
+  const label = document.getElementById(labelId);
+  if (dot) dot.dataset.state = state;
+  if (label) label.textContent = value;
+}
+
 function appendMessage(role, text, jobId = '', options = {}) {
   elements.welcome.hidden = true;
   const fragment = elements.template.content.cloneNode(true);
   const article = fragment.querySelector('.message-card');
-  const avatar = fragment.querySelector('.avatar');
   const content = fragment.querySelector('.message-content');
   article.dataset.role = role;
+  article.dataset.response = String(text || '');
   if (jobId) article.dataset.jobId = jobId;
-  avatar.textContent = role === 'assistant' ? 'H' : 'Y';
-  fragment.querySelector('.message-author').textContent = role === 'assistant' ? 'HSX' : 'You';
+  fragment.querySelector('.avatar').textContent = role === 'assistant' ? 'H' : 'Y';
+  fragment.querySelector('.message-author').textContent = role === 'assistant' ? 'Hsx' : 'You';
   fragment.querySelector('.message-time').textContent = new Date().toLocaleTimeString([], {
     hour: '2-digit',
     minute: '2-digit',
   });
   renderMarkdown(text, content);
+
+  const copyButton = fragment.querySelector('.copy-button');
+  copyButton.textContent = role === 'assistant' ? 'Copy' : 'Copy message';
+  copyButton.setAttribute('aria-label', role === 'assistant' ? 'Copy response' : 'Copy message');
+  copyButton.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(article.dataset.response || '');
+      copyButton.textContent = 'Copied';
+      window.setTimeout(() => { copyButton.textContent = 'Copy'; }, 1400);
+    } catch {
+      copyButton.textContent = 'Copy unavailable';
+    }
+  });
 
   const feedback = fragment.querySelector('.message-feedback');
   if (role === 'assistant' && jobId && !options.noFeedback) {
@@ -126,13 +180,13 @@ async function submitFeedback(article, feedback) {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Could not save feedback.');
-    status.textContent = 'Thanks!';
-  } catch (error) {
+    status.textContent = 'Thanks for your feedback.';
+  } catch {
     buttons.forEach((button) => {
       button.disabled = false;
       button.removeAttribute('aria-pressed');
     });
-    status.textContent = error.message;
+    status.textContent = 'Feedback could not be saved.';
   }
 }
 
@@ -173,6 +227,85 @@ async function readStream(response, onEvent) {
   }
 }
 
+function setBusy(isBusy) {
+  submitting = isBusy;
+  elements.send.hidden = isBusy;
+  elements.stop.hidden = !isBusy;
+}
+
+function renderAttachments() {
+  elements.attachmentList.replaceChildren();
+  for (const attachment of uploadedAttachments) {
+    const chip = document.createElement('div');
+    chip.className = 'attachment-chip';
+    const name = document.createElement('span');
+    name.textContent = attachment.name;
+    const size = document.createElement('small');
+    size.textContent = attachment.status === 'uploading'
+      ? 'Uploading…'
+      : attachment.status === 'error'
+        ? 'Failed'
+        : attachment.sizeLabel;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = '×';
+    remove.setAttribute('aria-label', `Remove ${attachment.name}`);
+    remove.disabled = attachment.status === 'uploading';
+    remove.addEventListener('click', () => {
+      uploadedAttachments = uploadedAttachments.filter((item) => item.id !== attachment.id);
+      persistAttachments();
+      renderAttachments();
+    });
+    chip.append(name, size, remove);
+    elements.attachmentList.appendChild(chip);
+  }
+}
+
+function formatBytes(bytes) {
+  return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function uploadFiles(files) {
+  const supported = /\.(txt|md|csv|json|log|py|html|xml|yaml|yml|toml)$/i;
+  for (const file of files) {
+    const attachment = {
+      id: makeSessionId(),
+      name: file.name,
+      sizeLabel: formatBytes(file.size),
+      status: 'uploading',
+      path: '',
+    };
+    if (!supported.test(file.name)) {
+      elements.composerStatus.textContent = `${file.name}: use a text, Markdown, CSV, JSON, or code file.`;
+      continue;
+    }
+    if (file.size > 1024 * 1024) {
+      elements.composerStatus.textContent = `${file.name}: files must be 1 MB or smaller.`;
+      continue;
+    }
+    uploadedAttachments.push(attachment);
+    renderAttachments();
+    try {
+      const response = await apiFetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: file.name, content: await file.text() }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Upload failed.');
+      attachment.name = result.name || file.name;
+      attachment.path = result.path || result.name || file.name;
+      attachment.status = 'ready';
+      elements.composerStatus.textContent = `${attachment.name} is ready to attach.`;
+    } catch (error) {
+      attachment.status = 'error';
+      elements.composerStatus.textContent = error.message || 'The file could not be uploaded.';
+    }
+    persistAttachments();
+    renderAttachments();
+  }
+}
+
 async function answerPendingQuestion(message) {
   const jobId = pendingQuestion.id;
   const approvalPending = pendingQuestion.state === 'waiting_for_approval';
@@ -209,8 +342,7 @@ function appendApprovalCard(job) {
   const card = document.createElement('section');
   card.className = 'approval-card';
   card.dataset.approvalJob = job.id;
-  card.setAttribute('aria-label', 'HSX action approval');
-
+  card.setAttribute('aria-label', 'Hsx action approval');
   const title = document.createElement('h3');
   title.textContent = 'Hsx wants to:';
   const summary = document.createElement('p');
@@ -219,14 +351,12 @@ function appendApprovalCard(job) {
   why.textContent = `Why: ${approval.why || 'This action needs your approval.'}`;
   const risk = document.createElement('p');
   risk.textContent = `Risk: ${approval.risk || 'UNKNOWN'}${approval.risk === 'DANGEROUS' ? ' (cannot be undone)' : ''}`;
-
   const details = document.createElement('details');
   const detailsSummary = document.createElement('summary');
   detailsSummary.textContent = 'Details';
   const detailsText = document.createElement('pre');
   detailsText.textContent = approval.details || 'No additional details.';
   details.append(detailsSummary, detailsText);
-
   const actions = document.createElement('div');
   actions.className = 'approval-actions';
   for (const [label, answer] of [['Yes', 'yes'], ['No', 'no']]) {
@@ -235,20 +365,17 @@ function appendApprovalCard(job) {
     button.textContent = label;
     button.addEventListener('click', async () => {
       if (submitting) return;
-      submitting = true;
-      elements.send.disabled = true;
+      setBusy(true);
       try {
         await answerPendingQuestion(answer);
-      } catch (error) {
-        appendMessage('assistant', `Could not continue: ${error.message}`);
+      } catch {
+        appendMessage('assistant', 'Could not continue the task. Please try again.');
       } finally {
-        submitting = false;
-        elements.send.disabled = false;
+        setBusy(false);
       }
     });
     actions.appendChild(button);
   }
-
   card.append(title, summary, why, risk, details, actions);
   elements.welcome.hidden = true;
   elements.stream.appendChild(card);
@@ -277,6 +404,7 @@ async function pollQuestionJob(jobId, activity) {
     }
     if (['done', 'failed', 'cancelled'].includes(job.state)) {
       activity.remove();
+      pendingQuestion = null;
       appendMessage('assistant', job.result || job.error || 'The task was cancelled.', job.id);
       return;
     }
@@ -284,20 +412,35 @@ async function pollQuestionJob(jobId, activity) {
 }
 
 async function submitPrompt() {
-  const message = elements.prompt.value.trim();
-  if (!message || submitting) return;
-  elements.prompt.value = '';
-  elements.prompt.style.height = 'auto';
-  appendMessage('user', message);
-  submitting = true;
+  const typedMessage = elements.prompt.value.trim();
+  const readyAttachments = uploadedAttachments.filter((item) => item.status === 'ready');
+  if ((!typedMessage && !readyAttachments.length) || submitting) return;
+  const userMessage = typedMessage || 'Please review the attached file(s).';
+  const attachmentContext = readyAttachments.length
+    ? `\n\nUploaded workspace files:\n${readyAttachments.map((item) => `- ${item.path}`).join('\n')}`
+    : '';
+  const requestMessage = `${userMessage}${attachmentContext}`;
+  const displayMessage = readyAttachments.length
+    ? `${userMessage}\n\nAttached: ${readyAttachments.map((item) => item.name).join(', ')}`
+    : userMessage;
+  appendMessage('user', displayMessage);
+  setBusy(true);
+  safeStorageSet('sessionStorage', `hsx-draft-${sessionId}`, typedMessage);
   elements.send.disabled = true;
+
   if (pendingQuestion) {
     try {
-      await answerPendingQuestion(message);
-    } catch (error) {
-      appendMessage('assistant', `Could not continue: ${error.message}`);
+      await answerPendingQuestion(requestMessage);
+      elements.prompt.value = '';
+      uploadedAttachments = [];
+      persistAttachments();
+      renderAttachments();
+      safeStorageSet('sessionStorage', `hsx-draft-${sessionId}`, '');
+    } catch {
+      appendMessage('assistant', 'Could not submit your answer. Your text is still available in this tab.');
+      elements.prompt.value = typedMessage;
     } finally {
-      submitting = false;
+      setBusy(false);
       elements.send.disabled = false;
     }
     return;
@@ -312,15 +455,16 @@ async function submitPrompt() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        message,
+        message: requestMessage,
         session_id: sessionId,
         target_device: 'client_browser',
       }),
     });
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.error || 'The request could not be completed.');
+      throw new Error(error.error || (response.status === 401 ? 'Set the remote access token to continue.' : 'The request could not be completed.'));
     }
+    elements.prompt.value = '';
     activity = appendActivity('Thinking…');
     await readStream(response, ({ event, data }) => {
       if (event === 'text_delta') {
@@ -329,6 +473,7 @@ async function submitPrompt() {
           assistantCard = appendMessage('assistant', assistantContent, '', { noFeedback: true });
           activity.remove();
         } else {
+          assistantCard.dataset.response = assistantContent;
           renderMarkdown(assistantContent, assistantCard.querySelector('.message-content'));
           scrollToLatest();
         }
@@ -362,42 +507,366 @@ async function submitPrompt() {
     } else if (!assistantCard && currentJob?.state === 'waiting_for_approval') {
       pendingQuestion = currentJob;
     }
+    uploadedAttachments = [];
+    persistAttachments();
+    renderAttachments();
+    safeStorageSet('sessionStorage', `hsx-draft-${sessionId}`, '');
   } catch (error) {
     activity?.remove();
-    appendMessage('assistant', `Something went wrong: ${error.message}`, currentJob?.id || '');
+    appendMessage('assistant', error.message || 'The request could not be completed.', currentJob?.id || '');
+    if (!elements.prompt.value) elements.prompt.value = typedMessage;
+    persistDraft();
+    elements.composerStatus.textContent = 'The request did not complete. Your draft was kept.';
   } finally {
-    submitting = false;
+    setBusy(false);
     elements.send.disabled = false;
     elements.prompt.focus();
-    refreshTelemetry();
+    refreshConnections();
   }
 }
 
-async function refreshTelemetry() {
+function setCameraStatus(connected, message) {
+  elements.cameraStatus.textContent = message;
+  elements.cameraBadge.classList.toggle('camera-badge-online', connected);
+  elements.cameraBadge.classList.toggle('camera-badge-offline', !connected);
+  elements.cameraBadge.classList.remove('camera-badge-reconnecting');
+  elements.cameraBadge.replaceChildren();
+  const dot = document.createElement('span');
+  dot.className = 'connection-dot';
+  const label = document.createElement('span');
+  label.textContent = connected ? (cameraHasFrame ? 'Live' : 'Connecting') : 'Offline';
+  elements.cameraBadge.append(dot, label);
+  setConnection('camera-dot', 'camera-state', connected ? 'Live' : 'Offline', connected ? 'connected' : 'disconnected');
+  elements.camera.hidden = !connected;
+  elements.cameraPlaceholder.hidden = connected;
+  document.getElementById('camera-clip-time').hidden = !connected || !cameraHasFrame;
+}
+
+async function refreshCamera() {
   try {
-    const response = await apiFetch(apiContract.endpoints.telemetry);
-    if (!response.ok) throw new Error('Telemetry unavailable.');
+    const response = await apiFetch(apiContract.endpoints.camera_status);
     const data = await response.json();
-    document.getElementById('metric-provider').textContent =
-      `${data.model || '—'} · ${data.provider || '—'}`;
-    document.getElementById('metric-confidence').textContent =
-      data.router_confidence == null ? '—' : `${(Number(data.router_confidence) * 100).toFixed(0)}%`;
-    document.getElementById('metric-tokens').textContent =
-      `${data.token_usage_estimated ? '~' : ''}${data.input_tokens ?? 0} / ${data.output_tokens ?? 0}`;
-    document.getElementById('metric-latency').textContent =
-      data.latency_ms == null ? '—' : `${Number(data.latency_ms).toFixed(0)} ms`;
-    elements.connection.textContent = 'Connected';
+    if (response.status === 401) {
+      cameraAvailable = false;
+      stopCameraStream();
+      cameraHasFrame = false;
+      if (cameraObjectUrl) {
+        URL.revokeObjectURL(cameraObjectUrl);
+        cameraObjectUrl = '';
+      }
+      setCameraStatus(false, 'Set the remote access token to view the host camera.');
+      return;
+    }
+    const connected = response.ok && data.running === true;
+    if (connected) {
+      cameraAvailable = true;
+      setCameraStatus(true, cameraHasFrame ? 'Live from the Hsx host' : 'Connecting to the Hsx host…');
+      startCameraStream();
+    } else {
+      cameraAvailable = false;
+      stopCameraStream();
+      cameraHasFrame = false;
+      elements.camera.removeAttribute('src');
+      if (cameraObjectUrl) {
+        URL.revokeObjectURL(cameraObjectUrl);
+        cameraObjectUrl = '';
+      }
+      document.getElementById('camera-clip-time').textContent = 'Waiting for video';
+      setCameraLatency(null);
+      setCameraStatus(false, data.device_available === false
+        ? 'No host camera device is available.'
+        : 'Host camera capture is not running.');
+    }
   } catch {
-    elements.connection.textContent = 'Offline';
+    if (cameraHasFrame) setCameraReconnecting('Camera status unavailable; reconnecting…');
+    else setCameraStatus(false, bearerToken ? 'Camera status is unavailable.' : 'Enter a remote token if the host requires one.');
   }
+}
+
+function findBytes(haystack, needle) {
+  for (let index = 0; index <= haystack.length - needle.length; index += 1) {
+    if (needle.every((byte, offset) => haystack[index + offset] === byte)) return index;
+  }
+  return -1;
+}
+
+function concatenateBytes(first, second) {
+  const result = new Uint8Array(first.length + second.length);
+  result.set(first);
+  result.set(second, first.length);
+  return result;
+}
+
+function takeCameraFrame(buffer) {
+  const headerEnd = findBytes(buffer, [13, 10, 13, 10]);
+  if (headerEnd < 0) {
+    if (buffer.length > 16_384) throw new Error('Invalid camera stream header.');
+    return null;
+  }
+  const headers = new TextDecoder().decode(buffer.slice(0, headerEnd));
+  const length = Number(headers.match(/(?:^|\r\n)Content-Length:\s*(\d+)/i)?.[1]);
+  const capturedAt = Number(headers.match(/(?:^|\r\n)X-Hsx-Captured-At:\s*([\d.]+)/i)?.[1]);
+  if (!Number.isInteger(length) || length < 4 || length > 2 * 1024 * 1024) {
+    throw new Error('Invalid camera frame size.');
+  }
+  const payloadStart = headerEnd + 4;
+  if (buffer.length < payloadStart + length) return null;
+  return {
+    data: buffer.slice(payloadStart, payloadStart + length),
+    capturedAt: Number.isFinite(capturedAt) && capturedAt > 0 ? capturedAt : Date.now() / 1000,
+    remaining: buffer.slice(payloadStart + length),
+  };
+}
+
+function setCameraLatency(capturedAt) {
+  const output = document.getElementById('camera-latency');
+  if (!Number.isFinite(capturedAt)) {
+    output.textContent = cameraHasFrame ? 'Waiting for frames' : 'Waiting';
+    output.dataset.state = 'warning';
+    return;
+  }
+  const delayMs = Date.now() + cameraClockOffsetMs - capturedAt * 1000;
+  if (delayMs < -1000) {
+    output.textContent = 'Clock is ahead';
+    output.dataset.state = 'warning';
+    return;
+  }
+  const delaySeconds = Math.max(0, delayMs) / 1000;
+  output.textContent = `${delaySeconds.toFixed(1)} s behind`;
+  output.dataset.state = delaySeconds > 2 ? 'warning' : 'connected';
+}
+
+function showCameraFrame(frame) {
+  const nextUrl = URL.createObjectURL(new Blob([frame.data], { type: 'image/jpeg' }));
+  const previousUrl = cameraObjectUrl;
+  cameraObjectUrl = nextUrl;
+  elements.camera.onerror = () => {
+    if (cameraObjectUrl === nextUrl) {
+      URL.revokeObjectURL(nextUrl);
+      cameraObjectUrl = '';
+    }
+    setCameraReconnecting('Camera frame decode failed; resyncing…');
+  };
+  elements.camera.src = nextUrl;
+  if (previousUrl) URL.revokeObjectURL(previousUrl);
+  cameraHasFrame = true;
+  cameraRetryDelay = 500;
+  const captured = new Date(frame.capturedAt * 1000);
+  document.getElementById('camera-clip-time').textContent =
+    `Clip ${captured.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+  document.getElementById('camera-clip-time').dataset.capturedAt = String(frame.capturedAt);
+  document.getElementById('camera-clip-time').hidden = false;
+  setCameraLatency(frame.capturedAt);
+  setCameraStatus(true, 'Live from the Hsx host');
+}
+
+function setCameraReconnecting(message) {
+  elements.cameraStatus.textContent = message;
+  elements.cameraBadge.classList.remove('camera-badge-online', 'camera-badge-offline');
+  elements.cameraBadge.classList.add('camera-badge-reconnecting');
+  elements.cameraBadge.replaceChildren();
+  const dot = document.createElement('span');
+  dot.className = 'connection-dot';
+  const label = document.createElement('span');
+  label.textContent = 'Reconnecting';
+  elements.cameraBadge.append(dot, label);
+  setConnection('camera-dot', 'camera-state', 'Reconnecting', 'warning');
+  elements.camera.hidden = !cameraHasFrame;
+  elements.cameraPlaceholder.hidden = cameraHasFrame;
+  if (!cameraHasFrame) setCameraLatency(null);
+}
+
+function stopCameraStream() {
+  if (cameraReconnectTimer) {
+    window.clearTimeout(cameraReconnectTimer);
+    cameraReconnectTimer = null;
+  }
+  if (cameraStreamController) {
+    cameraStreamController.abort();
+    cameraStreamController = null;
+  }
+}
+
+function scheduleCameraReconnect() {
+  if (!cameraAvailable || document.hidden || !navigator.onLine || cameraReconnectTimer) return;
+  setCameraReconnecting('Video paused; reconnecting to the latest frame…');
+  cameraReconnectTimer = window.setTimeout(() => {
+    cameraReconnectTimer = null;
+    startCameraStream();
+  }, cameraRetryDelay);
+  cameraRetryDelay = Math.min(cameraRetryDelay * 2, 8000);
+}
+
+async function startCameraStream() {
+  if (!cameraAvailable || document.hidden || !navigator.onLine || cameraStreamController || cameraReconnectTimer) return;
+  const controller = new AbortController();
+  cameraStreamController = controller;
+  cameraStreamStartedAt = Date.now();
+  try {
+    const requestStartedAt = Date.now();
+    const response = await apiFetch(apiContract.endpoints.camera_stream, { signal: controller.signal });
+    if (!response.ok || !response.body) throw new Error('Camera stream unavailable.');
+    const serverTime = Number(response.headers.get('X-Hsx-Server-Time'));
+    if (Number.isFinite(serverTime) && serverTime > 0) {
+      cameraClockOffsetMs = serverTime * 1000 - ((requestStartedAt + Date.now()) / 2);
+    }
+    const reader = response.body.getReader();
+    let buffer = new Uint8Array();
+    while (!controller.signal.aborted) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error('Camera stream ended.');
+      buffer = concatenateBytes(buffer, value);
+      while (true) {
+        const frame = takeCameraFrame(buffer);
+        if (!frame) break;
+        buffer = frame.remaining;
+        showCameraFrame(frame);
+      }
+      if (buffer.length > 2 * 1024 * 1024 + 16_384) {
+        throw new Error('Camera stream is out of sync.');
+      }
+    }
+  } catch {
+    if (!controller.signal.aborted) scheduleCameraReconnect();
+  } finally {
+    if (cameraStreamController === controller) cameraStreamController = null;
+    if (!controller.signal.aborted && cameraAvailable) scheduleCameraReconnect();
+  }
+}
+
+function updateCameraClock() {
+  document.getElementById('camera-clock').textContent = new Date().toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+  if (cameraHasFrame) {
+    const clip = Number(document.getElementById('camera-clip-time').dataset.capturedAt);
+    if (Number.isFinite(clip)) setCameraLatency(clip);
+  }
+  const currentDelayMs = cameraHasFrame
+    ? Date.now() + cameraClockOffsetMs - Number(document.getElementById('camera-clip-time').dataset.capturedAt) * 1000
+    : Date.now() - cameraStreamStartedAt;
+  if (
+    cameraAvailable
+    && cameraStreamController
+    && !document.hidden
+    && currentDelayMs > 5000
+  ) {
+    cameraStreamController.abort();
+    cameraStreamController = null;
+    scheduleCameraReconnect();
+  }
+}
+
+function tailnetStatus() {
+  const hostname = window.location.hostname.toLowerCase();
+  if (hostname.endsWith('.ts.net')) return { label: 'Active', state: 'connected' };
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+    return { label: 'Local access', state: 'warning' };
+  }
+  return { label: 'Not in use', state: 'warning' };
+}
+
+async function refreshConnections() {
+  const tailnet = tailnetStatus();
+  setConnection('tailnet-dot', 'tailnet-state', tailnet.label, tailnet.state);
+  const online = navigator.onLine;
+  setConnection('internet-dot', 'internet-state', online ? 'Online' : 'Offline', online ? 'connected' : 'disconnected');
+  try {
+    const [healthResponse, telemetryResponse] = await Promise.all([
+      apiFetch(apiContract.endpoints.health),
+      apiFetch(apiContract.endpoints.telemetry),
+    ]);
+    if (healthResponse.status === 401) {
+      setConnection('api-dot', 'api-state', 'Token needed', 'warning');
+      elements.connection.textContent = 'Token needed';
+      setConnection('llm-dot', 'llm-state', 'Locked', 'warning');
+      document.getElementById('provider-chip').textContent = 'Access token needed';
+      document.getElementById('connection-summary').textContent = 'Enter token to connect';
+      await refreshCamera();
+      return;
+    }
+    setConnection('api-dot', 'api-state', healthResponse.ok ? 'Online' : 'Offline', healthResponse.ok ? 'connected' : 'disconnected');
+    elements.connection.replaceChildren();
+    const connectionDot = document.createElement('span');
+    connectionDot.className = 'connection-dot';
+    connectionDot.dataset.state = healthResponse.ok ? 'connected' : 'disconnected';
+    elements.connection.append(connectionDot, document.createTextNode(healthResponse.ok ? ' Connected' : ' Offline'));
+    if (telemetryResponse.ok) {
+      const telemetry = await telemetryResponse.json();
+      const provider = String(telemetry.provider || 'not connected');
+      const model = String(telemetry.model || '');
+      const available = !['not connected', ''].includes(provider.toLowerCase());
+      const label = available ? `${provider}${model && model !== '—' ? ` · ${model}` : ''}` : 'Standby';
+      setConnection('llm-dot', 'llm-state', available ? 'Used' : 'Standby', available ? 'connected' : 'warning');
+      document.getElementById('provider-chip').textContent = available ? label : 'Provider standby';
+    } else {
+      setConnection('llm-dot', 'llm-state', 'Unavailable', 'disconnected');
+      document.getElementById('provider-chip').textContent = 'Provider unavailable';
+    }
+    const healthy = healthResponse.ok;
+    document.getElementById('connection-summary').textContent = healthy ? 'Host reachable' : 'Offline';
+  } catch {
+    setConnection('api-dot', 'api-state', 'Offline', 'disconnected');
+    setConnection('llm-dot', 'llm-state', 'Unavailable', 'disconnected');
+    elements.connection.replaceChildren();
+    const connectionDot = document.createElement('span');
+    connectionDot.className = 'connection-dot';
+    connectionDot.dataset.state = 'disconnected';
+    elements.connection.append(connectionDot, document.createTextNode(' Offline'));
+    document.getElementById('provider-chip').textContent = 'Provider unavailable';
+    document.getElementById('connection-summary').textContent = 'Offline';
+  }
+  await refreshCamera();
 }
 
 async function stopTask() {
   try {
     await apiFetch(apiContract.endpoints.stop, { method: 'POST' });
-  } catch (error) {
-    appendMessage('assistant', `Could not stop the task: ${error.message}`);
+  } catch {
+    elements.composerStatus.textContent = 'The stop request could not reach Hsx.';
   }
+}
+
+function resetConversation() {
+  sessionId = makeSessionId();
+  persistSessionId();
+  pendingQuestion = null;
+  uploadedAttachments = [];
+  elements.stream.querySelectorAll('.message-card, .approval-card, .activity-card').forEach((item) => item.remove());
+  elements.welcome.hidden = false;
+  elements.prompt.value = '';
+  renderAttachments();
+  persistDraft();
+  elements.prompt.focus();
+}
+
+function setupTokenControls() {
+  const tokenButton = document.getElementById('access-token-button');
+  tokenButton.addEventListener('click', () => {
+    elements.tokenForm.hidden = !elements.tokenForm.hidden;
+    if (!elements.tokenForm.hidden) elements.tokenInput.focus();
+  });
+  elements.tokenForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    bearerToken = elements.tokenInput.value.trim();
+    if (bearerToken && !safeStorageSet('sessionStorage', 'hsx-bearer-token', bearerToken)) {
+      elements.composerStatus.textContent = 'Token is active for this page only; session storage is unavailable.';
+    } else if (!bearerToken) {
+      try { window.sessionStorage.removeItem('hsx-bearer-token'); } catch { /* Storage is optional. */ }
+    }
+    elements.tokenInput.value = '';
+    elements.tokenForm.hidden = true;
+    refreshConnections();
+  });
+  document.getElementById('clear-token-button').addEventListener('click', () => {
+    bearerToken = '';
+    try { window.sessionStorage.removeItem('hsx-bearer-token'); } catch { /* Storage is optional. */ }
+    elements.tokenInput.value = '';
+    elements.tokenForm.hidden = true;
+    refreshConnections();
+  });
 }
 
 async function initialize() {
@@ -405,9 +874,24 @@ async function initialize() {
     fetch('/web/design-tokens.json'),
     fetch('/web/api-contract.json'),
   ]);
-  if (!tokensResponse.ok || !contractResponse.ok) throw new Error('Could not load the HSX interface contract.');
-  updateDesignTokens(await tokensResponse.json());
+  if (!tokensResponse.ok || !contractResponse.ok) throw new Error('Could not load the Hsx interface contract.');
   apiContract = await contractResponse.json();
+  persistSessionId();
+  setupTokenControls();
+  const draft = safeStorageGet('sessionStorage', `hsx-draft-${sessionId}`);
+  const storedAttachments = safeStorageGet('sessionStorage', `hsx-attachments-${sessionId}`);
+  if (storedAttachments) {
+    try {
+      uploadedAttachments = JSON.parse(storedAttachments).filter(
+        (item) => item && item.status === 'ready' && typeof item.path === 'string',
+      );
+      renderAttachments();
+    } catch {
+      uploadedAttachments = [];
+    }
+  }
+  if (draft) elements.prompt.value = draft;
+
   const pendingResponse = await apiFetch(
     `${apiContract.endpoints.ask_pending}?session_id=${encodeURIComponent(sessionId)}`,
   );
@@ -426,7 +910,7 @@ async function initialize() {
     submitPrompt();
   });
   elements.prompt.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       elements.composer.requestSubmit();
     }
@@ -434,19 +918,66 @@ async function initialize() {
   elements.prompt.addEventListener('input', () => {
     elements.prompt.style.height = 'auto';
     elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 180)}px`;
+    persistDraft();
   });
   elements.stop.addEventListener('click', stopTask);
-  initializeCameraFeed();
+  document.getElementById('attach-button').addEventListener('click', () => elements.fileInput.click());
+  document.getElementById('browse-files-button').addEventListener('click', () => elements.fileInput.click());
+  elements.fileInput.addEventListener('change', async () => {
+    await uploadFiles([...elements.fileInput.files]);
+    elements.fileInput.value = '';
+  });
   document.querySelectorAll('[data-prompt]').forEach((button) => {
     button.addEventListener('click', () => {
       elements.prompt.value = button.dataset.prompt;
       elements.prompt.focus();
+      persistDraft();
     });
   });
-  await refreshTelemetry();
-  window.setInterval(refreshTelemetry, 2500);
+  document.getElementById('new-chat-button').addEventListener('click', resetConversation);
+
+  for (const eventName of ['dragenter', 'dragover']) {
+    elements.composer.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      elements.dropHint.hidden = false;
+    });
+  }
+  for (const eventName of ['dragleave', 'drop']) {
+    elements.composer.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      elements.dropHint.hidden = true;
+      if (eventName === 'drop' && event.dataTransfer?.files.length) uploadFiles([...event.dataTransfer.files]);
+    });
+  }
+  window.addEventListener('online', refreshConnections);
+  window.addEventListener('offline', () => {
+    stopCameraStream();
+    if (cameraAvailable) setCameraReconnecting('Network offline; waiting to reconnect…');
+    refreshConnections();
+  });
+  window.addEventListener('pagehide', stopCameraStream);
+  window.addEventListener('pageshow', () => {
+    if (!document.hidden) refreshConnections();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      stopCameraStream();
+    } else {
+      cameraRetryDelay = 500;
+      refreshConnections();
+    }
+  });
+  await refreshConnections();
+  window.setInterval(refreshConnections, 15000);
+  updateCameraClock();
+  window.setInterval(updateCameraClock, 1000);
 }
 
-initialize().catch((error) => {
-  elements.connection.textContent = error.message;
+initialize().catch(() => {
+  elements.connection.replaceChildren();
+  const connectionDot = document.createElement('span');
+  connectionDot.className = 'connection-dot';
+  connectionDot.dataset.state = 'disconnected';
+  elements.connection.append(connectionDot, document.createTextNode(' Offline'));
+  document.getElementById('connection-summary').textContent = 'Offline';
 });

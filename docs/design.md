@@ -1,52 +1,76 @@
 # Hsx shared design language
 
-This file is the source of truth for the UI system that powers both the browser client and the terminal client.
+Hsx is the product name for both the browser workspace and terminal client. The
+browser layout is inspired by the quiet, focused chat patterns common to desktop and
+mobile assistants, with Hsx-specific branding and only controls backed by this repo's
+API.
 
-## Product name and tone
+## Brand and layout
 
-- Name: Hsx
-- Default theme: dark
-- Optional themes: light and auto
-- Shared UI words: Chat, Files, Artifacts, Jobs, Settings
-- Shared status chips: Ready, Thinking, Using a tool, Waiting for you, Offline, Reconnecting
+- Hsx uses a subdued forest-and-stone dark theme with a custom Hsx mark.
+- Desktop uses a navigation and connection-status rail, a central chat, and a
+  right-hand host-camera panel.
+- On narrow screens the navigation and camera rail collapse so the composer and chat
+  remain usable; the host camera is never substituted with the phone's camera.
+- The navigation only presents chat and file attachment actions supported by the
+  current web client. Unsupported artifact/history/settings panels are not presented
+  as working features.
+- The connection rail reports API health, last-used LLM provider, host camera health,
+  the current Tailnet access path, and the browser's network-online hint. “Standby”
+  means there has not yet been a provider call; it is not a provider health check.
 
 ## Palette tokens
 
-The browser CSS variables and the terminal styles should map to the same semantic tokens:
+The semantic browser tokens and terminal colors are maintained in
+[`web/design-tokens.json`](../web/design-tokens.json):
 
-- background: `#0b1220`
-- surface: `#111b2e`
-- text: `#e6f0ff`
-- muted: `#8fa4bf`
-- accent: `#38bdf8`
-- success: `#34d399`
-- warning: `#fbbf24`
-- danger: `#fb7185`
+- background: `#111513`
+- surface: `#1c231e`
+- raised surface: `#242d28`
+- text: `#edf2eb`
+- muted: `#9aa79d`
+- accent: `#b2d8b7`
+- success: `#87c99a`
+- warning: `#e6bd77`
+- danger: `#e28e88`
 
-These values are intentionally high-contrast and WCAG-friendly for dark mode, with a light theme that preserves the same semantics rather than a different visual language.
+The browser uses the same semantic values in CSS. Focus indicators, touch-sized
+controls, responsive sizing, and reduced-motion behavior are part of the design.
 
-## Approval and user prompts
+## Chat and attachments
 
-Approvals and ask-user cards must use plain English. They must not show raw JSON, internal payloads, or `waiting_approval` strings. The same wording is used in both the browser and terminal clients.
+- Enter sends on desktop; Shift+Enter inserts a newline. The textarea grows to a
+  bounded height and remains visible above the mobile keyboard.
+- The file picker accepts text, Markdown, CSV, JSON, log, and code/text formats up to
+  1 MB. Uploads go through `/api/upload` and are stored inside the Hsx workspace.
+  Unsupported binary files are not advertised as attachable.
+- Uploaded file paths are included with the prompt so workspace tools can read the
+  uploaded files. Draft text and attachment references are scoped to the current
+  browser tab.
+- Assistant output is sanitized before Markdown display. Copy uses the Clipboard API;
+  feedback controls call the existing feedback endpoint.
+- Stop uses the existing server stop endpoint. A new chat creates a new session ID;
+  it does not claim to provide a server-side conversation-history browser.
 
-Example format:
+## Host camera and connections
 
-- `HSX > I need your permission to run the tool 'tool_name'. Would you like to proceed? (Yes/No)`
-- `Yes`, `Y`, `I understand, proceed`, and `Proceed` authorize.
-- `No`, `N`, `Cancel`, and `Stop` reject.
+The camera panel reads the host camera status and a timestamped MJPEG stream from
+authenticated API endpoints. It never requests browser camera permission and clearly
+shows Offline when the host capture service or device is unavailable. The overlay shows
+the capture time for the displayed frame; the metrics show local current time and
+estimated delay, corrected using the server clock response. If the tab is hidden, the
+network drops, or frames stop arriving, the client aborts the old stream and reconnects
+with bounded backoff to the latest host frame.
 
-## UI status behavior
+Remote bearer tokens are optional, entered through the access-token control, sent only
+in the Authorization header, and kept in sessionStorage for the current tab. The
+static UI shell is available to Tailnet peers so they can enter the token; API routes
+remain bearer-protected. The Tailnet indicator describes whether the page is currently served from a `.ts.net`
+hostname; the browser network indicator uses `navigator.onLine` and is not a host-side
+internet reachability test.
 
-- Ready: the agent is idle and waiting for the next request.
-- Thinking: the agent is generating a completion or evaluating a task.
-- Using a tool: a tool call is in flight.
-- Waiting for you: the task is paused for clarification or approval.
-- Offline: the server is unreachable.
-- Reconnecting: the client is retrying the connection after a disconnect.
+## Approval and prompts
 
-## Layout principles
-
-- Mobile-first, responsive shell from 360px to desktop widths.
-- Small, high-contrast chips with accessible 44px touch targets.
-- Keep telemetry and internals in a Details popover rather than the primary conversation surface.
-- Use the same interaction steps everywhere: ask, approve, act, then summarize.
+Approvals and ask-user prompts use plain English and do not expose raw JSON or internal
+payloads. The same approval language is used by the terminal client. Yes-like answers
+authorize only the pending request; no-like answers decline it.

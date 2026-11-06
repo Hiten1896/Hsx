@@ -103,10 +103,23 @@ def _request_stream(path: str, payload: dict) -> dict:
 def _show_approval(job: dict) -> None:
     approval = job.get("approval") or {}
     approval_request = job.get("approval_request") or {}
-    if approval_request.get("status") == "waiting_approval":
-        tool_name = approval_request.get("tool") or approval.get("tool") or "tool"
+    direct_status = job.get("status")
+    direct_tool = job.get("tool") or job.get("tool_name")
+    direct_details = job.get("details")
+    raw_waiting_approval = direct_status == "waiting_approval" or approval_request.get("status") == "waiting_approval"
+    if raw_waiting_approval:
+        tool_name = (
+            approval_request.get("tool")
+            or approval.get("tool")
+            or direct_tool
+            or "tool"
+        )
         print(f"HSX > I need your permission to run the tool '{tool_name}'. Would you like to proceed? (Yes/No)")
-        details = approval_request.get("details") or approval.get("details")
+        details = (
+            approval_request.get("details")
+            or approval.get("details")
+            or direct_details
+        )
         if details:
             print(f"Details: {details}")
         return
@@ -120,14 +133,18 @@ def _show_approval(job: dict) -> None:
     print("Reply: yes / no / details")
 
 
+def _canonical_answer(answer: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", answer.strip().casefold()).strip()
+
+
 def _approval_is_yes(answer: str) -> bool:
-    normalized = answer.strip().casefold()
-    yes_values = {"yes", "y", "i understand, proceed", "i understand", "proceed", "approve", "ok"}
+    normalized = _canonical_answer(answer)
+    yes_values = {"yes", "y", "i understand proceed", "i understand", "proceed", "approve", "ok"}
     return normalized in yes_values or normalized.startswith("yes ") or normalized.startswith("i understand")
 
 
 def _approval_is_no(answer: str) -> bool:
-    normalized = answer.strip().casefold()
+    normalized = _canonical_answer(answer)
     no_values = {"no", "n", "cancel", "cancelled", "stop"}
     return normalized in no_values or normalized.startswith("no ") or normalized.startswith("cancel ")
 

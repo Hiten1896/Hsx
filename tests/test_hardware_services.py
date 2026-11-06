@@ -72,7 +72,7 @@ def test_mjpeg_api_streams_without_an_agent_job(monkeypatch):
 
     class FakeCamera:
         def latest_frame(self):
-            return CameraFrame(1, jpeg, monotonic())
+            return CameraFrame(1, jpeg, monotonic(), 1234.5)
 
         def wait_for_frame(self, _version, timeout=3.0):
             return None
@@ -90,11 +90,15 @@ def test_mjpeg_api_streams_without_an_agent_job(monkeypatch):
             assert response.status == 200
             assert response.headers["Content-Type"] == "multipart/x-mixed-replace; boundary=frame"
         assert b"--frame\r\n" in body
+        assert b"X-Hsx-Captured-At: 1234.500000\r\n\r\n" in body
         assert jpeg in body
     finally:
         httpd.shutdown()
         thread.join(timeout=3)
         httpd.server_close()
+
+
+
 
 
 def test_motion_monitor_writes_headless_config_and_bounds_snapshots(tmp_path):

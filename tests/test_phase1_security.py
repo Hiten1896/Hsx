@@ -100,6 +100,18 @@ def test_tailscale_peer_requires_and_accepts_bearer_token(monkeypatch, peer):
     assert handler._api_access_allowed()
 
 
+def test_tailscale_peer_can_load_public_ui_shell_before_entering_token(monkeypatch):
+    monkeypatch.setattr(server, "REMOTE_ACCESS_TOKEN", "test-remote-access-token-value-long-enough")
+    monkeypatch.setattr(server, "MESH_GATEWAY", None)
+    handler = server.HsxHandler.__new__(server.HsxHandler)
+    handler.client_address = ("100.64.0.4", 1234)
+    handler.command = "GET"
+    handler.path = "/web/"
+    handler.headers = {}
+
+    assert handler._api_access_allowed()
+
+
 def test_tailscale_peer_rejects_missing_or_invalid_bearer_token(monkeypatch):
     token = "test-remote-access-token-value-long-enough"
     monkeypatch.setattr(server, "REMOTE_ACCESS_TOKEN", token)

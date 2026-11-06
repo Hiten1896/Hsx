@@ -58,6 +58,28 @@ def test_resume_routes_next_message_to_existing_approval(monkeypatch, capsys):
     assert "waiting_approval" not in output and "{" not in output
 
 
+def test_show_approval_handles_flat_waiting_approval_response(capsys):
+    cli._show_approval({
+        "status": "waiting_approval",
+        "tool": "create_text_file",
+        "details": "create new note.txt",
+        "allowed": False,
+    })
+    output = capsys.readouterr().out
+    assert "I need your permission to run the tool 'create_text_file'" in output
+    assert "Would you like to proceed? (Yes/No)" in output
+    assert "waiting_approval" not in output
+    assert "{" not in output and "}" not in output
+
+
+def test_cli_accepts_yes_no_variants():
+    assert cli._approval_is_yes("Yes")
+    assert cli._approval_is_yes("I understand, proceed")
+    assert cli._approval_is_yes("Y")
+    assert cli._approval_is_no("No")
+    assert cli._approval_is_no("Cancel")
+
+
 def test_cli_sends_local_target_and_does_not_send_policy_overrides(monkeypatch, capsys):
     requests = []
 

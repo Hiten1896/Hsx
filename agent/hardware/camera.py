@@ -23,6 +23,7 @@ class CameraFrame:
     version: int
     data: bytes
     captured_at: float
+    captured_at_wall: float = 0.0
 
 
 class CameraService:
@@ -175,7 +176,12 @@ class CameraService:
             return
         with self._condition:
             previous_version = self._frame.version if self._frame else 0
-            self._frame = CameraFrame(previous_version + 1, data, time.monotonic())
+            self._frame = CameraFrame(
+                previous_version + 1,
+                data,
+                time.monotonic(),
+                time.time(),
+            )
             self._last_error = ""
             self._condition.notify_all()
 
