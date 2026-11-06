@@ -911,7 +911,11 @@ async function submitPrompt() {
           appendMessage('assistant', text, data.id, { prompt: requestMessage });
         }
       } else if (event === 'error') {
+        setBusy(false);
         throw new Error(data.message || 'The task failed.');
+      } else if (event === 'done' && activeChatController === controller) {
+        setBusy(false);
+        elements.prompt.focus();
       }
     });
     if (!assistantCard && currentJob && currentJob.state === 'running') {
@@ -928,6 +932,7 @@ async function submitPrompt() {
     safeStorageSet('sessionStorage', `hsx-draft-${sessionId}`, '');
   } catch (error) {
     activity?.remove();
+    if (activeChatController === controller) setBusy(false);
     if (controller.signal.aborted) {
       appendMessage('assistant', 'Task stopped. Your draft was kept.');
       elements.composerStatus.textContent = 'Task stopped. Your draft was kept.';
@@ -1006,7 +1011,9 @@ async function refreshCamera() {
         URL.revokeObjectURL(cameraObjectUrl);
         cameraObjectUrl = '';
       }
-      setCameraStatus(false, 'Set the remote access token to view the host camera.');
+      elements.camera.removeAttribute('src');
+      setCameraStatus(false, 'Camera feed offline');
+      scheduleCameraReconnect();
       return;
     }
     const connected = response.ok && data.running === true;
@@ -1025,13 +1032,13 @@ async function refreshCamera() {
       }
       document.getElementById('camera-clip-time').textContent = 'Waiting for video';
       setCameraLatency(null);
-      setCameraStatus(false, data.device_available === false
-        ? 'No host camera device is available.'
-        : 'Host camera capture is not running.');
+      setCameraStatus(false, 'Camera feed offline');
+      scheduleCameraReconnect();
     }
   } catch {
-    if (cameraHasFrame) setCameraReconnecting('Camera status unavailable; reconnecting…');
-    else setCameraStatus(false, 'Camera status is unavailable. Click to retry.');
+    if (cameraHasFrame) setCameraReconnecting('Camera feed offline; retrying…');
+    else setCameraStatus(false, 'Camera feed offline');
+    scheduleCameraReconnect();
   }
 }
 
@@ -1097,6 +1104,7 @@ function setCameraLatency(capturedAt) {
 }
 
 function showCameraFrame(frame) {
+  if (!cameraEnabled) return;
   const nextUrl = URL.createObjectURL(new Blob([frame.data], { type: 'image/jpeg' }));
   const previousUrl = cameraObjectUrl;
   cameraObjectUrl = nextUrl;
@@ -1152,11 +1160,12 @@ function stopCameraStream() {
 }
 
 function scheduleCameraReconnect() {
-  if (!cameraAvailable || document.hidden || !navigator.onLine || cameraReconnectTimer) return;
-  setCameraReconnecting('Video paused; reconnecting to the latest frame…');
+  if (!cameraEnabled || document.hidden || !navigator.onLine || cameraReconnectTimer) return;
+  if (cameraHasFrame) setCameraReconnecting('Video paused; reconnecting to the latest frame…');
+  else setCameraStatus(false, 'Camera feed offline');
   cameraReconnectTimer = window.setTimeout(() => {
     cameraReconnectTimer = null;
-    startCameraStream();
+    refreshCamera();
   }, cameraRetryDelay);
   cameraRetryDelay = Math.min(cameraRetryDelay * 2, 8000);
 }
@@ -1178,12 +1187,15 @@ async function startCameraStream() {
     if (response.status === 401) {
       cameraAvailable = false;
       cameraHasFrame = false;
-      setCameraStatus(false, 'Camera access token was rejected. Update the token and reconnect.');
+      setCameraStatus(false, 'Camera feed offline');
+      scheduleCameraReconnect();
       return;
     }
     if (!response.ok || !response.body) {
-      setCameraReconnecting('Camera stream unavailable; reconnecting…');
-      throw new Error('Camera stream unavailable.');
+      cameraAvailable = false;
+      setCameraStatus(false, 'Camera feed offline');
+      scheduleCameraReconnect();
+      return;
     }
     const serverTime = Number(response.headers.get('X-Hsx-Server-Time'));
     if (Number.isFinite(serverTime) && serverTime > 0) {

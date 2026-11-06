@@ -391,7 +391,7 @@ class AskUserJobs:
             connection.execute(
                 """UPDATE ask_jobs SET state = 'waiting_for_approval', approval_id = ?,
                 approval_json = ?, checkpoint = ?, tool_call_id = ?, error = '',
-                expires_at = ?, updated = ? WHERE id = ?""",
+                expires_at = ?, updated = ? WHERE id = ? AND state = 'running'""",
                 (
                     approval_id,
                     json.dumps(approval),
@@ -441,30 +441,32 @@ class AskUserJobs:
         now = self._now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute("SELECT question_count FROM ask_jobs WHERE id = ?", (job_id,)).fetchone()
+            row = connection.execute("SELECT question_count, state FROM ask_jobs WHERE id = ?", (job_id,)).fetchone()
             if row is None:
                 raise KeyError("Question job not found.")
-            if row["question_count"] >= 3:
-                connection.execute(
-                    "UPDATE ask_jobs SET state = 'cancelled', error = ?, updated = ? WHERE id = ?",
-                    ("The job was cancelled because it reached the three-question limit.", now.isoformat(), job_id),
-                )
-            else:
-                connection.execute(
-                    """UPDATE ask_jobs SET question = ?, options = ?, allow_free_text = ?,
-                    question_count = question_count + 1, state = 'waiting_for_user',
-                    tool_call_id = ?, checkpoint = ?, expires_at = ?, updated = ? WHERE id = ?""",
-                    (
-                        question.question,
-                        json.dumps(question.options),
-                        int(question.allow_free_text),
-                        question.tool_call_id,
-                        json.dumps(question.checkpoint),
-                        (now + timedelta(hours=question.timeout_hours)).isoformat(),
-                        now.isoformat(),
-                        job_id,
-                    ),
-                )
+            if row["state"] == "running":
+                if row["question_count"] >= 3:
+                    connection.execute(
+                        "UPDATE ask_jobs SET state = 'cancelled', error = ?, updated = ? WHERE id = ?",
+                        ("The job was cancelled because it reached the three-question limit.", now.isoformat(), job_id),
+                    )
+                else:
+                    connection.execute(
+                        """UPDATE ask_jobs SET question = ?, options = ?, allow_free_text = ?,
+                        question_count = question_count + 1, state = 'waiting_for_user',
+                        tool_call_id = ?, checkpoint = ?, expires_at = ?, updated = ?
+                        WHERE id = ? AND state = 'running'""",
+                        (
+                            question.question,
+                            json.dumps(question.options),
+                            int(question.allow_free_text),
+                            question.tool_call_id,
+                            json.dumps(question.checkpoint),
+                            (now + timedelta(hours=question.timeout_hours)).isoformat(),
+                            now.isoformat(),
+                            job_id,
+                        ),
+                    )
             updated = connection.execute("SELECT * FROM ask_jobs WHERE id = ?", (job_id,)).fetchone()
         return self._public(updated)
 
@@ -472,10 +474,38 @@ class AskUserJobs:
         with self._connect() as connection:
             connection.execute(
                 """UPDATE ask_jobs SET state = 'done', result = ?, device_actions = ?,
-                approval_json = '{}', approval_id = '', error = '', updated = ? WHERE id = ?""",
+                approval_json = '{}', approval_id = '', error = '', updated = ?
+                WHERE id = ? AND state = 'running'""",
                 (json.dumps(result), json.dumps(device_actions or []), self._now().isoformat(), job_id),
             )
         return self.get(job_id)
+
+    def cancel_running(self, reason: str = "The job was stopped by the kill switch.") -> list[dict]:
+        now = self._now().isoformat()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                "SELECT id FROM ask_jobs WHERE state = 'running'"
+            ).fetchall()
+            job_ids = [row["id"] for row in rows]
+            if job_ids:
+                placeholders = ",".join("?" for _ in job_ids)
+                connection.execute(
+                    f"""UPDATE ask_jobs SET state = 'cancelled', error = ?,
+                    approval_json = '{{}}', approval_id = '', updated = ?
+                    WHERE state = 'running' AND id IN ({placeholders})""",
+                    (reason[:1000], now, *job_ids),
+                )
+            updated = [
+                self._public(row)
+                for row in connection.execute(
+                    "SELECT * FROM ask_jobs WHERE id IN ("
+                    + ",".join("?" for _ in job_ids)
+                    + ")",
+                    job_ids,
+                ).fetchall()
+            ] if job_ids else []
+        return updated
 
     def save_device_actions(self, job_id: str, device_actions: list[dict]) -> None:
         with self._connect() as connection:
@@ -487,7 +517,8 @@ class AskUserJobs:
     def fail(self, job_id: str, error: str) -> dict:
         with self._connect() as connection:
             connection.execute(
-                "UPDATE ask_jobs SET state = 'failed', approval_json = '{}', approval_id = '', error = ?, updated = ? WHERE id = ?",
+                """UPDATE ask_jobs SET state = 'failed', approval_json = '{}',
+                approval_id = '', error = ?, updated = ? WHERE id = ? AND state = 'running'""",
                 (error[:1000], self._now().isoformat(), job_id),
             )
         return self.get(job_id)

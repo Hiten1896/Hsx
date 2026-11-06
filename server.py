@@ -345,6 +345,8 @@ def _fail_job(
         LOGGER.exception("Could not save uncertain intent failure for job %s.", job_id)
     LOGGER.exception("HSX job %s failed during agent execution: %s", job_id, error_message)
     failed = ASK_JOBS.fail(job_id, error_message)
+    if failed and failed["state"] == "cancelled":
+        return
     if started_at is not None:
         _record_job_telemetry(
             job,
@@ -646,6 +648,8 @@ def _run_chat_job(
         ASK_JOBS.save_device_actions(job_id, device_actions)
         _emit_chat_event(job_id, "job", _ask_job_payload(updated))
         _emit_chat_event(job_id, "done", {})
+        if updated["state"] != "waiting_for_approval":
+            return
         POLICY.audit_event(
             "approval_requested",
             job["session_id"],
@@ -660,6 +664,8 @@ def _run_chat_job(
         ASK_JOBS.save_device_actions(job_id, device_actions)
         _emit_chat_event(job_id, "job", _ask_job_payload(updated))
         _emit_chat_event(job_id, "done", {})
+        if updated["state"] == "cancelled":
+            return
         if updated["state"] == "waiting_for_user":
             POLICY.audit_event("needs_input", job["session_id"], job_id, "waiting_for_user")
             NOTIFIER.notify(
@@ -678,8 +684,13 @@ def _run_chat_job(
     except Exception as error:
         _fail_job(job_id, job, error, stream=True, started_at=started_at)
         return
+    latest = ASK_JOBS.get(job_id)
+    if latest is None or latest["state"] != "running":
+        return
     SESSION_HISTORIES[job["session_id"]] = updated_history
-    ASK_JOBS.complete(job_id, response, device_actions)
+    completed = ASK_JOBS.complete(job_id, response, device_actions)
+    if completed is None or completed["state"] != "done":
+        return
     _record_job_telemetry(
         job,
         time.perf_counter() - started_at,
@@ -1194,7 +1205,17 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"response": "", "job": _ask_job_payload(job)}, 202)
         elif path == "/api/stop":
             POLICY.stop_all()
-            self._json({"success": True, "stopped": True})
+            stopped_jobs = ASK_JOBS.cancel_running()
+            for stopped_job in stopped_jobs:
+                _emit_chat_event(stopped_job["id"], "job", _ask_job_payload(stopped_job))
+                _emit_chat_event(stopped_job["id"], "done", {})
+                POLICY.audit_event(
+                    "job_cancelled",
+                    stopped_job["session_id"],
+                    stopped_job["id"],
+                    "cancelled",
+                )
+            self._json({"success": True, "stopped": True, "cancelled_jobs": len(stopped_jobs)})
         elif path == "/api/resume":
             POLICY.reset_stop()
             self._json({"success": True, "stopped": False})

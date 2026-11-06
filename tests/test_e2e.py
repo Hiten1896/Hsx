@@ -44,6 +44,39 @@ def test_health_allows_requests_without_token():
     assert body == b'{"status": "ok"}'
 
 
+def test_stop_endpoint_cancels_running_chat_and_closes_its_stream(tmp_path: Path, monkeypatch):
+    jobs = AskUserJobs(tmp_path / "jobs.db")
+    job = jobs.create_running("Long task", "session")
+    emitted = []
+    stopped = []
+
+    class FakePolicy:
+        def stop_all(self):
+            stopped.append(True)
+
+        def audit_event(self, *args):
+            emitted.append(("audit", *args))
+
+    monkeypatch.setattr(server, "ASK_JOBS", jobs)
+    monkeypatch.setattr(server, "POLICY", FakePolicy())
+    monkeypatch.setattr(
+        server,
+        "_emit_chat_event",
+        lambda job_id, event, payload: emitted.append((job_id, event, payload)),
+    )
+
+    status, _, body = _request("/api/stop", method="POST", payload={})
+
+    assert status == 200
+    assert json.loads(body)["cancelled_jobs"] == 1
+    assert stopped == [True]
+    assert jobs.get(job["id"])["state"] == "cancelled"
+    events = [item for item in emitted if len(item) == 3]
+    assert [item[1] for item in events] == ["job", "done"]
+    assert events[0][2]["id"] == job["id"]
+    assert events[0][2]["state"] == "cancelled"
+
+
 def test_healthz_reports_clock_and_api_security_headers():
     status, headers, body = _request("/healthz")
     assert status == 200

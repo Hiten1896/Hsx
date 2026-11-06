@@ -78,6 +78,19 @@ def test_target_device_survives_job_store_restart(tmp_path: Path):
     assert listed["device_actions"][0]["type"] == "audio_play"
 
 
+def test_kill_switch_cancellation_is_terminal_against_late_worker_result(tmp_path: Path):
+    jobs = AskUserJobs(tmp_path / "jobs.db")
+    running = jobs.create_running("Long task", "session")
+    completed = jobs.create_running("Another task", "session")
+
+    cancelled = jobs.cancel_running()
+
+    assert {job["id"] for job in cancelled} == {running["id"], completed["id"]}
+    assert jobs.get(running["id"])["state"] == "cancelled"
+    assert jobs.complete(running["id"], "Late result")["state"] == "cancelled"
+    assert jobs.fail(completed["id"], "Late error")["state"] == "cancelled"
+
+
 def test_agent_question_checkpoint_resumes_without_replaying_tool_call(tmp_path: Path, monkeypatch):
     from agent import orchestrator
     from skills.ask_user.skill import run as ask_user

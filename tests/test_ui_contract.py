@@ -286,6 +286,10 @@ def test_camera_is_lazy_and_run_state_resets_after_failure_or_stop():
     assert "const controller = new AbortController();\n      activeChatController = controller;\n      setBusy(true);" in script
     assert "async function pollQuestionJob(jobId, activity, signal)" in script
     assert "if (signal?.aborted) throw new DOMException('Task stopped.', 'AbortError');" in script
+    assert "setCameraStatus(false, 'Camera feed offline');" in script
+    assert ".sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;" in css
+    assert ".sidebar .connections { margin-top: auto; }" in css
+    assert ".sidebar-activity .artifacts-list, .chat-history-list {" in css
 
 
 def test_tui_has_native_feedback_buttons_with_shared_layout():
