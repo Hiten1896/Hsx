@@ -7,9 +7,12 @@
   --border: #243650;
   --text: #e6f0ff;
   --muted: #8fa4bf;
-  --blue: #38bdf8;
-  --teal: #2dd4bf;
+  --accent: #38bdf8;
+  --success: #34d399;
+  --warning: #fbbf24;
   --danger: #fb7185;
+  --blue: var(--accent);
+  --teal: var(--success);
   --code-background: #08101d;
   --font-body: Inter, "Segoe UI", sans-serif;
   --font-code: "JetBrains Mono", Consolas, monospace;
@@ -27,12 +30,16 @@ button, textarea, input { font: inherit; }
 button { cursor: pointer; }
 
 .app-shell { display: grid; grid-template-rows: var(--header-height, 64px) minmax(0, 1fr); height: 100dvh; }
-.status-header { display: flex; align-items: center; gap: 24px; padding: 0 28px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.status-header { display: flex; align-items: center; gap: 18px; padding: 0 28px; border-bottom: 1px solid var(--border); background: var(--surface); }
 .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; font-weight: 750; letter-spacing: .04em; }
-.brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #38bdf866; border-radius: 9px; color: var(--blue); background: #38bdf814; font-weight: 800; }
+.brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #38bdf866; border-radius: 9px; color: var(--accent); background: #38bdf814; font-weight: 800; }
 .brand-subtitle { margin-left: 5px; color: var(--muted); font: 10px var(--font-code); letter-spacing: .14em; }
+.status-cluster { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.status-chip { display: inline-flex; align-items: center; padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); background: var(--surface-raised); font: 10px var(--font-code); letter-spacing: .08em; text-transform: uppercase; }
+.status-chip-ready { border-color: rgba(52, 211, 153, 0.45); color: var(--success); }
+.status-chip-muted { color: var(--muted); }
 .connection-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font: 11px var(--font-code); white-space: nowrap; }
-.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 12px #2dd4bf99; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 12px rgba(52, 211, 153, 0.8); }
 .telemetry { display: flex; align-items: center; gap: 24px; margin-left: auto; }
 .metric { display: grid; gap: 4px; min-width: 78px; }
 .metric-label { color: var(--muted); font: 9px var(--font-code); letter-spacing: .1em; }
