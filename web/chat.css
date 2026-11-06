@@ -204,10 +204,10 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 .camera-badge-offline { color: #bd918b; }
 .camera-badge-reconnecting { color: var(--warning); border-color: #8d7449; }
 .camera-badge-reconnecting .connection-dot { background: var(--warning); }
-.camera-retry { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid #3b473e; border-radius: 9px; color: #c5d0c6; background: #242d27; }
-.camera-retry:hover { border-color: #708477; color: var(--text); }
-.camera-retry:disabled { cursor: progress; opacity: .55; }
-.camera-retry svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
+.panel-refresh { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid #3b473e; border-radius: 9px; color: #c5d0c6; background: #242d27; }
+.panel-refresh:hover { border-color: #708477; color: var(--text); }
+.panel-refresh:disabled { cursor: progress; opacity: .55; }
+.panel-refresh svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
 .camera-view { position: relative; display: grid; place-items: center; overflow: hidden; width: 100%; aspect-ratio: 16 / 9; background: #0c100e; }
 .camera-frame { display: block; width: 100%; height: 100%; object-fit: cover; background: #0c100e; }
 .camera-clip-time { position: absolute; bottom: 10px; left: 10px; padding: 5px 8px; border: 1px solid #ffffff24; border-radius: 6px; color: #f3f5f2; background: #080b09c9; font: 10px var(--font-code); }
@@ -224,8 +224,6 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 .artifacts-panel, .activity-panel { overflow: hidden; margin-top: 13px; border: 1px solid #354038; border-radius: 13px; background: #1c231e; }
 .artifacts-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 13px 15px; border-bottom: 1px solid #313a33; }
 .artifacts-heading h2 { margin: 5px 0 0; font-size: 13px; font-weight: 650; }
-.artifacts-refresh { width: 34px; height: 34px; border: 1px solid #3b473e; border-radius: 9px; color: #c5d0c6; background: #242d27; font-size: 19px; }
-.artifacts-refresh:hover { border-color: #708477; }
 .artifacts-list { display: grid; gap: 7px; padding: 10px; }
 .artifacts-empty { margin: 5px; color: #8d998f; font-size: 10px; line-height: 1.5; }
 .artifact-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 9px; border: 1px solid #303a33; border-radius: 9px; background: #202722; }

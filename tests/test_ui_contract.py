@@ -160,6 +160,8 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert 'id="artifacts-list"' in html
     assert 'id="agent-activity-list"' in html
     assert 'id="camera-retry"' in html
+    assert 'class="panel-refresh camera-retry"' in html
+    assert 'class="panel-refresh artifacts-refresh"' in html
     assert 'id="notifications-toggle"' in html
     assert 'id="notifications-panel"' in html
     assert 'id="activity-toggle"' in html
