@@ -248,12 +248,19 @@ def call_llm(
     if isinstance(providers, list):
         ranked_providers = PROVIDER_BANDIT.rank(providers, prefer_cloud=prefer_cloud)
         if required_provider:
-            router.providers = [
+            required = [
                 provider for provider in ranked_providers
                 if provider.name.lower() == required_provider.lower()
             ]
-            if not router.providers:
+            if not required:
                 raise RuntimeError(f"Required LLM provider is not configured: {required_provider}.")
+            # Images are Gemini-only, so retain the strict route for those.
+            # For text requests, keep the required provider first and allow
+            # the configured router fallbacks to handle quota/rate-limit errors.
+            router.providers = required if has_image_input else [
+                *required,
+                *(provider for provider in ranked_providers if provider not in required),
+            ]
         else:
             router.providers = ranked_providers
         router.provider_result_callback = PROVIDER_BANDIT.record_attempt

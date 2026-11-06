@@ -1774,6 +1774,33 @@ function formatElapsed(seconds) {
   return `${minutes}m ${remaining}s`;
 }
 
+function closeHeaderPopovers() {
+  const panels = [
+    [elements.notificationPanel, document.getElementById('notifications-toggle')],
+    [document.getElementById('connections-panel'), document.getElementById('connection-toggle')],
+  ];
+  for (const [panel, button] of panels) {
+    panel.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+  }
+}
+
+function toggleHeaderPopover(panel, button) {
+  const opening = panel.hidden;
+  closeHeaderPopovers();
+  panel.hidden = !opening;
+  button.setAttribute('aria-expanded', String(opening));
+  return opening;
+}
+
+function updateActivityElapsed() {
+  const now = Date.now();
+  elements.activityList.querySelectorAll('[data-elapsed-start]').forEach((node) => {
+    const started = Number(node.dataset.elapsedStart);
+    if (Number.isFinite(started)) node.textContent = formatElapsed((now - started) / 1000);
+  });
+}
+
 async function refreshAgentActivity() {
   const previousScrollTop = elements.activityList.scrollTop;
   const empty = document.createElement('p');
@@ -1796,6 +1823,7 @@ async function refreshAgentActivity() {
     for (const task of tasks) {
       const item = document.createElement('div');
       item.className = 'activity-item';
+      item.dataset.state = String(task.state || 'unknown');
       const summary = document.createElement('span');
       summary.className = 'activity-summary';
       summary.textContent = String(task.summary || 'Agent task');
@@ -1816,11 +1844,16 @@ async function refreshAgentActivity() {
         text.textContent = value;
         detail.append(key, text);
         item.append(detail);
+        return text;
       };
-      addDetail('Agent', `${task.agent_name || 'Hsx'} · ${task.agent_role || 'Assistant'}`);
-      addDetail('Working on', task.task_path || task.summary || 'Task details unavailable');
+      addDetail('Agent', `${task.agent_role || 'Assistant'} · ${task.agent_name || 'Hsx'}`);
+      addDetail('Sub-task', task.subtask || task.task_description || task.summary || 'Task details unavailable');
+      const targetPaths = Array.isArray(task.file_paths) ? task.file_paths.filter(Boolean).join(', ')
+        : (task.file_paths || task.task_path || 'No target path reported');
+      addDetail('Target', String(targetPaths));
       if (['running', 'queued'].includes(task.state)) {
-        addDetail('Elapsed', formatElapsed(Number(task.elapsed_seconds)));
+        const elapsed = addDetail('Elapsed', formatElapsed(Number(task.elapsed_seconds)));
+        elapsed.dataset.elapsedStart = String(Date.now() - Math.max(0, Number(task.elapsed_seconds) || 0) * 1000);
         addDetail(
           'ETA',
           Number.isFinite(Number(task.eta_seconds)) && task.eta_seconds !== null
@@ -1832,6 +1865,7 @@ async function refreshAgentActivity() {
     }
     elements.activityList.replaceChildren(fragment);
     elements.activityList.scrollTop = previousScrollTop;
+    updateActivityElapsed();
   } catch {
     document.getElementById('activity-count').textContent = 'Unavailable';
     empty.textContent = 'Agent activity is unavailable right now.';
@@ -2016,11 +2050,10 @@ async function initialize() {
   document.getElementById('connection-toggle').addEventListener('click', () => {
     const panel = document.getElementById('connections-panel');
     const button = document.getElementById('connection-toggle');
-    const opening = panel.hidden;
-    panel.hidden = !opening;
-    button.setAttribute('aria-expanded', String(opening));
+    toggleHeaderPopover(panel, button);
   });
   document.getElementById('settings-toggle').addEventListener('click', () => {
+    closeHeaderPopovers();
     const dialog = document.getElementById('settings-dialog');
     settingsReturnFocus = document.activeElement;
     selectSettingsTab('general');
@@ -2129,9 +2162,7 @@ async function initialize() {
   document.getElementById('resume-button').addEventListener('click', resumeEmergencyStop);
   document.getElementById('banner-resume-button').addEventListener('click', resumeEmergencyStop);
   document.getElementById('notifications-toggle').addEventListener('click', async () => {
-    const opening = elements.notificationPanel.hidden;
-    elements.notificationPanel.hidden = !opening;
-    document.getElementById('notifications-toggle').setAttribute('aria-expanded', String(opening));
+    const opening = toggleHeaderPopover(elements.notificationPanel, document.getElementById('notifications-toggle'));
     if (opening) await refreshNotifications();
   });
   document.getElementById('mark-notifications-read').addEventListener('click', async () => {
@@ -2154,8 +2185,7 @@ async function initialize() {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       closeMobilePanels();
-      elements.notificationPanel.hidden = true;
-      document.getElementById('notifications-toggle').setAttribute('aria-expanded', 'false');
+      closeHeaderPopovers();
     }
   });
   persistSessionId();
@@ -2270,6 +2300,7 @@ async function initialize() {
   startNotificationStream();
   window.setInterval(refreshConnections, 15000);
   window.setInterval(refreshAgentActivity, 5000);
+  window.setInterval(updateActivityElapsed, 1000);
   window.setInterval(updateMessageTimes, 60000);
   updateCameraClock();
   window.setInterval(updateCameraClock, 1000);

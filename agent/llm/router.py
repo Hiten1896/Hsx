@@ -33,7 +33,10 @@ class LLMRouter:
             self.active_model = getattr(provider, "model", "unknown")
             started = time.perf_counter()
             try:
-                yield from provider.generate(request)
+                # Commit a provider's stream only after it completes. A quota
+                # error can arrive after initial chunks; exposing those chunks
+                # would mix the failed response with the fallback response.
+                provider_events = list(provider.generate(request))
             except Exception as error:
                 if self.provider_result_callback is not None:
                     self.provider_result_callback(
@@ -41,9 +44,21 @@ class LLMRouter:
                         False,
                         (time.perf_counter() - started) * 1000,
                     )
-                LOGGER.warning("LLM provider %s failed: %s", provider.name, error)
+                status = getattr(error, "status", None)
+                is_quota = status == 429 or any(
+                    marker in str(error).casefold()
+                    for marker in ("quota", "rate limit", "resource_exhausted", "too many requests")
+                )
+                if is_quota and provider is not self.providers[-1]:
+                    LOGGER.warning(
+                        "LLM provider %s hit a rate limit or quota; falling back to the next configured provider",
+                        provider.name,
+                    )
+                else:
+                    LOGGER.warning("LLM provider %s failed: %s", provider.name, error)
                 errors.append((provider.name, str(error)))
             else:
+                yield from provider_events
                 if self.provider_result_callback is not None:
                     self.provider_result_callback(
                         provider.name,
