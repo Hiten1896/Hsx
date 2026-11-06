@@ -1,10 +1,13 @@
 {
   "endpoints": {
     "health": "/health",
+    "provider_health": "/healthz/providers",
     "greeting": "/api/greeting",
     "chat_stream": "/api/chat/stream",
     "camera_stream": "/api/camera/stream",
     "camera_status": "/api/camera/status",
+    "camera_start": "/api/camera/start",
+    "camera_stop": "/api/camera/stop",
     "feedback": "/api/feedback",
     "feedback_settings": "/api/feedback/settings",
     "feedback_delete": "/api/feedback/delete",
@@ -17,6 +20,7 @@
     "notifications": "/api/notifications",
     "notifications_read": "/api/notifications/read",
     "notifications_stream": "/api/notifications/stream",
+    "conversations": "/api/conversations",
     "stop": "/api/stop",
     "policy_status": "/api/policy/status",
     "emergency_stop": "/api/emergency-stop",

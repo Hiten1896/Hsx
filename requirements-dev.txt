@@ -5,3 +5,5 @@ pytest-timeout
 ruff
 # Coverage reporting in CI and local development.
 pytest-cov
+# Browser-level UI checks.
+playwright

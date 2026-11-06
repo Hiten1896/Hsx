@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hsx-shell-v11';
+const CACHE_NAME = 'hsx-shell-v12';
 const SHELL = [
   '/web/',
   '/web/chat.css',

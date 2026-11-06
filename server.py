@@ -25,6 +25,7 @@ from agent.jobs import JobQueue
 from agent.approval import ApprovalGuard
 from agent.devices import DeviceRegistry, system_body_state
 from agent.feedback import FeedbackStore
+from agent.conversations import ConversationStore
 from agent.hardware import AUDIO_ALERTS, CAMERA, MOTION_MONITOR
 from agent.hardware.camera import MAX_FRAME_AGE_SECONDS
 from agent.llm.router import default_router
@@ -103,6 +104,7 @@ DEVICES = DeviceRegistry(approval_guard=APPROVAL_GUARD)
 WORKSPACE = Workspace(WORKSPACE_DIR, WORK_DIR)
 NOTIFIER = Notifier(DATA_DIR / "notifications.db")
 FEEDBACK_STORE = FeedbackStore(DATA_DIR / "feedback.db")
+CONVERSATIONS = ConversationStore(DATA_DIR / "conversations.db")
 _RESOURCE_ALERT_LOCK = threading.Lock()
 _RESOURCE_ALERT_STATE = {"cpu": False, "memory": False, "disk": False}
 MESH_GATEWAY = MeshGateway.from_environment()
@@ -770,7 +772,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                     self.wfile.write(f"id: {notification['id']}\nevent: notification\ndata: {data}\n\n".encode())
                     last_id = notification["id"]
                 self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             return
 
     def _stream_camera(self) -> None:
@@ -881,8 +883,6 @@ class HsxHandler(BaseHTTPRequestHandler):
             telemetry["provider_stats"] = PROVIDER_BANDIT.snapshot()["providers"]
             self._json(telemetry)
         elif path == "/api/camera/status":
-            if not CAMERA.is_started() and CAMERA.health_check().get("device_available"):
-                CAMERA.start()
             self._json(_camera_status_payload())
         elif path == "/api/camera/stream":
             self._stream_camera()
@@ -922,6 +922,12 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif path == "/api/notifications":
             notifications, unread = NOTIFIER.list_notifications()
             self._json({"notifications": notifications, "unread": unread})
+        elif path == "/api/conversations":
+            self._json({"conversations": CONVERSATIONS.list()})
+        elif path.startswith("/api/conversations/"):
+            session_id = unquote(path.removeprefix("/api/conversations/"))[:100]
+            conversation = CONVERSATIONS.get(session_id)
+            self._json(conversation or {"error": "Conversation not found."}, 200 if conversation else 404)
         elif path == "/api/feedback/settings":
             try:
                 self._json(FEEDBACK_STORE.settings())
@@ -1035,7 +1041,32 @@ class HsxHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/mesh/tasks":
             path = "/api/chat/stream"
-        if path == "/api/feedback/settings":
+        if path == "/api/camera/start":
+            started = CAMERA.start()
+            self._json({"started": started, **_camera_status_payload()}, 202)
+        elif path == "/api/camera/stop":
+            CAMERA.stop()
+            self._json({"stopped": True, **_camera_status_payload()})
+        elif path == "/api/conversations":
+            payload = self._body()
+            try:
+                CONVERSATIONS.save(
+                    str(payload.get("session_id", "")),
+                    str(payload.get("title", "New chat")),
+                    payload.get("thread", {}),
+                )
+            except (OSError, sqlite3.Error, TypeError, ValueError) as error:
+                self._json({"error": str(error)}, 400)
+                return
+            self._json({"success": True}, 201)
+        elif path.startswith("/api/conversations/"):
+            session_id = unquote(path.removeprefix("/api/conversations/"))[:100]
+            payload = self._body()
+            if not CONVERSATIONS.rename(session_id, str(payload.get("title", ""))):
+                self._json({"error": "Conversation not found."}, 404)
+                return
+            self._json({"success": True})
+        elif path == "/api/feedback/settings":
             payload = self._body()
             try:
                 result = FEEDBACK_STORE.update_settings(
@@ -1582,6 +1613,17 @@ class HsxHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         path = self._request_path()
         if path.startswith("/api/") and not self._api_access_allowed():
+            return
+        if path == "/api/notifications":
+            deleted = NOTIFIER.clear_all()
+            self._json({"success": True, "deleted": deleted, "unread": 0})
+            return
+        if path.startswith("/api/conversations/"):
+            session_id = unquote(path.removeprefix("/api/conversations/"))[:100]
+            if not CONVERSATIONS.delete(session_id):
+                self._json({"error": "Conversation not found."}, 404)
+                return
+            self._json({"success": True})
             return
         if path.startswith("/api/notifications/webpush/subscriptions/"):
             subscription_id = path.removeprefix("/api/notifications/webpush/subscriptions/")

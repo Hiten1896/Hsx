@@ -227,7 +227,7 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert "receivedDone" in script
     assert "The connection ended before Hsx finished. Your draft was kept." in script
     assert "pendingFeedback = { article, rating: button.dataset.feedback }" in script
-    assert 'class="feedback-settings"' in html
+    assert 'id="settings-panel-privacy"' in html
     assert 'id="save-feedback-setting"' in html
     assert 'id="full-conversation-setting"' in html
     assert 'id="file-contents-setting"' in html
@@ -291,7 +291,7 @@ def test_web_user_actions_accordion_state_and_camera_stream_are_wired():
     assert "emergency_stop" in script
     assert "banner-resume-button" in script
     assert "telemetry.provider_status" in script
-    assert "Fallback to Groq" in script or "providerStatus.startsWith('Failed')" in script
+    assert "Fallback to Groq" in script or "providerCall.startsWith('Failed')" in script
     assert "Math.min(\n    frame.capturedAt * 1000 - cameraClockOffsetMs,\n    Date.now()," in script
 
 
@@ -320,6 +320,50 @@ def test_camera_is_lazy_and_run_state_resets_after_failure_or_stop():
     assert ".sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;" in css
     assert ".sidebar .connections { margin-top: auto; }" in css
     assert ".sidebar-activity .artifacts-list, .chat-history-list {" in css
+
+
+def test_sidebar_accordions_and_settings_dialog_contract():
+    html = (BASE_DIR / "web" / "index.html").read_text(encoding="utf-8")
+    css = (BASE_DIR / "web" / "chat.css").read_text(encoding="utf-8")
+    script = (BASE_DIR / "web" / "chat.js").read_text(encoding="utf-8")
+
+    assert 'id="settings-toggle"' in html
+    assert 'class="brand-inner"' in html
+    assert 'class="workspace-chat-tile"' not in html
+    assert 'id="activity-toggle" class="panel-collapse-button" type="button" aria-controls="agent-activity-list" aria-expanded="false"' in html
+    assert 'id="agent-activity-list" class="artifacts-list" aria-live="polite" hidden' in html
+    assert 'id="chat-history-list" class="chat-history-list" aria-live="polite"' in html
+    assert '<dialog id="settings-dialog"' in html
+    assert 'role="tablist"' in html
+    assert all(f'data-settings-tab="{tab}"' in html for tab in (
+        "general", "voice", "models", "camera", "privacy", "advanced", "about"
+    ))
+    assert '<details class="feedback-settings">' not in html
+    assert ".settings-dialog {" in css and "100dvh" in css
+    assert "endpoints.provider_health" in script
+    assert "settings-dialog" in script
+    assert "chat-history-action" in script
+    assert "window.confirm(`Delete “${session.title" in script
+    assert "document.activeElement === first" in script
+    assert "settingsReturnFocus.focus()" in script
+    assert "prefers-reduced-motion: reduce" in css
+    assert "overflow-x: hidden" in css
+    assert "min-height: 40px" in css
+
+
+def test_sidebar_defaults_and_live_suggestion_contract():
+    html = (BASE_DIR / "web" / "index.html").read_text(encoding="utf-8")
+    css = (BASE_DIR / "web" / "chat.css").read_text(encoding="utf-8")
+
+    assert 'id="history-toggle" class="panel-collapse-button" type="button" aria-controls="chat-history-list" aria-expanded="true"' in html
+    assert 'id="chat-history-list" class="chat-history-list" aria-live="polite"' in html
+    assert 'id="agent-activity-list" class="artifacts-list" aria-live="polite" hidden' in html
+    assert 'id="activity-count" class="connection-summary"' in html
+    assert 'id="connection-toggle"' in html
+    assert html.count('class="suggestion-chip"') == 4
+    assert "min-height: 40px" in css
+    assert "text-overflow: ellipsis" in css
+    assert "overflow-x: hidden" in css
 
 
 def test_tui_has_native_feedback_buttons_with_shared_layout():

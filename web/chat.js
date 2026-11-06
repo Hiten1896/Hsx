@@ -29,6 +29,9 @@ let cameraHasFrame = false;
 let cameraEnabled = false;
 let cameraClockOffsetMs = 0;
 let cameraStreamStartedAt = 0;
+let cameraAutoOffTimer = null;
+let conversationSaveTimer = null;
+let restoringConversation = false;
 
 const elements = {
   composer: document.getElementById('composer-form'),
@@ -106,7 +109,10 @@ function persistAttachments() {
 
 function apiFetch(url, options = {}) {
   const headers = new Headers(options.headers || {});
-  return fetch(url, { ...options, headers });
+  const signal = options.signal || (globalThis.AbortSignal?.timeout
+    ? AbortSignal.timeout(8000)
+    : undefined);
+  return fetch(url, { ...options, headers, signal });
 }
 
 function renderMarkdown(text, container) {
@@ -127,30 +133,11 @@ function scrollToLatest() {
   elements.stream.scrollTo({ top: elements.stream.scrollHeight, behavior: 'smooth' });
 }
 
-async function refreshGreeting() {
+function refreshGreeting() {
   const hour = new Date().getHours();
   const timeOfDay = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
-  try {
-    const response = await apiFetch(apiContract.endpoints.greeting, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ time_of_day: timeOfDay }),
-    });
-    if (!response.ok) {
-      elements.greeting.setAttribute('aria-busy', 'false');
-      return;
-    }
-    const result = await response.json();
-    if (typeof result.greeting === 'string' && result.greeting.trim()) {
-      elements.greeting.textContent = result.greeting.trim();
-      elements.greeting.setAttribute('aria-busy', 'false');
-    } else {
-      elements.greeting.setAttribute('aria-busy', 'false');
-    }
-  } catch {
-    elements.greeting.textContent = '';
-    elements.greeting.setAttribute('aria-busy', 'false');
-  }
+  elements.greeting.textContent = `Good ${timeOfDay}, Sir`;
+  elements.greeting.setAttribute('aria-busy', 'false');
 }
 
 function setConversationEmpty(isEmpty) {
@@ -172,22 +159,30 @@ function setConversationEmpty(isEmpty) {
 function renderChatHistory() {
   const list = document.getElementById('chat-history-list');
   const sessions = [...chatSessions.entries()]
-    .filter(([id]) => id !== sessionId)
-    .reverse();
+    .sort((first, second) => (second[1].updatedAt || 0) - (first[1].updatedAt || 0))
+    .filter(([, session]) => session.saved === true || session.hasMessages === true)
+    .filter(([, session]) => (session.title || 'New chat').toLowerCase().includes(
+      (document.getElementById('chat-history-search')?.value || '').trim().toLowerCase(),
+    ));
   if (!sessions.length) {
     const empty = document.createElement('p');
     empty.className = 'artifacts-empty';
-    empty.textContent = 'Previous chats in this browser session will appear here.';
+    empty.textContent = document.getElementById('chat-history-search')?.value.trim()
+      ? 'No matching chats.' : 'No saved chats yet.';
     list.replaceChildren(empty);
     return;
   }
   const fragment = document.createDocumentFragment();
   for (const [id, session] of sessions) {
+    const row = document.createElement('div');
+    row.className = 'chat-history-row';
+    row.dataset.active = String(id === sessionId);
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'chat-history-item';
     button.title = session.title || 'New chat';
-    button.setAttribute('aria-current', 'false');
+    button.setAttribute('aria-current', String(id === sessionId));
+    button.setAttribute('aria-label', `Open chat: ${session.title || 'New chat'}`);
     button.addEventListener('click', () => switchChatSession(id));
     const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     icon.setAttribute('viewBox', '0 0 24 24');
@@ -198,7 +193,41 @@ function renderChatHistory() {
     const title = document.createElement('span');
     title.textContent = session.title || 'New chat';
     button.append(icon, title);
-    fragment.append(button);
+    const rename = document.createElement('button');
+    rename.type = 'button';
+    rename.className = 'chat-history-action';
+    rename.textContent = '✎';
+    rename.title = 'Rename chat';
+    rename.setAttribute('aria-label', `Rename chat: ${session.title || 'New chat'}`);
+    rename.addEventListener('click', () => {
+      const updated = window.prompt('Rename this chat', session.title || 'New chat');
+      if (updated?.trim()) {
+        session.title = updated.trim().slice(0, 100);
+        void apiFetch(`${apiContract.endpoints.conversations}/${encodeURIComponent(id)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: session.title }),
+        });
+        renderChatHistory();
+      }
+    });
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'chat-history-action';
+    remove.textContent = '×';
+    remove.title = 'Delete chat';
+    remove.setAttribute('aria-label', `Delete chat: ${session.title || 'New chat'}`);
+    remove.addEventListener('click', () => {
+      if (!window.confirm(`Delete “${session.title || 'New chat'}”? This cannot be undone.`)) return;
+      chatSessions.delete(id);
+      void apiFetch(`${apiContract.endpoints.conversations}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (id === sessionId) {
+        resetConversation(false);
+        chatSessions.delete(id);
+        renderChatHistory();
+      } else renderChatHistory();
+    });
+    row.append(button, rename, remove);
+    fragment.append(row);
   }
   list.replaceChildren(fragment);
 }
@@ -217,16 +246,102 @@ function saveCurrentChatSession() {
   session.draft = elements.prompt.value;
   session.attachments = uploadedAttachments.map((item) => ({ ...item }));
   session.pendingQuestion = pendingQuestion;
+  session.hasMessages = session.fragment.childElementCount > 0;
+  if (session.hasMessages && apiContract) void saveConversation(sessionId);
   renderChatHistory();
 }
 
-function switchChatSession(nextSessionId) {
+function conversationSnapshot(id) {
+  const session = chatSessions.get(id);
+  const messages = id === sessionId
+    ? [...elements.stream.querySelectorAll('.message-card')]
+    : [...(session?.fragment?.querySelectorAll?.('.message-card') || [])];
+  const artifacts = id === sessionId
+    ? [...document.querySelectorAll('#artifacts-list .artifact-item')].map((item) => ({
+      name: item.dataset.name || item.textContent.trim(), path: item.dataset.path || '',
+    }))
+    : [];
+  return {
+    session_id: id,
+    title: session?.title || 'New chat',
+    thread: {
+      messages: messages.map((article) => ({
+        role: article.dataset.role || 'assistant',
+        text: article.dataset.response || article.querySelector('.message-content')?.textContent || '',
+        job_id: article.dataset.jobId || '',
+        prompt: article.dataset.prompt || '',
+        edit_text: article.dataset.editText || '',
+        feedback: article.querySelector('[data-feedback][aria-pressed="true"]')?.dataset.feedback || '',
+      })),
+      artifacts,
+    },
+  };
+}
+
+async function saveConversation(id) {
+  const snapshot = conversationSnapshot(id);
+  if (!snapshot.thread.messages.length) return;
+  try {
+    const response = await apiFetch(apiContract.endpoints.conversations, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(snapshot),
+    });
+    if (response.ok) {
+      const session = chatSessions.get(id);
+      if (session) {
+        session.saved = true;
+        session.updatedAt = Date.now();
+      }
+      renderChatHistory();
+    }
+  } catch { /* Server reconnect restores persistence on the next save. */ }
+}
+
+function queueConversationSave() {
+  if (restoringConversation || !apiContract) return;
+  window.clearTimeout(conversationSaveTimer);
+  conversationSaveTimer = window.setTimeout(() => { void saveConversation(sessionId); }, 350);
+}
+
+async function restoreConversation(id) {
+  const response = await apiFetch(`${apiContract.endpoints.conversations}/${encodeURIComponent(id)}`);
+  if (!response.ok) throw new Error('Conversation could not be opened.');
+  const saved = await response.json();
+  const session = chatSessions.get(id) || { title: saved.title, fragment: document.createDocumentFragment() };
+  session.title = saved.title;
+  session.saved = true;
+  session.fragment = document.createDocumentFragment();
+  chatSessions.set(id, session);
+  restoringConversation = true;
+  try {
+    for (const message of saved.thread?.messages || []) {
+      const article = appendMessage(message.role, message.text, message.job_id, {
+        prompt: message.prompt, editText: message.edit_text, noFeedback: !message.job_id,
+      });
+      if (message.feedback) article.querySelector(`[data-feedback="${message.feedback}"]`)?.setAttribute('aria-pressed', 'true');
+      session.fragment.append(article);
+    }
+  } finally { restoringConversation = false; }
+  session.hasMessages = session.fragment.childElementCount > 0;
+  return session;
+}
+
+async function switchChatSession(nextSessionId) {
   if (nextSessionId === sessionId) return;
   saveCurrentChatSession();
-  const next = chatSessions.get(nextSessionId);
-  if (!next) return;
+  const previousSessionId = sessionId;
   sessionId = nextSessionId;
   persistSessionId();
+  let next = chatSessions.get(nextSessionId);
+  if (!next) return;
+  if (next.saved && !next.hasMessages) {
+    try {
+      next = await restoreConversation(nextSessionId);
+    } catch {
+      sessionId = previousSessionId;
+      persistSessionId();
+      return;
+    }
+  }
   elements.stream.replaceChildren(elements.welcome);
   elements.stream.append(next.fragment);
   next.fragment = document.createDocumentFragment();
@@ -248,7 +363,8 @@ function hasComposerContent() {
 }
 
 function updateSendButton() {
-  elements.send.hidden = !hasComposerContent();
+  elements.send.hidden = false;
+  elements.send.disabled = !hasComposerContent();
 }
 
 function setConnection(id, labelId, value, state) {
@@ -262,6 +378,63 @@ function showEmergencyStop(stopped) {
   document.getElementById('emergency-banner').hidden = !stopped;
   document.getElementById('resume-button').hidden = !stopped;
   document.getElementById('emergency-stop-button').hidden = stopped;
+}
+
+let settingsReturnFocus = null;
+
+function selectSettingsTab(name, focus = false) {
+  const tabs = [...document.querySelectorAll('[data-settings-tab]')];
+  for (const tab of tabs) {
+    const selected = tab.dataset.settingsTab === name;
+    tab.setAttribute('aria-selected', String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    document.querySelector(`[data-settings-panel="${tab.dataset.settingsTab}"]`).hidden = !selected;
+  }
+  if (focus) document.querySelector(`[data-settings-tab="${name}"]`).focus();
+  if (name === 'advanced') {
+    document.getElementById('debug-info').textContent = JSON.stringify({
+      app: 'Hsx',
+      online: navigator.onLine,
+      provider: document.getElementById('llm-state').textContent,
+      camera: document.getElementById('camera-state').textContent,
+      viewport: `${window.innerWidth} × ${window.innerHeight}`,
+    }, null, 2);
+  }
+}
+
+async function testProviderHealth() {
+  const status = document.getElementById('provider-health-status');
+  const list = document.getElementById('provider-health-list');
+  const button = document.getElementById('test-provider-health');
+  button.disabled = true;
+  status.textContent = 'Checking configured providers…';
+  list.replaceChildren();
+  try {
+    const response = await apiFetch(apiContract.endpoints.provider_health);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Provider health check failed.');
+    if (!Array.isArray(data.providers) || !data.providers.length) {
+      const empty = document.createElement('p');
+      empty.textContent = 'No providers are configured.';
+      list.append(empty);
+    }
+    for (const provider of data.providers || []) {
+      const item = document.createElement('div');
+      item.className = 'provider-health-item';
+      const name = document.createElement('strong');
+      name.textContent = `${provider.provider} · ${provider.model}`;
+      const state = document.createElement('span');
+      state.dataset.state = provider.status;
+      state.textContent = provider.status === 'ok' ? 'Connected' : `Failed: ${provider.reason || 'unavailable'}`;
+      item.append(name, state);
+      list.append(item);
+    }
+    status.textContent = 'Provider health check complete.';
+  } catch (error) {
+    status.textContent = error.message || 'Provider health check failed.';
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function refreshEmergencyStop() {
@@ -306,8 +479,8 @@ function appendMessage(role, text, jobId = '', options = {}) {
   article.dataset.prompt = String(options.prompt || '');
   if (role === 'user') {
     const session = chatSessions.get(sessionId);
-    if (session && !session.title) {
-      session.title = String(options.editText ?? text ?? '').trim().slice(0, 64) || 'New chat';
+    if (session && (!session.title || session.title === 'New chat')) {
+      session.title = String(options.editText ?? text ?? '').trim().slice(0, 40) || 'New chat';
       renderChatHistory();
     }
   }
@@ -389,6 +562,10 @@ function appendMessage(role, text, jobId = '', options = {}) {
     feedback?.remove();
   }
   elements.stream.appendChild(fragment);
+  const session = chatSessions.get(sessionId);
+  if (session) session.hasMessages = true;
+  if (session) session.updatedAt = Date.now();
+  queueConversationSave();
   scrollToLatest();
   return article;
 }
@@ -435,6 +612,7 @@ async function submitFeedback(article, feedback) {
     buttons.forEach((button) => {
       button.disabled = false;
     });
+    queueConversationSave();
     document.getElementById('feedback-dialog').close();
     refreshFeedbackSettings();
   } catch {
@@ -525,6 +703,7 @@ function setBusy(isBusy) {
   submitting = isBusy;
   updateSendButton();
   elements.stop.hidden = !isBusy;
+  if (!isBusy) queueConversationSave();
   if (chatWatchdog) window.clearTimeout(chatWatchdog);
   chatWatchdog = null;
   if (isBusy) {
@@ -639,7 +818,7 @@ function setupVoiceInput() {
     const recognition = new Recognition();
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = navigator.language || 'en-US';
+    recognition.lang = document.getElementById('voice-language-setting').value || navigator.language || 'en-US';
     voiceDraft = elements.prompt.value;
     voiceFinalText = '';
     recognition.onstart = () => {
@@ -863,7 +1042,6 @@ async function submitPrompt() {
   appendMessage('user', displayMessage, '', { editText: userMessage });
   setBusy(true);
   safeStorageSet('sessionStorage', `hsx-draft-${sessionId}`, typedMessage);
-  elements.send.disabled = true;
 
   if (pendingQuestion) {
     const controller = new AbortController();
@@ -914,6 +1092,7 @@ async function submitPrompt() {
     persistAttachments();
     renderAttachments();
     elements.prompt.value = '';
+    updateSendButton();
     activity = appendActivity('Thinking…');
     setBusy(true);
     await readStream(response, ({ event, data }) => {
@@ -989,7 +1168,6 @@ async function submitPrompt() {
       activeChatController = null;
       activeRunId = '';
       setBusy(false);
-      elements.send.disabled = false;
       elements.prompt.focus();
     }
     if (queuedMessage) {
@@ -1028,6 +1206,9 @@ function setCameraStatus(connected, message) {
 
 function stopCameraAndStandby() {
   cameraEnabled = false;
+  window.clearTimeout(cameraAutoOffTimer);
+  cameraAutoOffTimer = null;
+  if (apiContract) void apiFetch(apiContract.endpoints.camera_stop, { method: 'POST' });
   cameraAvailable = false;
   cameraHasFrame = false;
   stopCameraStream();
@@ -1045,6 +1226,8 @@ function stopCameraAndStandby() {
 async function refreshCamera() {
   if (!cameraEnabled) return;
   try {
+    const startResponse = await apiFetch(apiContract.endpoints.camera_start, { method: 'POST' });
+    if (!startResponse.ok) throw new Error('Camera could not be started.');
     const response = await apiFetch(apiContract.endpoints.camera_status);
     const data = await response.json();
     const host = data.host || {};
@@ -1071,6 +1254,7 @@ async function refreshCamera() {
       scheduleCameraReconnect();
     }
   } catch {
+    document.getElementById('camera-host-label').textContent = 'Host hardware unavailable';
     if (cameraHasFrame) setCameraReconnecting('Camera feed offline; retrying…');
     else setCameraStatus(false, 'Camera feed offline');
     scheduleCameraReconnect();
@@ -1083,6 +1267,8 @@ function toggleCamera() {
     return;
   }
   cameraEnabled = true;
+  window.clearTimeout(cameraAutoOffTimer);
+  cameraAutoOffTimer = window.setTimeout(stopCameraAndStandby, 5 * 60 * 1000);
   setCameraStatus(false, 'Connecting to the host camera…');
   refreshCamera();
 }
@@ -1125,7 +1311,7 @@ function takeCameraFrame(buffer) {
 function setCameraLatency(capturedAt) {
   const output = document.getElementById('camera-latency');
   if (!Number.isFinite(capturedAt)) {
-    output.textContent = cameraHasFrame ? 'Waiting for frames' : 'Waiting';
+    output.textContent = cameraEnabled ? 'Waiting for frames' : 'No live feed';
     output.dataset.state = 'warning';
     return;
   }
@@ -1305,8 +1491,9 @@ async function refreshConnections() {
       const telemetry = await telemetryResponse.json();
       const provider = String(telemetry.provider || 'not connected');
       const available = !['not connected', ''].includes(provider.toLowerCase());
-      const providerStatus = String(telemetry.provider_status || (available ? 'Used' : 'Standby'));
-      const providerState = providerStatus.startsWith('Failed')
+      const providerStatus = available ? String(telemetry.provider_model || telemetry.provider) : 'Standby';
+      const providerCall = String(telemetry.provider_status || '');
+      const providerState = providerCall.startsWith('Failed')
         ? 'disconnected'
         : providerStatus === 'Standby' ? 'warning' : 'connected';
       setConnection('llm-dot', 'llm-state', providerStatus, providerState);
@@ -1325,6 +1512,8 @@ async function refreshConnections() {
     elements.connection.append(connectionDot, document.createTextNode(' Offline'));
     document.getElementById('connection-summary').textContent = 'Offline';
   }
+  const indicator = document.getElementById('connection-indicator');
+  indicator.dataset.state = document.getElementById('api-dot').dataset.state || 'warning';
   if (cameraEnabled) await refreshCamera();
   else setCameraStatus(false, 'Click to turn on camera');
 }
@@ -1545,6 +1734,8 @@ async function refreshArtifacts() {
       if (typeof file.path !== 'string' || typeof file.name !== 'string') continue;
       const item = document.createElement('div');
       item.className = 'artifact-item';
+      item.dataset.name = file.name;
+      item.dataset.path = file.path;
       const links = document.createElement('a');
       const query = new URLSearchParams({ path: file.path });
       links.href = `/api/files/download?${query}`;
@@ -1584,6 +1775,7 @@ function formatElapsed(seconds) {
 }
 
 async function refreshAgentActivity() {
+  const previousScrollTop = elements.activityList.scrollTop;
   const empty = document.createElement('p');
   empty.className = 'artifacts-empty';
   empty.textContent = 'Checking for agent tasks…';
@@ -1639,6 +1831,7 @@ async function refreshAgentActivity() {
       fragment.append(item);
     }
     elements.activityList.replaceChildren(fragment);
+    elements.activityList.scrollTop = previousScrollTop;
   } catch {
     document.getElementById('activity-count').textContent = 'Unavailable';
     empty.textContent = 'Agent activity is unavailable right now.';
@@ -1692,8 +1885,8 @@ async function stopTask() {
   setBusy(false);
 }
 
-function resetConversation() {
-  saveCurrentChatSession();
+function resetConversation(saveCurrent = true) {
+  if (saveCurrent) saveCurrentChatSession();
   sessionId = makeSessionId();
   chatSessions.set(sessionId, {
     title: 'New chat',
@@ -1708,8 +1901,6 @@ function resetConversation() {
   uploadedAttachments = [];
   elements.stream.replaceChildren(elements.welcome);
   elements.welcome.hidden = false;
-  elements.greeting.textContent = '';
-  elements.greeting.setAttribute('aria-busy', 'true');
   refreshGreeting();
   elements.prompt.value = '';
   elements.prompt.style.height = 'auto';
@@ -1735,6 +1926,40 @@ async function initialize() {
   ]);
   if (!tokensResponse.ok || !contractResponse.ok) throw new Error('Could not load the Hsx interface contract.');
   apiContract = await contractResponse.json();
+  try {
+    const response = await apiFetch(apiContract.endpoints.conversations);
+    if (response.ok) {
+      const data = await response.json();
+      for (const saved of data.conversations || []) {
+        chatSessions.set(saved.session_id, {
+          title: saved.title, fragment: document.createDocumentFragment(), isEmpty: false,
+          hasMessages: false, saved: true, updatedAt: Date.parse(saved.updated) || 0,
+          draft: '', attachments: [], pendingQuestion: null,
+        });
+      }
+    }
+  } catch { /* The sidebar will show local sessions until the server reconnects. */ }
+  if (!chatSessions.has(sessionId)) {
+    chatSessions.set(sessionId, {
+      title: 'New chat', fragment: document.createDocumentFragment(), isEmpty: true,
+      draft: safeStorageGet('sessionStorage', `hsx-draft-${sessionId}`), attachments: [], pendingQuestion: null,
+    });
+  }
+  if (chatSessions.get(sessionId)?.saved) {
+    await restoreConversation(sessionId);
+    elements.stream.replaceChildren(elements.welcome, chatSessions.get(sessionId).fragment);
+    chatSessions.get(sessionId).fragment = document.createDocumentFragment();
+    elements.welcome.hidden = true;
+    setConversationEmpty(false);
+  }
+  renderChatHistory();
+  const savedTheme = safeStorageGet('localStorage', 'hsx-theme') || 'dark';
+  document.documentElement.dataset.theme = savedTheme === 'system'
+    ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+    : savedTheme;
+  document.getElementById('theme-setting').value = savedTheme;
+  document.getElementById('language-setting').value = safeStorageGet('localStorage', 'hsx-language') || 'en';
+  document.getElementById('voice-language-setting').value = safeStorageGet('localStorage', 'hsx-voice-language') || navigator.language || 'en-US';
   refreshGreeting();
   await refreshEmergencyStop();
   setupVoiceInput();
@@ -1776,6 +2001,7 @@ async function initialize() {
     button.setAttribute('aria-label', expanded ? 'Expand agent activity' : 'Collapse agent activity');
     button.title = expanded ? 'Expand agent activity' : 'Collapse agent activity';
     elements.activityList.hidden = expanded;
+    event.currentTarget.closest('.activity-panel').classList.toggle('is-expanded', !expanded);
   });
   document.getElementById('history-toggle').addEventListener('click', (event) => {
     const button = event.currentTarget;
@@ -1784,6 +2010,81 @@ async function initialize() {
     button.setAttribute('aria-label', expanded ? 'Expand chat history' : 'Collapse chat history');
     button.title = expanded ? 'Expand chat history' : 'Collapse chat history';
     document.getElementById('chat-history-list').hidden = expanded;
+    event.currentTarget.closest('.history-panel').classList.toggle('is-expanded', !expanded);
+  });
+  document.getElementById('chat-history-search').addEventListener('input', renderChatHistory);
+  document.getElementById('connection-toggle').addEventListener('click', () => {
+    const panel = document.getElementById('connections-panel');
+    const button = document.getElementById('connection-toggle');
+    const opening = panel.hidden;
+    panel.hidden = !opening;
+    button.setAttribute('aria-expanded', String(opening));
+  });
+  document.getElementById('settings-toggle').addEventListener('click', () => {
+    const dialog = document.getElementById('settings-dialog');
+    settingsReturnFocus = document.activeElement;
+    selectSettingsTab('general');
+    dialog.showModal();
+    dialog.querySelector('[aria-selected="true"]').focus();
+  });
+  document.getElementById('settings-close').addEventListener('click', () => {
+    document.getElementById('settings-dialog').close();
+  });
+  document.getElementById('settings-dialog').addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) event.currentTarget.close();
+  });
+  document.getElementById('settings-dialog').addEventListener('close', () => {
+    if (settingsReturnFocus?.isConnected) settingsReturnFocus.focus();
+    settingsReturnFocus = null;
+  });
+  document.getElementById('settings-dialog').addEventListener('keydown', (event) => {
+    if (event.key !== 'Tab') return;
+    const focusable = [...event.currentTarget.querySelectorAll(
+      'button:not([disabled]):not([hidden]), input:not([disabled]):not([hidden]), select:not([disabled]):not([hidden]), [tabindex="0"]',
+    )].filter((item) => item.tabIndex >= 0 && item.getClientRects().length);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+  document.querySelectorAll('[data-settings-tab]').forEach((tab) => {
+    tab.addEventListener('click', () => selectSettingsTab(tab.dataset.settingsTab));
+    tab.addEventListener('keydown', (event) => {
+      const tabs = [...document.querySelectorAll('[data-settings-tab]')];
+      const index = tabs.indexOf(tab);
+      let next = index;
+      if (['ArrowDown', 'ArrowRight'].includes(event.key)) next = (index + 1) % tabs.length;
+      else if (['ArrowUp', 'ArrowLeft'].includes(event.key)) next = (index + tabs.length - 1) % tabs.length;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = tabs.length - 1;
+      else return;
+      event.preventDefault();
+      selectSettingsTab(tabs[next].dataset.settingsTab, true);
+    });
+  });
+  document.getElementById('theme-setting').addEventListener('change', (event) => {
+    safeStorageSet('localStorage', 'hsx-theme', event.target.value);
+    document.documentElement.dataset.theme = event.target.value === 'system'
+      ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+      : event.target.value;
+  });
+  document.getElementById('language-setting').addEventListener('change', (event) => {
+    safeStorageSet('localStorage', 'hsx-language', event.target.value);
+  });
+  document.getElementById('voice-language-setting').addEventListener('change', (event) => {
+    safeStorageSet('localStorage', 'hsx-voice-language', event.target.value);
+  });
+  document.getElementById('test-provider-health').addEventListener('click', testProviderHealth);
+  document.getElementById('settings-open-camera').addEventListener('click', () => {
+    document.getElementById('settings-dialog').close();
+    openMobilePanel(elements.cameraSidebar);
+    if (!cameraEnabled) toggleCamera();
   });
   document.getElementById('feedback-form').addEventListener('submit', (event) => {
     event.preventDefault();
@@ -1844,6 +2145,11 @@ async function initialize() {
     } catch {
       elements.notificationsList.textContent = 'Could not mark notifications as read.';
     }
+  });
+  document.getElementById('clear-notifications').addEventListener('click', async () => {
+    const response = await apiFetch(apiContract.endpoints.notifications, { method: 'DELETE' });
+    if (response.ok) await refreshNotifications();
+    else elements.notificationsList.textContent = 'Notifications could not be cleared.';
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
@@ -1936,7 +2242,8 @@ async function initialize() {
     refreshConnections();
   });
   window.addEventListener('pagehide', () => {
-    stopCameraStream();
+    if (cameraEnabled) stopCameraAndStandby();
+    else stopCameraStream();
     abortNotificationStream();
   });
   window.addEventListener('pageshow', () => {
@@ -1947,7 +2254,8 @@ async function initialize() {
   });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
-      stopCameraStream();
+      if (cameraEnabled) stopCameraAndStandby();
+      else stopCameraStream();
       abortNotificationStream();
     } else {
       cameraRetryDelay = 500;
@@ -1965,9 +2273,11 @@ async function initialize() {
   window.setInterval(updateMessageTimes, 60000);
   updateCameraClock();
   window.setInterval(updateCameraClock, 1000);
+  document.body.dataset.ready = 'true';
 }
 
 initialize().catch(() => {
+  document.body.dataset.ready = 'error';
   elements.connection.replaceChildren();
   const connectionDot = document.createElement('span');
   connectionDot.className = 'connection-dot';

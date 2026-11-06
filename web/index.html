@@ -17,8 +17,10 @@
     <div class="app-shell">
       <aside id="app-sidebar" class="sidebar" aria-label="Workspace navigation">
         <a class="brand" href="/web/" aria-label="Hsx home">
-          <img src="/web/icon.svg" width="36" height="36" alt="">
-          <span class="brand-copy"><span class="brand-name">Hsx</span></span>
+          <span class="brand-inner">
+            <img src="/web/icon.svg" width="36" height="36" alt="">
+            <span class="brand-copy"><span class="brand-name">Hsx</span></span>
+          </span>
         </a>
 
         <button id="new-chat-button" class="new-chat-button" type="button">
@@ -43,50 +45,27 @@
           </div>
         </section>
 
-        <section class="activity-panel history-panel" aria-labelledby="chat-history-title">
+        <section class="activity-panel history-panel is-expanded" aria-labelledby="chat-history-title">
           <div class="artifacts-heading">
             <div>
-              <p class="panel-eyebrow">THIS BROWSER SESSION</p>
+              <p class="panel-eyebrow">SAVED ON THIS HOST</p>
               <h2 id="chat-history-title">Chat history</h2>
             </div>
-            <button id="history-toggle" class="panel-collapse-button" type="button" aria-controls="chat-history-list" aria-expanded="false" aria-label="Expand chat history" title="Expand chat history">
+            <button id="history-toggle" class="panel-collapse-button" type="button" aria-controls="chat-history-list" aria-expanded="true" aria-label="Collapse chat history" title="Collapse chat history">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
             </button>
           </div>
-          <div id="chat-history-list" class="chat-history-list" aria-live="polite" hidden>
+          <label class="sr-only" for="chat-history-search">Search chat history</label>
+          <input id="chat-history-search" class="history-search" type="search" placeholder="Search chats">
+          <div id="chat-history-list" class="chat-history-list" aria-live="polite">
             <p class="artifacts-empty">Your chats in this browser session will appear here.</p>
           </div>
         </section>
 
         <div class="sidebar-bottom">
-          <details class="feedback-settings">
-            <summary>Settings</summary>
-            <button id="emergency-stop-button" type="button">Emergency stop</button>
-            <button id="resume-button" type="button" hidden>Resume</button>
-            <p id="feedback-storage-note">Stored on this computer only.</p>
-            <label><input id="save-feedback-setting" type="checkbox" checked> Save feedback</label>
-            <label><input id="full-conversation-setting" type="checkbox"> Include full conversation in exports</label>
-            <label><input id="file-contents-setting" type="checkbox"> Allow file contents in exports</label>
-            <span id="feedback-count">0 feedback entries</span>
-            <button id="delete-feedback-button" type="button">Delete all feedback</button>
-          </details>
           <div class="local-note"><span class="local-note-dot"></span> Your workspace stays on your Hsx host</div>
         </div>
 
-        <section class="connections" aria-labelledby="connections-title">
-          <div class="connections-heading">
-            <h2 id="connections-title">Connections</h2>
-            <span id="connection-summary" class="connection-summary">Checking</span>
-          </div>
-          <ul class="connection-list">
-            <li><span class="connection-dot" id="api-dot"></span><span>Hsx server</span><strong id="api-state">Checking</strong></li>
-            <li><span class="connection-dot" id="llm-dot"></span><span>LLM provider</span><strong id="llm-state">Standby</strong></li>
-            <li><span class="connection-dot" id="camera-dot"></span><span>Host camera</span><strong id="camera-state">Checking</strong></li>
-            <li><span class="connection-dot" id="tailnet-dot"></span><span>Tailnet path</span><strong id="tailnet-state">Checking</strong></li>
-            <li><span class="connection-dot" id="internet-dot"></span><span>Browser network</span><strong id="internet-state">Online</strong></li>
-          </ul>
-          <p class="connection-note">Status reflects this browser's route and the host's reported health.</p>
-        </section>
       </aside>
 
       <main class="chat-area">
@@ -103,6 +82,10 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"></path></svg>
             <span id="notification-count" class="notification-count" hidden>0</span>
           </button>
+          <button id="connection-toggle" class="header-icon-button connection-toggle" type="button" aria-label="Connection status" aria-controls="connections-panel" aria-expanded="false" title="Connection status"><span id="connection-indicator" class="connection-dot" data-state="warning" aria-hidden="true"></span></button>
+          <button id="settings-toggle" class="header-icon-button settings-toggle" type="button" aria-label="Settings" aria-haspopup="dialog" title="Settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="m19.4 15 .1.1 1.1.9-1.3 2.2-1.4-.6a7.8 7.8 0 0 1-1.6.9l-.2 1.5h-2.6l-.2-1.5a7.8 7.8 0 0 1-1.7-.9l-1.3.6L9 16l1.1-.9a7.2 7.2 0 0 1 0-1.9L9 12.3l1.3-2.2 1.4.6a7.8 7.8 0 0 1 1.6-.9l.2-1.5h2.6l.2 1.5a7.8 7.8 0 0 1 1.7.9l1.3-.6 1.3 2.2-1.1.9a7.2 7.2 0 0 1-.1 1.8Z"></path></svg>
+          </button>
           <button id="camera-toggle" class="header-icon-button camera-toggle" type="button" aria-label="Open host camera and artifacts" aria-controls="camera-sidebar" aria-expanded="false" title="Open camera and artifacts">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5h11.5a2 2 0 0 1 2 2v1l3-2v7l-3-2v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"></path></svg>
           </button>
@@ -111,10 +94,22 @@
             <div class="notifications-heading">
               <h2>Notifications</h2>
               <button id="mark-notifications-read" type="button">Mark all read</button>
+              <button id="clear-notifications" type="button">Clear all</button>
             </div>
             <div id="notifications-list" class="notifications-list" aria-live="polite">
               <p class="artifacts-empty">Loading notifications…</p>
             </div>
+          </section>
+          <section id="connections-panel" class="notifications-panel connections-popover" aria-labelledby="connections-title" hidden>
+            <div class="notifications-heading"><h2 id="connections-title">Connections</h2><span id="connection-summary" class="connection-summary">Checking…</span></div>
+            <ul class="connection-list">
+              <li><span class="connection-dot" id="api-dot"></span><span>Hsx server</span><strong id="api-state">Checking…</strong></li>
+              <li><span class="connection-dot" id="llm-dot"></span><span>LLM provider</span><strong id="llm-state">Checking…</strong></li>
+              <li><span class="connection-dot" id="camera-dot"></span><span>Host camera</span><strong id="camera-state">Checking…</strong></li>
+              <li><span class="connection-dot" id="tailnet-dot"></span><span>Tailnet path</span><strong id="tailnet-state">Checking…</strong></li>
+              <li><span class="connection-dot" id="internet-dot"></span><span>Browser network</span><strong id="internet-state">Unknown</strong></li>
+            </ul>
+            <p class="connection-note">Status reflects this browser's route and the host's reported health.</p>
           </section>
           <div id="notification-toast" class="notification-toast" role="status" aria-live="polite" hidden></div>
         </div>
@@ -122,8 +117,14 @@
         <div id="conversation-layout" class="conversation-layout is-empty">
           <section id="chat-stream" class="message-stream" aria-label="Conversation" role="log" aria-live="polite" aria-relevant="additions text">
             <section class="welcome-card" id="welcome-card">
-              <h1 id="greeting-title" aria-busy="true"></h1>
+              <h1 id="greeting-title" aria-busy="false">Good evening, Sir</h1>
               <p class="welcome-description">What would you like to work on?</p>
+              <div class="suggestion-chips" aria-label="Suggestions">
+                <button class="suggestion-chip" type="button" data-prompt="Tell me the CPU, memory, disk, and operating system on this computer.">Computer specs</button>
+                <button class="suggestion-chip" type="button" data-prompt="Find the files in my Hsx Work workspace and summarize what is there.">Explore my workspace</button>
+                <button class="suggestion-chip" type="button" data-prompt="Create a concise summary of the files I have generated recently.">Summarize recent files</button>
+                <button class="suggestion-chip" type="button" data-prompt="Check whether the host camera is available and tell me its status.">Check camera status</button>
+              </div>
             </section>
           </section>
 
@@ -150,7 +151,7 @@
                       <button type="button" role="menuitem" data-composer-action="camera">Open host camera</button>
                     </div>
                   </div>
-                  <button id="send-button" class="send-button" type="submit" aria-label="Send message" title="Send message" hidden>
+                  <button id="send-button" class="send-button" type="submit" aria-label="Send message" title="Send message" disabled>
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg>
                   </button>
                   <button id="stop-button" class="stop-button" type="button" aria-label="Stop response" title="Stop the current task" hidden>Stop</button>
@@ -172,7 +173,7 @@
         <div class="camera-panel">
           <div class="camera-heading">
             <div>
-              <p id="camera-host-label" class="panel-eyebrow">Checking host hardware…</p>
+              <p id="camera-host-label" class="panel-eyebrow">Host camera</p>
               <h2>Live camera</h2>
             </div>
             <div class="camera-heading-actions">
@@ -192,8 +193,8 @@
             </div>
           </div>
           <div class="camera-metrics" aria-live="polite">
-            <div><span>Current time</span><strong id="camera-clock">—</strong></div>
-            <div><span>Video delay</span><strong id="camera-latency">Waiting</strong></div>
+            <div><span>Browser time</span><strong id="camera-clock">Unknown</strong></div>
+            <div><span>Video delay</span><strong id="camera-latency">No live feed</strong></div>
           </div>
         </div>
         <section class="artifacts-panel" aria-labelledby="artifacts-title">
@@ -213,6 +214,71 @@
       </aside>
       <button id="panel-backdrop" class="panel-backdrop" type="button" aria-label="Close open panel" hidden></button>
     </div>
+
+    <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+      <div class="settings-shell">
+        <header class="settings-heading">
+          <div><p class="panel-eyebrow">HSX PREFERENCES</p><h2 id="settings-title">Settings</h2></div>
+          <button id="settings-close" class="settings-close" type="button" aria-label="Close settings">×</button>
+        </header>
+        <div class="settings-content">
+          <nav class="settings-tabs" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
+            <button role="tab" id="settings-tab-general" aria-controls="settings-panel-general" aria-selected="true" tabindex="0" data-settings-tab="general">General</button>
+            <button role="tab" id="settings-tab-voice" aria-controls="settings-panel-voice" aria-selected="false" tabindex="-1" data-settings-tab="voice">Voice</button>
+            <button role="tab" id="settings-tab-models" aria-controls="settings-panel-models" aria-selected="false" tabindex="-1" data-settings-tab="models">Models</button>
+            <button role="tab" id="settings-tab-camera" aria-controls="settings-panel-camera" aria-selected="false" tabindex="-1" data-settings-tab="camera">Camera</button>
+            <button role="tab" id="settings-tab-privacy" aria-controls="settings-panel-privacy" aria-selected="false" tabindex="-1" data-settings-tab="privacy">Privacy</button>
+            <button role="tab" id="settings-tab-advanced" aria-controls="settings-panel-advanced" aria-selected="false" tabindex="-1" data-settings-tab="advanced">Advanced</button>
+            <button role="tab" id="settings-tab-about" aria-controls="settings-panel-about" aria-selected="false" tabindex="-1" data-settings-tab="about">About</button>
+          </nav>
+          <div class="settings-panels">
+            <section id="settings-panel-general" role="tabpanel" aria-labelledby="settings-tab-general" data-settings-panel="general">
+              <h3>General</h3>
+              <label class="settings-field" for="theme-setting">Theme<select id="theme-setting"><option value="dark">Dark</option><option value="light">Light</option><option value="system">System</option></select></label>
+              <label class="settings-field" for="language-setting">Language<select id="language-setting"><option value="en">English</option><option value="hi">Hindi</option><option value="es">Español</option></select></label>
+              <button id="emergency-stop-button" class="settings-action danger-action" type="button">Emergency stop</button>
+              <button id="resume-button" class="settings-action" type="button" hidden>Resume emergency stop</button>
+            </section>
+            <section id="settings-panel-voice" role="tabpanel" aria-labelledby="settings-tab-voice" data-settings-panel="voice" hidden>
+              <h3>Voice</h3>
+              <label class="settings-field" for="voice-language-setting">Microphone language<select id="voice-language-setting"><option value="en-US">English (United States)</option><option value="en-IN">English (India)</option><option value="hi-IN">Hindi (India)</option></select></label>
+              <p>Voice input is processed by your browser's speech service.</p>
+            </section>
+            <section id="settings-panel-models" role="tabpanel" aria-labelledby="settings-tab-models" data-settings-panel="models" hidden>
+              <h3>Models</h3>
+              <p>Configured providers and their current model.</p>
+              <div id="provider-health-list" class="provider-health-list" aria-live="polite"><p>Run a connection test to check providers.</p></div>
+              <button id="test-provider-health" class="settings-action" type="button">Test connection</button>
+              <p id="provider-health-status" role="status"></p>
+            </section>
+            <section id="settings-panel-camera" role="tabpanel" aria-labelledby="settings-tab-camera" data-settings-panel="camera" hidden>
+              <h3>Camera</h3>
+              <p id="settings-camera-status">Camera status is shown in Connections.</p>
+              <button id="settings-open-camera" class="settings-action" type="button">Open camera</button>
+            </section>
+            <section id="settings-panel-privacy" role="tabpanel" aria-labelledby="settings-tab-privacy" data-settings-panel="privacy" hidden>
+              <h3>Privacy and feedback</h3>
+              <p id="feedback-storage-note">Stored on this computer only.</p>
+              <label class="settings-check"><input id="save-feedback-setting" type="checkbox" checked> Save feedback</label>
+              <label class="settings-check"><input id="full-conversation-setting" type="checkbox"> Include full conversation in exports</label>
+              <label class="settings-check"><input id="file-contents-setting" type="checkbox"> Allow file contents in exports</label>
+              <span id="feedback-count">0 feedback entries</span>
+              <button id="delete-feedback-button" class="settings-action danger-action" type="button">Delete all feedback</button>
+            </section>
+            <section id="settings-panel-advanced" role="tabpanel" aria-labelledby="settings-tab-advanced" data-settings-panel="advanced" hidden>
+              <h3>Advanced</h3>
+              <p>Debug information contains connection status only. Secrets are never shown.</p>
+              <pre id="debug-info" class="debug-info">No diagnostic data loaded.</pre>
+            </section>
+            <section id="settings-panel-about" role="tabpanel" aria-labelledby="settings-tab-about" data-settings-panel="about" hidden>
+              <h3>About</h3>
+              <p>Hsx <span id="app-version">0.0.0+local</span></p>
+              <p>Made by HS</p>
+            </section>
+          </div>
+        </div>
+      </div>
+    </dialog>
 
     <template id="message-template">
       <article class="message-card">

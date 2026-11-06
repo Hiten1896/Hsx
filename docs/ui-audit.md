@@ -1,0 +1,26 @@
+# Hsx UI data audit
+
+Audit scope: `web/index.html`, `web/chat.js`, `web/api-contract.json`, `server.py`, and the SQLite-backed stores they use. Dynamic labels are evaluated at runtime; a static label is acceptable only when it describes a real capability or state.
+
+| UI element | Data source | Classification before / after this audit | Action |
+|---|---|---|---|
+| Notification badge and items (including a displayed count such as 18) | `GET /api/notifications`; `agent/notifier.py` SQLite `notifications` table | Real persisted events; the number is not a UI constant. Old unread rows remain until marked read or cleared. | Keep server count and event rows; added Clear all alongside Mark all read. The unread count is the store's total, while the panel fetches at most 100 rows. |
+| Hsx server connection | `/health` | Real health response | Keep live status and connection dot. Initial state is Checking. |
+| LLM provider / model | `/api/telemetry` | Provider was real, but the UI used a generic `Used` status that obscured the selected model. | Show the provider model/name; keep failed state separate from a successful use. |
+| Host camera row and hardware label | `/api/camera/status` after an explicit user start | Camera-status text could stay at “Checking host hardware” while camera was off. Status GET also started the camera as a side effect. | Make the initial label “Host camera”; status GET is read-only; explicit start/stop endpoints own the camera process. Errors become “Host hardware unavailable.” |
+| Browser network / Tailnet | `navigator.onLine`, `window.location.hostname` | Real browser/network route facts; not proof that an arbitrary remote service is reachable. | Keep labels scoped to browser route; initial browser state is Unknown. |
+| Video delay | Capture timestamp in the MJPEG frame header plus server time response header, compared with browser time | Real only after a frame; prior “Waiting” was ambiguous. | Show “No live feed” until camera starts and “Waiting for frames” while connecting; show measured delay only for frames. |
+| Current time | Browser clock (`Date`) | Real browser-local time, not host time | Label changed to “Browser time”; initial state is Unknown, then the browser clock updates once per second. |
+| Greeting | Browser local hour | Previous web greeting made an asynchronous provider request and could visibly replace the first greeting. | Use a stable time-of-day greeting computed immediately in the browser; no loading flash or model-generated replacement. |
+| Suggestion chips | Four explicit prompts attached to existing system-info, workspace, generated-output, and camera capabilities | Previously absent; no sample-data claims. | Add four concrete prompts. Each fills the composer; the user still sends it. |
+| Agent activity count and rows | `/api/activity?session_id=…` backed by `AskUserJobs` | Real session task state, target path, elapsed time and role metadata when present. | Keep live refresh. “Checking…” ends in a task count, an empty-state message, or Unavailable. Default panel is collapsed with the count badge visible. |
+| Chat history | `GET/POST/DELETE /api/conversations` backed by SQLite `conversations.db` | Previously in-memory browser `Map` / DOM fragments only; lost on reload and unavailable in another browser. | Add server persistence for message snapshots, title, feedback selection and artifact references; load saved conversations from SQLite. Empty chats are not saved. |
+| History title | First user message; fallback “New chat” | Real conversation text, not seeded demo names | Generate title from the first message, limited to 40 characters; rename/delete actions call the server. |
+| Artifacts | `GET /api/outputs?session_id=…` and workspace files created by task jobs | Real generated workspace outputs; empty/loading copy is descriptive UI text. | Keep server result list; no fabricated artifact rows. |
+| Token and latency numbers | `/api/telemetry` and provider stats from the provider bandit | Real measured counters/latency when available; missing provider values are not measurements. | Keep only API-reported values; unavailable values should remain Unknown/unavailable (never substitute a made-up number). |
+| Feedback counts | `/api/feedback/settings`, backed by `agent/feedback.py` SQLite | Real saved feedback rows, subject to the user’s save-feedback setting. | Keep count from the store; empty or disabled storage is stated as such. |
+| Empty/loading/error states | Relevant endpoint response or failed request | Static copy, but accurately describes the current UI state. | Keep “Checking…” only for active requests that settle into a result or Unavailable. |
+
+## Functional verification status
+
+Automated checks in this change cover SQLite conversation-store restart persistence and UI contracts for default accordion state, suggestion count, and status controls. Camera process behavior, notification behavior against accumulated production-like events, browser restart/cross-browser history restoration, and every browser interaction require the live-browser suite requested in the task; they must not be reported as verified unless that suite completes. Device-dependent microphone and camera behavior may only be simulated on a host without those devices.

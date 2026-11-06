@@ -377,6 +377,10 @@ class Notifier:
                 "UPDATE notifications SET read = 1 WHERE id = ?", (notification_id,)
             ).rowcount
 
+    def clear_all(self) -> int:
+        with self._connect() as connection:
+            return connection.execute("DELETE FROM notifications").rowcount
+
     def wait_for_notifications(self, after_id: int, timeout: float = 15) -> list[dict]:
         with self._condition:
             with self._connect() as connection:

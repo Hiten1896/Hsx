@@ -16,7 +16,8 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      - run: pip install pytest ruff
+      - run: pip install -r requirements-dev.txt
+      - run: python -m playwright install --with-deps chromium
       - run: ruff check .
       - run: pytest -q
       - run: pytest -q tests/test_phase13b_security.py -k docker

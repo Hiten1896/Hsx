@@ -60,6 +60,59 @@ def test_standalone_camera_buffers_bounded_mjpeg_frames():
     assert camera.wait_for_frame(1, timeout=0.1) == frame
 
 
+def test_camera_stop_terminates_supervised_ffmpeg_process(monkeypatch):
+    import threading
+
+    process_holder = []
+
+    class BlockingPipe:
+        def __init__(self):
+            self.stopped = threading.Event()
+
+        def read(self, _size):
+            self.stopped.wait(2)
+            return b""
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = BlockingPipe()
+            self.return_code = None
+
+        def poll(self):
+            return self.return_code
+
+        def terminate(self):
+            self.return_code = 0
+            self.stdout.stopped.set()
+
+        def wait(self, timeout=None):
+            del timeout
+            self.return_code = self.return_code or 0
+            return self.return_code
+
+        def kill(self):
+            self.return_code = -9
+            self.stdout.stopped.set()
+
+    def make_process(*_args, **_kwargs):
+        process = FakeProcess()
+        process_holder.append(process)
+        return process
+
+    monkeypatch.setattr("agent.hardware.camera.shutil.which", lambda _program: "ffmpeg")
+    monkeypatch.setattr("agent.hardware.camera.os.path.exists", lambda _path: True)
+    monkeypatch.setattr("agent.hardware.camera.subprocess.Popen", make_process)
+    camera = CameraService(device="/dev/video0")
+    camera.start()
+    for _ in range(100):
+        if process_holder:
+            break
+        threading.Event().wait(0.01)
+    camera.stop()
+    assert process_holder
+    assert process_holder[0].poll() is not None
+
+
 def test_mjpeg_api_streams_without_an_agent_job(monkeypatch):
     import threading
     from http.server import ThreadingHTTPServer
@@ -97,6 +150,30 @@ def test_mjpeg_api_streams_without_an_agent_job(monkeypatch):
         httpd.shutdown()
         thread.join(timeout=3)
         httpd.server_close()
+
+
+def test_camera_status_is_read_only_and_does_not_start_camera(monkeypatch):
+    import server
+    from tests.test_files_panel import _request
+
+    class FakeCamera:
+        started = False
+
+        def start(self):
+            self.started = True
+
+        def is_started(self):
+            return self.started
+
+        def health_check(self):
+            return {"running": self.started, "device_available": True}
+
+    camera = FakeCamera()
+    monkeypatch.setattr(server, "CAMERA", camera)
+    status, _, body = _request("/api/camera/status")
+    assert status == 200
+    assert json.loads(body)["running"] is False
+    assert camera.started is False
 
 
 

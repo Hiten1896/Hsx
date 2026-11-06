@@ -224,7 +224,9 @@ def test_files_panel_rejects_traversal(tmp_path: Path, monkeypatch):
     assert status == 404
 
 
-def test_files_panel_is_available_without_bearer_when_origin_is_missing():
+def test_files_panel_is_available_without_bearer_when_origin_is_missing(tmp_path, monkeypatch):
+    (tmp_path / "Hsx Work").mkdir()
+    monkeypatch.setattr(server, "WORKSPACE", Workspace(tmp_path, "Hsx Work"))
     status, _, _ = _request("/api/files", tokenless=True)
     assert status == 200
 
