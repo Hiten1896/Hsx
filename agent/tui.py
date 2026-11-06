@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import urllib.error
+from urllib.parse import quote
 import urllib.request
 import uuid
 from typing import Any
@@ -145,6 +146,13 @@ def _build_css() -> str:
         color: {_COLORS["muted"]};
         text-align: center;
     }}
+    #workspace-activity {{
+        height: auto;
+        max-height: 3;
+        padding: 0 2;
+        color: {_COLORS["muted"]};
+        background: {_COLORS["surface"]};
+    }}
     Footer {{
         background: {_COLORS["surface"]};
         color: {_COLORS["muted"]};
@@ -210,6 +218,7 @@ class HsxTUI(App):
                     id="welcome-card",
                     classes="welcome-card",
                 )
+            yield Static("Agent tasks: checking…  ·  Generated files: checking…", id="workspace-activity")
             with Vertical(id="composer-dock"):
                 with Horizontal(id="composer-row"):
                     yield Input(placeholder="Message HSX…", id="prompt-input")
@@ -220,7 +229,54 @@ class HsxTUI(App):
 
     async def on_mount(self) -> None:
         self.set_interval(2.5, self.refresh_telemetry)
+        self.set_interval(5, self.refresh_workspace_activity)
         self.run_worker(self.refresh_telemetry(), name="initial-telemetry")
+        self.run_worker(self.refresh_workspace_activity(), name="initial-workspace-activity")
+
+    def _fetch_workspace_activity(self) -> tuple[dict, dict]:
+        try:
+            activity = self._api_request(
+                f"{_API['endpoints']['activity']}?session_id={quote(self.session_id)}"
+            )
+            outputs = self._api_request(_API["endpoints"]["outputs"])
+            return activity, outputs
+        except (RuntimeError, ValueError, LookupError) as error:
+            return {"error": str(error)}, {}
+
+    async def refresh_workspace_activity(self) -> None:
+        try:
+            worker = self.run_worker(
+                self._fetch_workspace_activity,
+                thread=True,
+                name="workspace-activity",
+                exit_on_error=False,
+            )
+            result = await worker.wait()
+            if result is None:
+                return
+            activity, outputs = result
+            if activity.get("error"):
+                raise RuntimeError(activity["error"])
+            tasks = activity.get("tasks", [])
+            active = [
+                task for task in tasks
+                if task.get("state") in {"queued", "running", "waiting_for_user", "waiting_for_approval"}
+            ]
+            files = outputs.get("files", [])
+            if active:
+                task = active[0]
+                summary = " ".join(str(task.get("summary") or "Agent task").split())[:55]
+                label = f"Agent: {str(task.get('state', 'running')).replace('_', ' ')} — {summary}"
+                if len(active) > 1:
+                    label += f" (+{len(active) - 1} more)"
+            else:
+                label = "Agent tasks: none"
+            label += f"  ·  Generated files: {len(files)}"
+            self.query_one("#workspace-activity", Static).update(label)
+        except (RuntimeError, ValueError, LookupError) as error:
+            self.query_one("#workspace-activity", Static).update(
+                f"Agent activity unavailable: {str(error)[:80]}"
+            )
 
     def _fetch_telemetry(self) -> dict:
         try:
@@ -331,6 +387,7 @@ class HsxTUI(App):
         finally:
             self._request_active = False
             await self.refresh_telemetry()
+            await self.refresh_workspace_activity()
 
     def _stream_chat(self, message: str) -> None:
         endpoint = _API["endpoints"]["chat_stream"]

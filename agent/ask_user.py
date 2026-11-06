@@ -202,6 +202,28 @@ class AskUserJobs:
             ).fetchone()
         return self._public(row) if row else None
 
+    def activity(self, session_id: str, limit: int = 8) -> list[dict]:
+        self.expire()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT id, request, state, sensitive, created, updated
+                FROM ask_jobs WHERE session_id = ?
+                ORDER BY created DESC LIMIT ?""",
+                (session_id, max(1, min(limit, 20))),
+            ).fetchall()
+        from agent.ml.dataset_exporter import _redact
+
+        return [
+            {
+                "id": row["id"],
+                "state": row["state"],
+                "summary": "Sensitive task" if row["sensitive"] else _redact(row["request"], 120),
+                "created": row["created"],
+                "updated": row["updated"],
+            }
+            for row in rows
+        ]
+
     def list(self) -> list[dict]:
         self.expire()
         with self._connect() as connection:

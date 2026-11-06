@@ -10,6 +10,7 @@
     "ask_job": "/api/ask-jobs/{job_id}",
     "ask_pending": "/api/ask-jobs/pending",
     "outputs": "/api/outputs",
+    "activity": "/api/activity",
     "stop": "/api/stop"
   },
   "stream_events": ["job", "text_delta", "done", "error"]

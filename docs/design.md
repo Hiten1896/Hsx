@@ -16,7 +16,9 @@ API.
   camera is never substituted with the phone's camera.
 - The navigation only presents chat and file attachment actions supported by the
   current web client. The Artifacts panel lists generated files from the host's
-  `Hsx Work` output directory and links to their workspace previews.
+  `Hsx Work` output directory and links to download them. The Agent activity panel
+  reports tasks persisted for the current session; it does not invent sub-agent
+  statuses when no such work is reported by the backend.
 - The connection rail reports API health, last-used LLM provider, host camera health,
   the current Tailnet access path, and the browser's network-online hint. “Standby”
   means there has not yet been a provider call; it is not a provider health check.
@@ -63,6 +65,14 @@ the capture time for the displayed frame; the metrics show local current time an
 estimated delay, corrected using the server clock response. If the tab is hidden, the
 network drops, or frames stop arriving, the client aborts the old stream and reconnects
 with bounded backoff to the latest host frame.
+The camera heading includes a manual refresh button. Connections sit below the
+sidebar's local-access controls so the live status list is at the bottom of the rail.
+
+The Agent activity panel reads `/api/activity` for the current session and displays
+persisted orchestration job status and a redacted prompt summary. The terminal client
+offers `/activity` and `/artifacts`; the Textual terminal UI shows both in its activity
+line. This reports Hsx jobs, not individual specialist/sub-agent execution because the
+current backend does not persist per-sub-agent progress.
 
 Remote bearer tokens are optional, entered through the access-token control, sent only
 in the Authorization header, and kept in sessionStorage for the current tab. The

@@ -14,6 +14,10 @@ for shared design and server contracts.
   artifacts. Browser camera access is never requested.
 - Artifacts are loaded from `/api/outputs` and link to files in the host workspace's
   `Hsx Work` output directory.
+- Agent activity is loaded from `/api/activity` for the current browser session.
+  Sensitive task prompts are not shown; other summaries are redacted and bounded.
+- The connection panel is at the bottom of the navigation rail/drawer. The camera
+  heading's refresh button requests a fresh host-camera stream.
 
 Only features backed by the current API are shown. Workspace attachments are supported
 for text, Markdown, CSV, JSON, log, and code/text files up to 1 MB. They upload through

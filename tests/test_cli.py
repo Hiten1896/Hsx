@@ -117,3 +117,22 @@ def test_persistent_session_id_reuses_local_id_file(tmp_path, monkeypatch):
 
     assert first.startswith("tty-")
     assert second == first
+
+
+def test_cli_activity_and_artifact_commands_show_server_data(monkeypatch, capsys):
+    requests = []
+
+    def request(path, _payload=None):
+        requests.append(path)
+        if path.startswith("/api/activity"):
+            return {"tasks": [{"state": "running", "summary": "Build a weekly report"}]}
+        return {"files": [{"name": "report.pdf", "type": "pdf", "path": "Hsx Work/report.pdf"}]}
+
+    monkeypatch.setattr(cli, "_request", request)
+    cli._show_activity("tty-session")
+    cli._show_artifacts()
+
+    output = capsys.readouterr().out
+    assert "running: Build a weekly report" in output
+    assert "report.pdf (pdf): Hsx Work/report.pdf" in output
+    assert requests == ["/api/activity?session_id=tty-session", "/api/outputs"]

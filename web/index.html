@@ -35,6 +35,20 @@
           </button>
         </div>
 
+        <div class="sidebar-bottom">
+          <button id="access-token-button" class="token-button" type="button">Set remote access token</button>
+          <form id="access-token-form" class="token-form" hidden>
+            <label for="access-token-input">Remote bearer token</label>
+            <input id="access-token-input" type="password" autocomplete="off" spellcheck="false">
+            <div class="token-actions">
+              <button type="submit">Save for this tab</button>
+              <button id="clear-token-button" type="button">Clear</button>
+            </div>
+            <p>Kept in this tab only. Never added to the URL.</p>
+          </form>
+          <div class="local-note"><span class="local-note-dot"></span> Your workspace stays on your Hsx host</div>
+        </div>
+
         <section class="connections" aria-labelledby="connections-title">
           <div class="connections-heading">
             <h2 id="connections-title">Connections</h2>
@@ -49,20 +63,6 @@
           </ul>
           <p class="connection-note">Status reflects this browser's route and the host's reported health.</p>
         </section>
-
-        <div class="sidebar-bottom">
-          <button id="access-token-button" class="token-button" type="button">Set remote access token</button>
-          <form id="access-token-form" class="token-form" hidden>
-            <label for="access-token-input">Remote bearer token</label>
-            <input id="access-token-input" type="password" autocomplete="off" spellcheck="false">
-            <div class="token-actions">
-              <button type="submit">Save for this tab</button>
-              <button id="clear-token-button" type="button">Clear</button>
-            </div>
-            <p>Kept in this tab only. Never added to the URL.</p>
-          </form>
-          <div class="local-note"><span class="local-note-dot"></span> Your workspace stays on your Hsx host</div>
-        </div>
       </aside>
 
       <main class="chat-area">
@@ -130,7 +130,12 @@
               <p class="panel-eyebrow">HOST HARDWARE</p>
               <h2>Live camera</h2>
             </div>
-            <span id="camera-badge" class="camera-badge camera-badge-offline"><span class="connection-dot"></span> Offline</span>
+            <div class="camera-heading-actions">
+              <span id="camera-badge" class="camera-badge camera-badge-offline"><span class="connection-dot"></span> Offline</span>
+              <button id="camera-retry" class="camera-retry" type="button" aria-label="Refresh camera video" title="Refresh camera video">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"></path><path d="M5.6 9a7 7 0 0 1 11.6-2L20 12M4 12l2.8 5a7 7 0 0 0 11.6-2"></path></svg>
+              </button>
+            </div>
           </div>
           <div class="camera-view">
             <img id="live-camera" class="camera-frame" alt="Live feed from the Hsx host camera" hidden>
@@ -161,6 +166,18 @@
           </div>
           <div id="artifacts-list" class="artifacts-list" aria-live="polite">
             <p class="artifacts-empty">Generated files will appear here.</p>
+          </div>
+        </section>
+        <section class="activity-panel" aria-labelledby="agent-activity-title">
+          <div class="artifacts-heading">
+            <div>
+              <p class="panel-eyebrow">CURRENT SESSION</p>
+              <h2 id="agent-activity-title">Agent activity</h2>
+            </div>
+            <span id="activity-count" class="connection-summary">Checking</span>
+          </div>
+          <div id="agent-activity-list" class="artifacts-list" aria-live="polite">
+            <p class="artifacts-empty">Checking for active tasks…</p>
           </div>
         </section>
       </aside>

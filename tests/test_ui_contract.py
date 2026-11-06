@@ -20,6 +20,7 @@ def test_web_and_tui_load_the_same_design_and_api_contract():
     assert web_api["endpoints"]["chat_stream"] == "/api/chat/stream"
     assert web_api["endpoints"]["feedback"] == "/api/feedback"
     assert web_api["endpoints"]["telemetry"] == "/api/telemetry"
+    assert web_api["endpoints"]["activity"] == "/api/activity"
 
 
 def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
@@ -35,6 +36,8 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert 'id="camera-toggle"' in html
     assert 'id="panel-backdrop"' in html
     assert 'id="artifacts-list"' in html
+    assert 'id="agent-activity-list"' in html
+    assert 'id="camera-retry"' in html
     assert 'id="camera-clock"' in html
     assert 'id="camera-latency"' in html
     assert 'id="camera-clip-time"' in html
@@ -56,6 +59,8 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert "visibilitychange" in script
     assert "scheduleCameraReconnect" in script
     assert "apiContract.endpoints.outputs" in script
+    assert "apiContract.endpoints.activity" in script
+    assert "function retryCamera" in script
     assert "function openMobilePanel" in script
     assert "X-Hsx-Captured-At" in script
     assert "WORKSPACE</span>" not in html
@@ -65,6 +70,8 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert ".sidebar.is-open" in css
     assert ".camera-sidebar.is-open" in css
     assert ".artifacts-panel" in css
+    assert ".activity-panel" in css
+    assert html.index('class="sidebar-bottom"') < html.index('class="connections"')
 
     service_worker = (BASE_DIR / "web" / "service-worker.js").read_text(encoding="utf-8")
     assert "'/web/chat.css'" in service_worker
@@ -88,6 +95,31 @@ def test_tui_has_native_feedback_buttons_with_shared_layout():
             assert app.query_one("#composer-dock")
             assert app.query_one("#good-" + app.query_one(".message-card")._counter)
             assert app.query_one("#bad-" + app.query_one(".message-card")._counter)
+
+    asyncio.run(verify())
+
+
+def test_tui_activity_panel_uses_live_job_and_output_endpoints():
+    async def verify():
+        app = HsxTUI("http://127.0.0.1:1")
+        requests = []
+
+        def fake_api_request(endpoint, _payload=None):
+            requests.append(endpoint)
+            if endpoint.startswith("/api/activity"):
+                return {"tasks": [{"state": "running", "summary": "Build a weekly report"}]}
+            if endpoint == "/api/outputs":
+                return {"files": [{"name": "report.pdf"}]}
+            return {"provider": "not connected"}
+
+        app._api_request = fake_api_request
+        async with app.run_test(size=(100, 30)):
+            await app.refresh_workspace_activity()
+            label = app.query_one("#workspace-activity").render().plain
+            assert "running — Build a weekly report" in label
+            assert "Generated files: 1" in label
+            assert "/api/activity?session_id=terminal" in requests
+            assert "/api/outputs" in requests
 
     asyncio.run(verify())
 

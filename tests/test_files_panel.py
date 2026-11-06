@@ -93,6 +93,22 @@ def test_outputs_endpoint_lists_generated_artifacts(tmp_path: Path, monkeypatch)
     assert files[0]["path"] == "Hsx Work/report.pdf"
 
 
+def test_activity_endpoint_lists_only_the_session_and_hides_sensitive_prompts(tmp_path: Path, monkeypatch):
+    jobs = AskUserJobs(tmp_path / "jobs.db")
+    jobs.create_running("Create a weekly report", "browser-session")
+    jobs.create_running("private API_KEY=do-not-show", "browser-session", sensitive=True)
+    jobs.create_running("Other session task", "other-session")
+    monkeypatch.setattr(server, "ASK_JOBS", jobs)
+
+    status, _, body = _request("/api/activity?session_id=browser-session")
+
+    assert status == 200
+    tasks = json.loads(body)["tasks"]
+    assert len(tasks) == 2
+    assert {item["summary"] for item in tasks} == {"Create a weekly report", "Sensitive task"}
+    assert all(item["state"] == "running" for item in tasks)
+
+
 def test_text_upload_returns_workspace_path_for_chat_attachment(tmp_path: Path, monkeypatch):
     root = tmp_path / "share"
     root.mkdir()

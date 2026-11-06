@@ -742,6 +742,12 @@ class HsxHandler(BaseHTTPRequestHandler):
                 self._json({"error": "A session_id is required."}, 400)
                 return
             self._json({"job": _ask_job_payload(ASK_JOBS.get_pending(session_id))})
+        elif path == "/api/activity":
+            session_id = str(query.get("session_id", [""])[0])[:100]
+            if not session_id:
+                self._json({"error": "A session_id is required."}, 400)
+                return
+            self._json({"tasks": ASK_JOBS.activity(session_id)})
         elif path.startswith("/api/ask-jobs/"):
             job = ASK_JOBS.get(path.removeprefix("/api/ask-jobs/"))
             self._json({"job": _ask_job_payload(job)} if job else {"error": "Job not found."}, 200 if job else 404)

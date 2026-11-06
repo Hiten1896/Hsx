@@ -235,6 +235,29 @@ def _submit(
             return
 
 
+def _show_activity(session_id: str | None = None) -> None:
+    active_session = session_id or _session_id()
+    tasks = _request(f"/api/activity?session_id={quote(active_session)}").get("tasks", [])
+    print("HSX > Agent activity")
+    if not tasks:
+        print("No agent tasks in this session.")
+        return
+    for task in tasks:
+        summary = str(task.get("summary") or "Agent task").replace("\n", " ")[:120]
+        state = str(task.get("state") or "unknown").replace("_", " ")
+        print(f"- {state}: {summary}")
+
+
+def _show_artifacts() -> None:
+    files = _request("/api/outputs").get("files", [])
+    print("HSX > Generated files")
+    if not files:
+        print("No generated files yet.")
+        return
+    for item in files:
+        print(f"- {item.get('name', 'file')} ({item.get('type', 'file')}): {item.get('path', '')}")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="HSX terminal chat client")
     parser.add_argument("command", nargs="?", choices={"doctor"})
@@ -263,6 +286,18 @@ def main(argv: list[str] | None = None) -> None:
         if message.lower() in {"/quit", "/exit"}:
             return
         if not message:
+            continue
+        if message.lower() == "/activity":
+            try:
+                _show_activity()
+            except (RuntimeError, ValueError) as error:
+                print(f"HSX > {error}")
+            continue
+        if message.lower() == "/artifacts":
+            try:
+                _show_artifacts()
+            except (RuntimeError, ValueError) as error:
+                print(f"HSX > {error}")
             continue
         try:
             _submit(message, target_device=target_device)

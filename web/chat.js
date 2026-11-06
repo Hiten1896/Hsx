@@ -37,6 +37,7 @@ const elements = {
   cameraSidebar: document.getElementById('camera-sidebar'),
   panelBackdrop: document.getElementById('panel-backdrop'),
   artifactsList: document.getElementById('artifacts-list'),
+  activityList: document.getElementById('agent-activity-list'),
 };
 
 function safeStorageGet(storage, key) {
@@ -883,6 +884,72 @@ async function refreshArtifacts() {
   }
 }
 
+async function refreshAgentActivity() {
+  const empty = document.createElement('p');
+  empty.className = 'artifacts-empty';
+  empty.textContent = 'Checking for agent tasks…';
+  try {
+    const query = new URLSearchParams({ session_id: sessionId });
+    const response = await apiFetch(`${apiContract.endpoints.activity}?${query}`);
+    if (!response.ok) throw new Error('Could not load agent activity.');
+    const data = await response.json();
+    const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+    document.getElementById('activity-count').textContent =
+      `${tasks.filter((task) => ['queued', 'running', 'waiting_for_user', 'waiting_for_approval'].includes(task.state)).length} active`;
+    if (!tasks.length) {
+      empty.textContent = 'No agent tasks in this session yet.';
+      elements.activityList.replaceChildren(empty);
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    for (const task of tasks) {
+      const item = document.createElement('div');
+      item.className = 'activity-item';
+      const summary = document.createElement('span');
+      summary.className = 'activity-summary';
+      summary.textContent = String(task.summary || 'Agent task');
+      const meta = document.createElement('span');
+      meta.className = 'activity-meta';
+      const state = document.createElement('span');
+      state.className = 'activity-state';
+      state.dataset.state = String(task.state || 'unknown');
+      state.textContent = String(task.state || 'unknown').replaceAll('_', ' ');
+      meta.append(state);
+      item.append(summary, meta);
+      fragment.append(item);
+    }
+    elements.activityList.replaceChildren(fragment);
+  } catch {
+    document.getElementById('activity-count').textContent = 'Unavailable';
+    empty.textContent = 'Agent activity is unavailable right now.';
+    elements.activityList.replaceChildren(empty);
+  }
+}
+
+async function retryCamera() {
+  const button = document.getElementById('camera-retry');
+  button.disabled = true;
+  stopCameraStream();
+  cameraHasFrame = false;
+  cameraRetryDelay = 500;
+  elements.camera.removeAttribute('src');
+  if (cameraObjectUrl) {
+    URL.revokeObjectURL(cameraObjectUrl);
+    cameraObjectUrl = '';
+  }
+  document.getElementById('camera-clip-time').textContent = 'Waiting for video';
+  document.getElementById('camera-clip-time').hidden = true;
+  setCameraLatency(null);
+  setCameraStatus(false, 'Refreshing host camera…');
+  try {
+    await refreshCamera();
+  } finally {
+    window.setTimeout(() => {
+      button.disabled = false;
+    }, 750);
+  }
+}
+
 async function stopTask() {
   try {
     await apiFetch(apiContract.endpoints.stop, { method: 'POST' });
@@ -954,6 +1021,7 @@ async function initialize() {
   document.getElementById('camera-close').addEventListener('click', closeMobilePanels);
   elements.panelBackdrop.addEventListener('click', closeMobilePanels);
   document.getElementById('refresh-artifacts').addEventListener('click', refreshArtifacts);
+  document.getElementById('camera-retry').addEventListener('click', retryCamera);
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') closeMobilePanels();
   });
@@ -1050,7 +1118,9 @@ async function initialize() {
   });
   await refreshConnections();
   refreshArtifacts();
+  refreshAgentActivity();
   window.setInterval(refreshConnections, 15000);
+  window.setInterval(refreshAgentActivity, 5000);
   updateCameraClock();
   window.setInterval(updateCameraClock, 1000);
 }

@@ -43,7 +43,7 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visib
 .nav-item:hover { color: var(--text); background: #252d28; }
 .nav-item-active { color: var(--text); background: #29332c; }
 .nav-icon { display: inline-grid; place-items: center; width: 19px; color: #b6c6b8; font-size: 18px; }
-.connections { margin-top: auto; padding: 14px 12px 12px; border: 1px solid var(--border); border-radius: 12px; background: #1b211d; }
+.connections { margin-top: 12px; padding: 14px 12px 12px; border: 1px solid var(--border); border-radius: 12px; background: #1b211d; }
 .connections-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
 .connections-heading h2 { margin: 0; font-size: 12px; font-weight: 650; }
 .connection-summary { color: var(--muted); font: 9px var(--font-code); }
@@ -55,7 +55,7 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visib
 .connection-dot[data-state="warning"] { background: var(--warning); box-shadow: 0 0 0 3px #e6bd771e; }
 .connection-dot[data-state="disconnected"] { background: var(--danger); box-shadow: 0 0 0 3px #e28e881e; }
 .connection-note { margin: 12px 0 0; color: #7e8a80; font-size: 9px; line-height: 1.5; }
-.sidebar-bottom { margin-top: 12px; }
+.sidebar-bottom { margin-top: auto; padding-top: 12px; }
 .token-button { padding: 5px 3px; border: 0; color: var(--muted); background: transparent; font-size: 10px; }
 .token-button:hover { color: var(--text); }
 .local-note { display: flex; align-items: center; gap: 8px; margin-top: 11px; color: #9ca89e; font-size: 10px; }
@@ -162,6 +162,7 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 .camera-sidebar { overflow-y: auto; min-width: 0; padding: 22px 18px; border-left: 1px solid var(--border); background: #171c19; }
 .camera-panel { overflow: hidden; border: 1px solid #354038; border-radius: 13px; background: #1c231e; box-shadow: 0 12px 36px #0002; }
 .camera-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 15px 15px 13px; border-bottom: 1px solid #313a33; }
+.camera-heading-actions { display: flex; align-items: center; gap: 7px; }
 .camera-heading h2 { margin: 5px 0 0; font-size: 13px; font-weight: 650; }
 .panel-eyebrow { color: #89978b; font-size: 8px; }
 .camera-badge { display: inline-flex; align-items: center; gap: 7px; padding: 5px 8px; border: 1px solid #4b554d; border-radius: 999px; color: var(--muted); font: 9px var(--font-code); white-space: nowrap; }
@@ -171,6 +172,10 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 .camera-badge-offline { color: #bd918b; }
 .camera-badge-reconnecting { color: var(--warning); border-color: #8d7449; }
 .camera-badge-reconnecting .connection-dot { background: var(--warning); }
+.camera-retry { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid #3b473e; border-radius: 9px; color: #c5d0c6; background: #242d27; }
+.camera-retry:hover { border-color: #708477; color: var(--text); }
+.camera-retry:disabled { cursor: progress; opacity: .55; }
+.camera-retry svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
 .camera-view { position: relative; display: grid; place-items: center; overflow: hidden; width: 100%; aspect-ratio: 4 / 3; background: #0c100e; }
 .camera-frame { display: block; width: 100%; height: 100%; object-fit: cover; background: #0c100e; }
 .camera-clip-time { position: absolute; bottom: 10px; left: 10px; padding: 5px 8px; border: 1px solid #ffffff24; border-radius: 6px; color: #f3f5f2; background: #080b09c9; font: 10px var(--font-code); }
@@ -188,7 +193,7 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 .camera-info { display: flex; gap: 9px; margin-top: 13px; padding: 12px; border: 1px solid #303a33; border-radius: 10px; color: #a1ada2; background: #1b211d; }
 .camera-info p { margin: 0; font-size: 9px; line-height: 1.55; }
 .info-icon { display: grid; flex: 0 0 auto; place-items: center; width: 16px; height: 16px; border: 1px solid #708075; border-radius: 50%; font: 10px var(--font-code); }
-.artifacts-panel { overflow: hidden; margin-top: 13px; border: 1px solid #354038; border-radius: 13px; background: #1c231e; }
+.artifacts-panel, .activity-panel { overflow: hidden; margin-top: 13px; border: 1px solid #354038; border-radius: 13px; background: #1c231e; }
 .artifacts-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 13px 15px; border-bottom: 1px solid #313a33; }
 .artifacts-heading h2 { margin: 5px 0 0; font-size: 13px; font-weight: 650; }
 .artifacts-refresh { width: 34px; height: 34px; border: 1px solid #3b473e; border-radius: 9px; color: #c5d0c6; background: #242d27; font-size: 19px; }
@@ -201,6 +206,13 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 .artifact-name { display: block; overflow: hidden; font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-meta { display: block; overflow: hidden; margin-top: 4px; color: #8d998f; font: 8px var(--font-code); text-overflow: ellipsis; white-space: nowrap; }
 .artifact-type { color: #9eada1; font: 8px var(--font-code); text-transform: uppercase; }
+.activity-count { color: var(--muted); font: 9px var(--font-code); }
+.activity-item { display: grid; gap: 5px; padding: 9px; border: 1px solid #303a33; border-radius: 9px; background: #202722; }
+.activity-summary { color: #d7e2d8; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.activity-meta { color: #8d998f; font: 8px var(--font-code); }
+.activity-state { color: #b7c8b9; }
+.activity-state[data-state="running"] { color: var(--accent); }
+.activity-state[data-state="waiting_for_approval"], .activity-state[data-state="waiting_for_user"] { color: var(--warning); }
 .mobile-panel-close, .panel-backdrop { display: none; }
 
 @media (min-width: 1500px) {
@@ -242,7 +254,7 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
   .camera-sidebar { position: fixed; z-index: 41; inset: 0; display: none; overflow-y: auto; min-height: 100dvh; padding: max(14px, env(safe-area-inset-top)) 14px max(18px, env(safe-area-inset-bottom)); border: 0; background: var(--background); }
   .camera-sidebar.is-open { display: block; }
   .mobile-panel-close { position: sticky; z-index: 2; top: 0; display: block; width: 100%; min-height: 44px; margin: 0 0 10px; border: 1px solid var(--border); border-radius: 10px; color: var(--text); background: #202722; font-size: 12px; }
-  .camera-sidebar .camera-panel, .camera-sidebar .camera-info, .camera-sidebar .artifacts-panel { max-width: 560px; margin-right: auto; margin-left: auto; }
+  .camera-sidebar .camera-panel, .camera-sidebar .camera-info, .camera-sidebar .artifacts-panel, .camera-sidebar .activity-panel { max-width: 560px; margin-right: auto; margin-left: auto; }
   .camera-sidebar .camera-view { max-height: 42dvh; }
   .panel-backdrop:not([hidden]) { position: fixed; z-index: 40; inset: 0; display: block; width: 100%; height: 100%; border: 0; background: #050806b8; }
 }
