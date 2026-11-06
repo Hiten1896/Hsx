@@ -102,12 +102,34 @@ def _request_stream(path: str, payload: dict) -> dict:
 
 def _show_approval(job: dict) -> None:
     approval = job.get("approval") or {}
-    print(f"HSX wants to: {approval.get('summary', 'run a tool')}")
-    print(f"Why: {approval.get('why', 'This action needs your approval.')}")
-    risk = approval.get("risk", "UNKNOWN")
+    approval_request = job.get("approval_request") or {}
+    if approval_request.get("status") == "waiting_approval":
+        tool_name = approval_request.get("tool") or approval.get("tool") or "tool"
+        print(f"HSX > I need your permission to run the tool '{tool_name}'. Would you like to proceed? (Yes/No)")
+        details = approval_request.get("details") or approval.get("details")
+        if details:
+            print(f"Details: {details}")
+        return
+    summary = approval.get("summary") or approval_request.get("summary") or "run a tool"
+    why = approval.get("why") or approval_request.get("why") or "This action needs your approval."
+    risk = (approval.get("risk") or approval_request.get("risk") or "UNKNOWN").upper()
     suffix = " (cannot be undone)" if risk == "DANGEROUS" else ""
+    print(f"HSX wants to: {summary}")
+    print(f"Why: {why}")
     print(f"Risk: {risk}{suffix}")
     print("Reply: yes / no / details")
+
+
+def _approval_is_yes(answer: str) -> bool:
+    normalized = answer.strip().casefold()
+    yes_values = {"yes", "y", "i understand, proceed", "i understand", "proceed", "approve", "ok"}
+    return normalized in yes_values or normalized.startswith("yes ") or normalized.startswith("i understand")
+
+
+def _approval_is_no(answer: str) -> bool:
+    normalized = answer.strip().casefold()
+    no_values = {"no", "n", "cancel", "cancelled", "stop"}
+    return normalized in no_values or normalized.startswith("no ") or normalized.startswith("cancel ")
 
 
 def _answer_job(job: dict, answer: str) -> dict:
@@ -120,8 +142,9 @@ def _answer_job(job: dict, answer: str) -> dict:
 def _continue_existing(job: dict, answer: str) -> bool:
     if job.get("state") == "waiting_for_approval":
         _show_approval(job)
-        if answer.strip().casefold() == "details":
-            details = (job.get("approval") or {}).get("details", "")
+        normalized = answer.strip().casefold()
+        if normalized == "details":
+            details = ((job.get("approval") or {}) or (job.get("approval_request") or {})).get("details", "")
             print(f"Details: {details or 'No additional details.'}")
             return False
     response = _answer_job(job, answer)
@@ -181,7 +204,7 @@ def _submit(
             _show_approval(job)
             answer = input("You > ").strip()
             if answer.casefold() == "details":
-                details = (job.get("approval") or {}).get("details", "")
+                details = ((job.get("approval") or {}) or (job.get("approval_request") or {})).get("details", "")
                 print(f"Details: {details or 'No additional details.'}")
                 continue
             _answer_job(job, answer)

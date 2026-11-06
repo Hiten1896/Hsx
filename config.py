@@ -81,7 +81,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_COMPATIBLE_URL = os.getenv("OPENAI_COMPATIBLE_URL", "")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 MODE = os.getenv("HSX_MODE", "jarvis").strip().lower()
-HOST = os.getenv("HSX_HOST", "127.0.0.1").strip() or "127.0.0.1"
+HOST = os.getenv("HSX_HOST", "0.0.0.0").strip() or "0.0.0.0"
 PORT = int(os.getenv("HSX_PORT", "8000"))
 REMOTE_ACCESS_TOKEN = os.getenv("HSX_REMOTE_TOKEN", "").strip()
 if REMOTE_ACCESS_TOKEN and len(REMOTE_ACCESS_TOKEN) < 32:
