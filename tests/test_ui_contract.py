@@ -175,6 +175,9 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert 'id="voice-indicator"' in html
     assert 'class="message-author"' not in html
     assert 'id="composer-form"' in html
+    assert '<p class="privacy-note">Made by HS</p>' in html
+    assert '<span id="composer-status" role="status"></span>' in html
+    assert 'Files up to 1 MB each' not in html
     assert 'id="live-camera"' in html
     assert 'id="sidebar-toggle"' in html
     assert 'id="camera-toggle"' in html

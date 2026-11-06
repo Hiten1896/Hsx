@@ -18,7 +18,7 @@ let artifactsRequestId = 0;
 let voiceRecognition = null;
 let voiceIsListening = false;
 let voiceDraft = '';
-let voiceStatusMessage = 'Files up to 1 MB each';
+let voiceStatusMessage = '';
 let uploadedAttachments = [];
 let cameraObjectUrl = '';
 let cameraStreamController = null;
@@ -644,7 +644,7 @@ function setupVoiceInput() {
     voiceFinalText = '';
     recognition.onstart = () => {
       voiceIsListening = true;
-      voiceStatusMessage = 'Files up to 1 MB each';
+      voiceStatusMessage = '';
       elements.voiceButton.setAttribute('aria-label', 'Stop voice input');
       elements.voiceButton.title = 'Stop voice input';
       elements.voiceIndicator.hidden = false;
