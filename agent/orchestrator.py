@@ -6,7 +6,7 @@ import time
 import uuid
 from collections.abc import Callable
 
-from agent.ask_user import AskUserRequest
+from agent.ask_user import ApprovalRequest, AskUserRequest
 from agent.devices import system_body_context
 from agent.llm_client import call_llm
 from agent.llm.types import to_plain_data
@@ -16,6 +16,7 @@ from agent.ml.memory import EXPERIENCE_MEMORY
 from agent.ml.planner import TASK_PLANNER, PlanStep, is_complex_task
 from agent.ml.prefetch import INTENT_PREFETCHER
 from agent.memory import MemoryManager
+from agent.memory.knowledge_graph import KNOWLEDGE_GRAPH
 from agent.policy import POLICY
 from agent.rag import RAG_INDEX
 from agent.router import INTENT_ROUTER, LLM_TELEMETRY, ROUTER_LOGGER
@@ -155,12 +156,15 @@ def run_agent(
     complex_task = False
     vision_image_data = ""
     if resume_tool_result:
+        result = resume_tool_result.get("result")
+        if result is None:
+            result = {"success": True, "answer": resume_tool_result["answer"]}
         conversation_history.append({
             "role": "user",
             "content": [{
                 "type": "tool_result",
                 "tool_use_id": resume_tool_result["tool_call_id"],
-                "content": json.dumps({"success": True, "answer": resume_tool_result["answer"]}),
+                "content": json.dumps(result, ensure_ascii=False),
             }],
         })
     else:
@@ -394,18 +398,6 @@ def run_agent(
                 return answer, conversation_history
         if direct:
             tool_call_id = f"local-{uuid.uuid4().hex}"
-            decision = POLICY.decide(tool, {}, session_id, (approvals or {}).get(predicted_tool))
-            if not decision["allowed"]:
-                ROUTER_LOGGER.log_tool_prediction(
-                    session_id, job_id, predicted_tool, tool_call_id
-                )
-                ROUTER_LOGGER.log_tool_execution(
-                    session_id, job_id, predicted_tool, tool_call_id, 0, "denied"
-                )
-                answer = json.dumps(decision)
-                conversation_history.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
-                return answer, conversation_history
-
             conversation_history.append({
                 "role": "assistant",
                 "content": [{
@@ -415,6 +407,27 @@ def run_agent(
                     "input": {},
                 }],
             })
+            decision = POLICY.decide(tool, {}, session_id, (approvals or {}).get(predicted_tool))
+            if not decision["allowed"]:
+                ROUTER_LOGGER.log_tool_prediction(
+                    session_id, job_id, predicted_tool, tool_call_id
+                )
+                ROUTER_LOGGER.log_tool_execution(
+                    session_id, job_id, predicted_tool, tool_call_id, 0, "denied"
+                )
+                if decision.get("status") == "waiting_approval":
+                    paused = {"type": "text", "text": "Paused: waiting for user approval."}
+                    conversation_history[-1]["content"].append(paused)
+                    raise ApprovalRequest(
+                        predicted_tool,
+                        {},
+                        decision["approval_request"],
+                        _serializable_history(conversation_history),
+                        tool_call_id,
+                    )
+                answer = "That action is blocked by the host safety policy."
+                conversation_history.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
+                return answer, conversation_history
             ROUTER_LOGGER.log_tool_prediction(
                 session_id, job_id, predicted_tool, tool_call_id
             )
@@ -470,6 +483,12 @@ def run_agent(
             rag_context = RAG_INDEX.prompt_context(user_input)
         except (OSError, RuntimeError, ValueError):
             LOGGER.exception("Could not retrieve local RAG context.")
+        try:
+            graph_context = KNOWLEDGE_GRAPH.prompt_context(user_input)
+            if graph_context:
+                rag_context = "\n\n".join(filter(None, (rag_context, graph_context)))
+        except (OSError, RuntimeError, ValueError):
+            LOGGER.exception("Could not retrieve local knowledge graph context.")
     for _ in range(max_iterations):
         if POLICY.is_stopped():
             return "This run was stopped by the kill switch.", conversation_history
@@ -560,7 +579,7 @@ def run_agent(
             return answer, conversation_history
         conversation_history.append({"role": "assistant", "content": to_plain_data(blocks)})
         results = []
-        for call in tool_calls:
+        for call_index, call in enumerate(tool_calls):
             ROUTER_LOGGER.log_tool_prediction(session_id, job_id, call.name, call.id)
             skill = next((tool for tool in tools if tool["name"] == call.name), None)
             if skill is None:
@@ -570,7 +589,39 @@ def run_agent(
             decision = POLICY.decide(skill, call.input, session_id, (approvals or {}).get(call.name))
             if not decision["allowed"]:
                 ROUTER_LOGGER.log_tool_execution(session_id, job_id, call.name, call.id, 0, "denied")
-                return json.dumps(decision), conversation_history
+                if decision.get("status") == "waiting_approval":
+                    content = conversation_history[-1].get("content", [])
+                    content.append({"type": "text", "text": "Paused: waiting for user approval."})
+                    pending_results = list(results)
+                    pending_results.extend(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": later.id,
+                            "content": json.dumps({
+                                "success": False,
+                                "error": "This tool call is paused until the pending approval is resolved.",
+                            }),
+                        }
+                        for later in tool_calls[call_index + 1 :]
+                    )
+                    if pending_results:
+                        conversation_history.append({"role": "user", "content": pending_results})
+                    raise ApprovalRequest(
+                        call.name,
+                        dict(call.input),
+                        decision["approval_request"],
+                        _serializable_history(conversation_history),
+                        call.id,
+                    )
+                results.append({
+                    "type": "tool_result",
+                    "tool_use_id": call.id,
+                    "content": json.dumps({
+                        "success": False,
+                        "error": "This action is blocked by the host safety policy.",
+                    }),
+                })
+                continue
             started = time.perf_counter()
             try:
                 tool_input = dict(call.input)

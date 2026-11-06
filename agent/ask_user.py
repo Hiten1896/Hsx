@@ -8,6 +8,25 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 
+class ApprovalRequest(Exception):
+    def __init__(
+        self,
+        tool: str,
+        arguments: dict,
+        approval_request: dict,
+        checkpoint: list[dict],
+        tool_call_id: str,
+        timeout_hours: int = 24,
+    ):
+        self.tool = tool
+        self.arguments = arguments
+        self.approval_request = approval_request
+        self.checkpoint = checkpoint
+        self.tool_call_id = tool_call_id
+        self.timeout_hours = timeout_hours
+        super().__init__(approval_request.get("summary", f"run {tool}"))
+
+
 class AskUserRequest(Exception):
     def __init__(
         self,
@@ -62,6 +81,8 @@ class AskUserJobs:
                 target_device TEXT NOT NULL DEFAULT 'client_browser',
                 device_actions TEXT NOT NULL DEFAULT '[]',
                 sensitive INTEGER NOT NULL DEFAULT 0,
+                approval_id TEXT NOT NULL DEFAULT '',
+                approval_json TEXT NOT NULL DEFAULT '{}',
                 created TEXT NOT NULL, updated TEXT NOT NULL,
                 expires_at TEXT NOT NULL)"""
             )
@@ -80,6 +101,10 @@ class AskUserJobs:
                 connection.execute(
                     "ALTER TABLE ask_jobs ADD COLUMN sensitive INTEGER NOT NULL DEFAULT 0"
                 )
+            if "approval_id" not in columns:
+                connection.execute("ALTER TABLE ask_jobs ADD COLUMN approval_id TEXT NOT NULL DEFAULT ''")
+            if "approval_json" not in columns:
+                connection.execute("ALTER TABLE ask_jobs ADD COLUMN approval_json TEXT NOT NULL DEFAULT '{}'")
             connection.execute(
                 """UPDATE ask_jobs SET state = 'failed',
                 error = 'The server restarted while this job was running; submit it again.',
@@ -94,8 +119,9 @@ class AskUserJobs:
     @staticmethod
     def _public(row: sqlite3.Row) -> dict:
         job = dict(row)
-        for field in ("options", "answers", "checkpoint", "device_actions", "result"):
+        for field in ("options", "answers", "checkpoint", "device_actions", "result", "approval_json"):
             job[field] = json.loads(job[field]) if job[field] else ([] if field in {"options", "answers", "checkpoint", "device_actions"} else None)
+        job["approval"] = job.pop("approval_json") or {}
         job["allow_free_text"] = bool(job["allow_free_text"])
         job["sensitive"] = bool(job["sensitive"])
         return job
@@ -165,12 +191,23 @@ class AskUserJobs:
             row = connection.execute("SELECT * FROM ask_jobs WHERE id = ?", (job_id,)).fetchone()
         return self._public(row) if row else None
 
+    def get_pending(self, session_id: str) -> dict | None:
+        self.expire()
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT * FROM ask_jobs WHERE session_id = ?
+                AND state IN ('waiting_for_user', 'waiting_for_approval')
+                ORDER BY created DESC LIMIT 1""",
+                (session_id,),
+            ).fetchone()
+        return self._public(row) if row else None
+
     def list(self) -> list[dict]:
         self.expire()
         with self._connect() as connection:
             rows = connection.execute(
                 """SELECT id, state, question, options, allow_free_text, question_count,
-                expires_at, target_device, device_actions
+                expires_at, target_device, device_actions, approval_id, approval_json
                 FROM ask_jobs ORDER BY created DESC LIMIT 100"""
             ).fetchall()
         return [
@@ -180,6 +217,8 @@ class AskUserJobs:
                 "allow_free_text": bool(row["allow_free_text"]),
                 "target_device": row["target_device"],
                 "device_actions": json.loads(row["device_actions"]),
+                "approval_id": row["approval_id"],
+                "approval": json.loads(row["approval_json"]),
                 "result": None,
                 "error": "",
             }
@@ -191,8 +230,10 @@ class AskUserJobs:
         with self._connect() as connection:
             return connection.execute(
                 """UPDATE ask_jobs SET state = 'cancelled',
-                error = 'Question timed out; the job was cancelled.',
-                updated = ? WHERE state = 'waiting_for_user' AND expires_at <= ?""",
+                error = CASE WHEN state = 'waiting_for_approval'
+                    THEN 'Approval expired; the requested action was not run.'
+                    ELSE 'Question timed out; the job was cancelled.' END,
+                updated = ? WHERE state IN ('waiting_for_user', 'waiting_for_approval') AND expires_at <= ?""",
                 (now, now),
             ).rowcount
 
@@ -232,6 +273,98 @@ class AskUserJobs:
             updated = connection.execute("SELECT * FROM ask_jobs WHERE id = ?", (job_id,)).fetchone()
         return self._public(updated)
 
+    def create_approval(
+        self,
+        request: str,
+        session_id: str,
+        approval: dict,
+        checkpoint: list[dict],
+        tool_call_id: str,
+        task_dir: str = "",
+        target_device: str = "local_host",
+        timeout_hours: int = 24,
+    ) -> dict:
+        now = self._now()
+        job_id = uuid.uuid4().hex
+        approval_id = uuid.uuid4().hex
+        expires = now + timedelta(hours=timeout_hours)
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO ask_jobs(
+                    id, request, session_id, question, options, allow_free_text, state,
+                    question_count, answers, checkpoint, tool_call_id, task_dir, target_device,
+                    sensitive, approval_id, approval_json, created, updated, expires_at
+                ) VALUES (?, ?, ?, '', '[]', 1, 'waiting_for_approval', 0, '[]', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)""",
+                (
+                    job_id,
+                    request,
+                    session_id,
+                    json.dumps(checkpoint),
+                    tool_call_id,
+                    task_dir,
+                    target_device,
+                    approval_id,
+                    json.dumps(approval),
+                    now.isoformat(),
+                    now.isoformat(),
+                    expires.isoformat(),
+                ),
+            )
+        return self.get(job_id)
+
+    def pause_approval(self, job_id: str, approval: dict, checkpoint: list[dict], tool_call_id: str) -> dict:
+        now = self._now()
+        approval_id = uuid.uuid4().hex
+        with self._connect() as connection:
+            connection.execute(
+                """UPDATE ask_jobs SET state = 'waiting_for_approval', approval_id = ?,
+                approval_json = ?, checkpoint = ?, tool_call_id = ?, error = '',
+                expires_at = ?, updated = ? WHERE id = ?""",
+                (
+                    approval_id,
+                    json.dumps(approval),
+                    json.dumps(checkpoint),
+                    tool_call_id,
+                    (now + timedelta(hours=24)).isoformat(),
+                    now.isoformat(),
+                    job_id,
+                ),
+            )
+        return self.get(job_id)
+
+    def answer_approval(self, job_id: str, approval_id: str, answer: str) -> tuple[dict, bool | None]:
+        from agent.autonomy import parse_approval_answer
+
+        self.expire()
+        answer = answer.strip()
+        if not answer or len(answer) > 4000:
+            raise ValueError("Answer yes or no to the pending approval.")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT * FROM ask_jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None:
+                raise KeyError("Approval job not found.")
+            if row["state"] != "waiting_for_approval" or row["approval_id"] != approval_id:
+                raise ValueError("This approval is no longer pending.")
+            approval = json.loads(row["approval_json"])
+            decision = parse_approval_answer(answer)
+            now = self._now().isoformat()
+            if decision is None:
+                reminder = f"I'm waiting for your yes or no on: {approval.get('summary', 'this action')}"
+                connection.execute(
+                    "UPDATE ask_jobs SET error = ?, updated = ? WHERE id = ?",
+                    (reminder, now, job_id),
+                )
+            else:
+                answers = json.loads(row["answers"])
+                answers.append(answer)
+                connection.execute(
+                    "UPDATE ask_jobs SET state = 'running', answers = ?, error = '', updated = ? WHERE id = ?",
+                    (json.dumps(answers), now, job_id),
+                )
+            updated = connection.execute("SELECT * FROM ask_jobs WHERE id = ?", (job_id,)).fetchone()
+        return self._public(updated), decision
+
     def pause(self, job_id: str, question: AskUserRequest) -> dict:
         now = self._now()
         with self._connect() as connection:
@@ -266,7 +399,8 @@ class AskUserJobs:
     def complete(self, job_id: str, result: str, device_actions: list[dict] | None = None) -> dict:
         with self._connect() as connection:
             connection.execute(
-                "UPDATE ask_jobs SET state = 'done', result = ?, device_actions = ?, error = '', updated = ? WHERE id = ?",
+                """UPDATE ask_jobs SET state = 'done', result = ?, device_actions = ?,
+                approval_json = '{}', approval_id = '', error = '', updated = ? WHERE id = ?""",
                 (json.dumps(result), json.dumps(device_actions or []), self._now().isoformat(), job_id),
             )
         return self.get(job_id)
@@ -281,7 +415,7 @@ class AskUserJobs:
     def fail(self, job_id: str, error: str) -> dict:
         with self._connect() as connection:
             connection.execute(
-                "UPDATE ask_jobs SET state = 'failed', error = ?, updated = ? WHERE id = ?",
+                "UPDATE ask_jobs SET state = 'failed', approval_json = '{}', approval_id = '', error = ?, updated = ? WHERE id = ?",
                 (error[:1000], self._now().isoformat(), job_id),
             )
         return self.get(job_id)

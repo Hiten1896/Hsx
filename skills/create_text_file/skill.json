@@ -1,0 +1,13 @@
+{
+  "name": "create_text_file",
+  "description": "Create a UTF-8 text file inside the shared workspace. Never overwrite: use a numeric suffix if the name already exists.",
+  "risk": "safe",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": {"type": "string", "description": "Relative path inside the shared workspace."},
+      "content": {"type": "string", "description": "Exact text to write."}
+    },
+    "required": ["path", "content"]
+  }
+}

@@ -164,6 +164,29 @@ class LogRecorder:
             "payload": safe_payload,
         })
 
+    def record_execution(
+        self,
+        prompt: str,
+        response: str,
+        *,
+        run_id: str,
+        history: list | None,
+        succeeded: bool,
+        error: str = "",
+        sensitive: bool = False,
+    ) -> dict[str, Any] | None:
+        from agent.ml.dpo_collector import DPO_COLLECTOR
+
+        return DPO_COLLECTOR.record_execution(
+            prompt,
+            response,
+            run_id=run_id,
+            history=history,
+            succeeded=succeeded,
+            error=error,
+            sensitive=sensitive,
+        )
+
     def stop(self, timeout: float = 5.0) -> None:
         with self._lock:
             if self._closed:

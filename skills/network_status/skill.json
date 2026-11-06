@@ -1,0 +1,6 @@
+{
+  "name": "network_status",
+  "description": "List local host network interfaces, link state, and assigned addresses without contacting a remote node.",
+  "risk": "safe",
+  "input_schema": {"type": "object", "properties": {}, "required": []}
+}

@@ -1,0 +1,6 @@
+{
+  "name": "system_info",
+  "description": "Return CPU, memory, disk, OS, uptime, hostname, and local time for the machine running the HSX server.",
+  "risk": "safe",
+  "input_schema": {"type": "object", "properties": {}, "required": []}
+}

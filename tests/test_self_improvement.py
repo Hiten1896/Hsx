@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -6,7 +7,12 @@ from agent.approval import ApprovalGuard
 from agent.self_improvement import SelfImprovement
 
 
-def test_proposal_requires_tests_and_owner_approval(tmp_path: Path):
+def test_proposal_requires_tests_and_owner_approval(tmp_path: Path, monkeypatch):
+    def fake_run_command(command, **kwargs):
+        assert command[1:4] == ["-m", "pytest", "-q"]
+        return SimpleNamespace(returncode=0, timed_out=False, stdout="1 passed", stderr="")
+
+    monkeypatch.setattr("agent.self_improvement.run_command", fake_run_command)
     approval_token = "test-approval-token"
     guard = ApprovalGuard(tmp_path / "owner.pin", approval_token)
     manager = SelfImprovement(

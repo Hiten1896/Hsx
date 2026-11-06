@@ -1,13 +1,13 @@
 import json
-import os
 import shutil
 import sqlite3
-import subprocess
+import sys
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
 from agent.approval import ApprovalGuard
+from agent.sandbox.executor import SandboxError, run_command
 from agent.security import safe_path
 from config import DATA_DIR, SCRATCH_DIR
 
@@ -84,18 +84,20 @@ class SelfImprovement:
         tests = list(sandbox.rglob("test_*.py"))
         if not tests:
             raise ValueError("A proposal must include at least one test_*.py file.")
-        safe_environment = {
-            key: value
-            for key, value in os.environ.items()
-            if key.upper() in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "PATHEXT"}
-        }
-        result = subprocess.run(
-            ["python", "-m", "pytest", "-q", *[str(test) for test in tests]],
-            cwd=sandbox, capture_output=True, text=True, timeout=120,
-            env=safe_environment,
-            check=False,
-        )
-        check = {"passed": result.returncode == 0, "stdout": result.stdout[-4000:], "stderr": result.stderr[-4000:]}
+        try:
+            result = run_command(
+                [sys.executable, "-m", "pytest", "-q", *[str(test) for test in tests]],
+                working_directory=sandbox,
+                timeout_seconds=60,
+                memory_bytes=384 * 1024 * 1024,
+            )
+            check = {
+                "passed": result.returncode == 0 and not result.timed_out,
+                "stdout": result.stdout[-4000:],
+                "stderr": result.stderr[-4000:],
+            }
+        except (OSError, SandboxError, ValueError) as error:
+            check = {"passed": False, "stdout": "", "stderr": str(error)[:4000]}
         with sqlite3.connect(self.database_path) as connection:
             connection.execute(
                 "UPDATE proposals SET status = ?, checks = ?, updated = ? WHERE id = ?",

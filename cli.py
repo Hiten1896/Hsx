@@ -1,15 +1,44 @@
-import getpass
+import argparse
 import json
 import os
 import re
-import sys
 import time
 import urllib.error
 import urllib.request
 import uuid
+from pathlib import Path
+from urllib.parse import quote
 
 BASE_URL = os.getenv("HSX_URL", "http://127.0.0.1:8000").rstrip("/")
-SESSION_ID = f"tty-{uuid.uuid4().hex[:12]}"
+SESSION_ID = os.getenv("HSX_SESSION_ID", "").strip()
+
+
+def _session_id() -> str:
+    if SESSION_ID:
+        return SESSION_ID
+    session_file = Path.home() / ".hsx" / "cli-session-id"
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    if session_file.is_file():
+        value = session_file.read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"tty-[0-9a-f]{24}", value):
+            return value
+    value = f"tty-{uuid.uuid4().hex[:24]}"
+    session_file.write_text(value, encoding="utf-8")
+    try:
+        os.chmod(session_file, 0o600)
+    except OSError:
+        pass
+    return value
+
+
+def _request_headers(accept: str | None = None) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if accept:
+        headers["Accept"] = accept
+    token = os.getenv("HSX_REMOTE_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def _request(path: str, payload: dict | None = None) -> dict:
@@ -17,9 +46,7 @@ def _request(path: str, payload: dict | None = None) -> dict:
     request = urllib.request.Request(
         f"{BASE_URL}{path}",
         data=body,
-        headers={
-            "Content-Type": "application/json",
-        },
+        headers=_request_headers(),
         method="POST" if body is not None else "GET",
     )
     try:
@@ -36,10 +63,7 @@ def _request_stream(path: str, payload: dict) -> dict:
     request = urllib.request.Request(
         f"{BASE_URL}{path}",
         data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream",
-        },
+        headers=_request_headers("text/event-stream"),
         method="POST",
     )
     event_name = ""
@@ -76,31 +100,72 @@ def _request_stream(path: str, payload: dict) -> dict:
     return {"job": job, "streamed_text": "".join(streamed_text)}
 
 
-def _submit(message: str) -> None:
-    approvals = {}
-    if re.search(r"\b(camera|webcam|snapshot|photo|record|play|audio|music)\b", message, re.IGNORECASE):
-        pin = getpass.getpass("Owner PIN for requested local media actions (Enter to skip): ").strip()
-        if pin:
-            approvals.update({"audio_play": pin, "camera_record": pin})
-    response = _request_stream(
-        "/api/chat/stream",
-        {
-            "message": message,
-            "session_id": SESSION_ID,
-            "target_device": "local_host",
-            "approvals": approvals,
-        },
-    )
-    job = response.get("job")
-    if not job:
+def _show_approval(job: dict) -> None:
+    approval = job.get("approval") or {}
+    print(f"HSX wants to: {approval.get('summary', 'run a tool')}")
+    print(f"Why: {approval.get('why', 'This action needs your approval.')}")
+    risk = approval.get("risk", "UNKNOWN")
+    suffix = " (cannot be undone)" if risk == "DANGEROUS" else ""
+    print(f"Risk: {risk}{suffix}")
+    print("Reply: yes / no / details")
+
+
+def _answer_job(job: dict, answer: str) -> dict:
+    payload = {"answer": answer}
+    if job.get("state") == "waiting_for_approval":
+        payload["approval_id"] = job.get("approval_id", "")
+    return _request(f"/api/ask-jobs/{quote(job['id'])}/answer", payload)
+
+
+def _continue_existing(job: dict, answer: str) -> bool:
+    if job.get("state") == "waiting_for_approval":
+        _show_approval(job)
+        if answer.strip().casefold() == "details":
+            details = (job.get("approval") or {}).get("details", "")
+            print(f"Details: {details or 'No additional details.'}")
+            return False
+    response = _answer_job(job, answer)
+    updated = response.get("job") or {}
+    if updated.get("state") in {"waiting_for_approval", "waiting_for_user"}:
+        if updated.get("error"):
+            print(f"HSX > {updated['error']}")
+        return False
+    return True
+
+
+def _submit(
+    message: str,
+    target_device: str = "local_host",
+    approvals: dict | None = None,
+    session_id: str | None = None,
+) -> None:
+    session_id = session_id or _session_id()
+    pending = _request(
+        f"/api/ask-jobs/pending?session_id={quote(session_id)}"
+    ).get("job")
+    if pending:
+        if not _continue_existing(pending, message):
+            return
+        job_id = pending["id"]
+        response = {"job": pending, "streamed_text": ""}
+    else:
+        response = _request_stream(
+            "/api/chat/stream",
+            {
+                "message": message,
+                "session_id": session_id,
+                "target_device": target_device,
+                "approvals": {},
+            },
+        )
+        job_id = (response.get("job") or {}).get("id")
+    if not job_id:
         print(response.get("response", "Request accepted."))
         return
-    if response.get("response"):
-        print(response["response"])
 
     while True:
         time.sleep(1)
-        job = _request(f"/api/ask-jobs/{job['id']}").get("job")
+        job = _request(f"/api/ask-jobs/{quote(job_id)}").get("job")
         if not job:
             raise RuntimeError("HSX job disappeared before completion.")
         if job["state"] == "waiting_for_user":
@@ -112,6 +177,14 @@ def _submit(message: str) -> None:
                 print("HSX > An answer is required to resume this job.")
                 continue
             _request(f"/api/ask-jobs/{job['id']}/answer", {"answer": answer})
+        elif job["state"] == "waiting_for_approval":
+            _show_approval(job)
+            answer = input("You > ").strip()
+            if answer.casefold() == "details":
+                details = (job.get("approval") or {}).get("details", "")
+                print(f"Details: {details or 'No additional details.'}")
+                continue
+            _answer_job(job, answer)
         elif job["state"] == "done":
             result = job.get("result") or "Task completed."
             if not response.get("streamed_text", ""):
@@ -122,11 +195,17 @@ def _submit(message: str) -> None:
             return
 
 
-def main() -> None:
-    if len(sys.argv) > 1 and sys.argv[1].lower() == "doctor":
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="HSX terminal chat client")
+    parser.add_argument("command", nargs="?", choices={"doctor"})
+    # Local targets the HSX server host; the CLI does not offer a mesh-node execution target.
+    parser.add_argument("--target", choices={"local"}, default="local")
+    args = parser.parse_args(argv)
+    if args.command == "doctor":
         from doctor import print_report, run_doctor
 
         raise SystemExit(print_report(run_doctor()))
+    target_device = {"local": "local_host"}[args.target]
     deadline = time.monotonic() + 30
     while True:
         try:
@@ -146,7 +225,7 @@ def main() -> None:
         if not message:
             continue
         try:
-            _submit(message)
+            _submit(message, target_device=target_device)
         except (RuntimeError, ValueError) as error:
             print(f"HSX > {error}")
 
