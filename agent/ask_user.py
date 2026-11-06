@@ -206,23 +206,73 @@ class AskUserJobs:
         self.expire()
         with self._connect() as connection:
             rows = connection.execute(
-                """SELECT id, request, state, sensitive, created, updated
+                """SELECT id, request, state, sensitive, task_dir, created, updated
                 FROM ask_jobs WHERE session_id = ?
                 ORDER BY created DESC LIMIT ?""",
                 (session_id, max(1, min(limit, 20))),
             ).fetchall()
+            completed = connection.execute(
+                """SELECT created, updated FROM ask_jobs
+                WHERE session_id = ? AND state = 'done'
+                ORDER BY updated DESC LIMIT 10""",
+                (session_id,),
+            ).fetchall()
         from agent.ml.dataset_exporter import _redact
 
+        durations = []
+        for row in completed:
+            try:
+                duration = (datetime.fromisoformat(row["updated"]) - datetime.fromisoformat(row["created"])).total_seconds()
+            except ValueError:
+                continue
+            if duration > 0:
+                durations.append(duration)
+        average_duration = sum(durations) / len(durations) if durations else None
+        now = self._now()
         return [
-            {
+            self._activity_item(
+                row,
+                _redact(row["request"], 120),
+                average_duration,
+                now,
+            )
+            for row in rows
+        ]
+
+    @staticmethod
+    def _activity_item(row, summary: str, average_duration: float | None, now: datetime) -> dict:
+        try:
+            created = datetime.fromisoformat(row["created"])
+            elapsed = max(0, int((now - created).total_seconds()))
+        except ValueError:
+            elapsed = 0
+        state = row["state"]
+        return {
                 "id": row["id"],
-                "state": row["state"],
-                "summary": "Sensitive task" if row["sensitive"] else _redact(row["request"], 120),
+                "state": state,
+                "summary": "Sensitive task" if row["sensitive"] else summary,
+                "agent_name": "Hsx",
+                "agent_role": "Assistant",
+                "task_path": row["task_dir"],
+                "elapsed_seconds": elapsed if state in {"running", "queued"} else None,
+                "eta_seconds": (
+                    max(0, int(average_duration - elapsed))
+                    if state in {"running", "queued"} and average_duration is not None
+                    else None
+                ),
                 "created": row["created"],
                 "updated": row["updated"],
             }
-            for row in rows
-        ]
+
+    def artifact_directories(self, session_id: str) -> list[str]:
+        self.expire()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT DISTINCT task_dir FROM ask_jobs
+                WHERE session_id = ? AND task_dir != '' ORDER BY task_dir""",
+                (session_id,),
+            ).fetchall()
+        return [row["task_dir"] for row in rows]
 
     def list(self) -> list[dict]:
         self.expire()

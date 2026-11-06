@@ -150,6 +150,11 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visib
 .panel-collapse-button:hover { border-color: var(--border); color: var(--text); background: var(--surface-raised); }
 .panel-collapse-button[aria-expanded="false"] svg { transform: rotate(-90deg); }
 .panel-collapse-button svg { transition: transform .15s ease; }
+.chat-history-list { display: grid; gap: 6px; padding: 8px; }
+.chat-history-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 9px; border: 1px solid #303a33; border-radius: 8px; color: #d7e2d8; background: #202722; text-align: left; }
+.chat-history-item:hover, .chat-history-item[aria-current="true"] { border-color: #627568; background: #27312a; }
+.chat-history-item span { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.chat-history-item svg { flex: 0 0 14px; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
 .feedback-settings { display: grid; gap: 8px; margin-top: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 9px; color: var(--muted); font-size: 10px; }
 .feedback-settings summary { color: var(--text); cursor: pointer; font-size: 11px; font-weight: 650; }
 .feedback-settings label { display: flex; align-items: flex-start; gap: 7px; line-height: 1.4; }
@@ -205,7 +210,7 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 
 .camera-sidebar { overflow-y: auto; min-width: 0; padding: 22px 18px; border-left: 1px solid var(--border); background: #171c19; }
 .camera-panel { overflow: hidden; border: 1px solid #354038; border-radius: 13px; background: #1c231e; box-shadow: 0 12px 36px #0002; }
-.camera-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 15px 15px 13px; border-bottom: 1px solid #313a33; }
+.camera-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-bottom: 1px solid #313a33; }
 .camera-heading-actions { display: flex; align-items: center; gap: 7px; }
 .camera-heading h2 { margin: 5px 0 0; font-size: 13px; font-weight: 650; }
 .panel-eyebrow { color: #89978b; font-size: 8px; }
@@ -223,8 +228,8 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 .camera-view { position: relative; display: grid; place-items: center; overflow: hidden; width: 100%; aspect-ratio: 16 / 9; background: #0c100e; }
 .camera-frame { display: block; width: 100%; height: 100%; object-fit: cover; background: #0c100e; }
 .camera-clip-time { position: absolute; bottom: 10px; left: 10px; padding: 5px 8px; border: 1px solid #ffffff24; border-radius: 6px; color: #f3f5f2; background: #080b09c9; font: 10px var(--font-code); }
-.camera-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 11px 13px 10px; border-top: 1px solid #313a33; }
-.camera-metrics > div { display: grid; gap: 5px; min-width: 0; }
+.camera-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 6px 12px; border-top: 1px solid #313a33; }
+.camera-metrics > div { display: grid; gap: 2px; min-width: 0; }
 .camera-metrics span { color: #879489; font: 8px var(--font-code); letter-spacing: .06em; text-transform: uppercase; }
 .camera-metrics strong { overflow: hidden; color: #d3ddd4; font: 11px var(--font-code); text-overflow: ellipsis; white-space: nowrap; }
 .camera-metrics strong[data-state="warning"] { color: var(--warning); }
@@ -248,6 +253,8 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 .activity-item { display: grid; gap: 5px; padding: 9px; border: 1px solid #303a33; border-radius: 9px; background: #202722; }
 .activity-summary { color: #d7e2d8; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
 .activity-meta { color: #8d998f; font: 8px var(--font-code); }
+.activity-detail { display: flex; justify-content: space-between; gap: 8px; color: #9eada1; font: 8px var(--font-code); }
+.activity-detail strong { overflow: hidden; color: #c1cec3; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .activity-state { color: #b7c8b9; }
 .activity-state[data-state="running"] { color: var(--accent); }
 .activity-state[data-state="waiting_for_approval"], .activity-state[data-state="waiting_for_user"] { color: var(--warning); }

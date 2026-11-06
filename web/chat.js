@@ -10,6 +10,8 @@ let notificationReconnectTimer = null;
 let notificationRetryDelay = 500;
 let notificationToastTimer = null;
 let pendingFeedback = null;
+const chatSessions = new Map();
+let artifactsRequestId = 0;
 let voiceRecognition = null;
 let voiceIsListening = false;
 let voiceDraft = '';
@@ -105,6 +107,8 @@ function persistAttachments() {
 }
 
 function apiFetch(url, options = {}) {
+  const storedToken = loadBearerToken();
+  if (storedToken) bearerToken = storedToken;
   const headers = new Headers(options.headers || {});
   if (bearerToken) headers.set('Authorization', `Bearer ${bearerToken}`);
   return fetch(url, { ...options, headers });
@@ -170,6 +174,80 @@ function setConversationEmpty(isEmpty) {
   );
 }
 
+function renderChatHistory() {
+  const list = document.getElementById('chat-history-list');
+  const sessions = [...chatSessions.entries()]
+    .filter(([id]) => id !== sessionId)
+    .reverse();
+  if (!sessions.length) {
+    const empty = document.createElement('p');
+    empty.className = 'artifacts-empty';
+    empty.textContent = 'Previous chats in this browser session will appear here.';
+    list.replaceChildren(empty);
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  for (const [id, session] of sessions) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'chat-history-item';
+    button.title = session.title || 'New chat';
+    button.setAttribute('aria-current', 'false');
+    button.addEventListener('click', () => switchChatSession(id));
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('viewBox', '0 0 24 24');
+    icon.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M4 5h16v12H8l-4 3V5Z');
+    icon.append(path);
+    const title = document.createElement('span');
+    title.textContent = session.title || 'New chat';
+    button.append(icon, title);
+    fragment.append(button);
+  }
+  list.replaceChildren(fragment);
+}
+
+function saveCurrentChatSession() {
+  let session = chatSessions.get(sessionId);
+  if (!session) {
+    session = { title: 'New chat', fragment: document.createDocumentFragment() };
+    chatSessions.set(sessionId, session);
+  }
+  session.fragment = document.createDocumentFragment();
+  for (const child of [...elements.stream.children]) {
+    if (child !== elements.welcome) session.fragment.append(child);
+  }
+  session.isEmpty = elements.conversationLayout.classList.contains('is-empty');
+  session.draft = elements.prompt.value;
+  session.attachments = uploadedAttachments.map((item) => ({ ...item }));
+  session.pendingQuestion = pendingQuestion;
+  renderChatHistory();
+}
+
+function switchChatSession(nextSessionId) {
+  if (nextSessionId === sessionId) return;
+  saveCurrentChatSession();
+  const next = chatSessions.get(nextSessionId);
+  if (!next) return;
+  sessionId = nextSessionId;
+  persistSessionId();
+  elements.stream.replaceChildren(elements.welcome);
+  elements.stream.append(next.fragment);
+  next.fragment = document.createDocumentFragment();
+  elements.welcome.hidden = !next.isEmpty;
+  elements.prompt.value = next.draft || '';
+  uploadedAttachments = next.attachments || [];
+  pendingQuestion = next.pendingQuestion || null;
+  renderAttachments();
+  setConversationEmpty(Boolean(next.isEmpty));
+  updateSendButton();
+  persistDraft();
+  renderChatHistory();
+  refreshArtifacts();
+  refreshAgentActivity();
+}
+
 function hasComposerContent() {
   return Boolean(elements.prompt.value.trim() || uploadedAttachments.some((item) => item.status === 'ready'));
 }
@@ -216,6 +294,13 @@ function appendMessage(role, text, jobId = '', options = {}) {
   article.dataset.response = String(text || '');
   article.dataset.editText = String(options.editText ?? text ?? '');
   article.dataset.prompt = String(options.prompt || '');
+  if (role === 'user') {
+    const session = chatSessions.get(sessionId);
+    if (session && !session.title) {
+      session.title = String(options.editText ?? text ?? '').trim().slice(0, 64) || 'New chat';
+      renderChatHistory();
+    }
+  }
   const createdAt = new Date();
   article.dataset.createdAt = createdAt.toISOString();
   if (jobId) article.dataset.jobId = jobId;
@@ -867,6 +952,10 @@ async function refreshCamera() {
   try {
     const response = await apiFetch(apiContract.endpoints.camera_status);
     const data = await response.json();
+    const host = data.host || {};
+    const hostLabel = [host.hostname, host.hardware].filter(Boolean).join(' · ');
+    document.getElementById('camera-host-label').textContent =
+      hostLabel || 'Host hardware unavailable';
     if (response.status === 401) {
       cameraAvailable = false;
       stopCameraStream();
@@ -946,13 +1035,11 @@ function setCameraLatency(capturedAt) {
     output.dataset.state = 'warning';
     return;
   }
-  const delayMs = Date.now() + cameraClockOffsetMs - capturedAt * 1000;
-  if (delayMs < -1000) {
-    output.textContent = 'Clock is ahead';
-    output.dataset.state = 'warning';
-    return;
-  }
-  const delaySeconds = Math.max(0, delayMs) / 1000;
+  const captureBrowserTime = Math.min(
+    capturedAt * 1000 - cameraClockOffsetMs,
+    Date.now(),
+  );
+  const delaySeconds = Math.max(0, Date.now() - captureBrowserTime) / 1000;
   output.textContent = `${delaySeconds.toFixed(1)} s behind`;
   output.dataset.state = delaySeconds > 2 ? 'warning' : 'connected';
 }
@@ -972,10 +1059,14 @@ function showCameraFrame(frame) {
   if (previousUrl) URL.revokeObjectURL(previousUrl);
   cameraHasFrame = true;
   cameraRetryDelay = 500;
-  const captured = new Date(frame.capturedAt * 1000);
+  const captureBrowserTime = Math.min(
+    frame.capturedAt * 1000 - cameraClockOffsetMs,
+    Date.now(),
+  );
+  const captured = new Date(captureBrowserTime);
   document.getElementById('camera-clip-time').textContent =
     `Clip ${captured.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
-  document.getElementById('camera-clip-time').dataset.capturedAt = String(frame.capturedAt);
+  document.getElementById('camera-clip-time').dataset.capturedAt = String(captureBrowserTime);
   document.getElementById('camera-clip-time').hidden = false;
   setCameraLatency(frame.capturedAt);
   setCameraStatus(true, 'Live from the Hsx host');
@@ -1025,8 +1116,23 @@ async function startCameraStream() {
   cameraStreamStartedAt = Date.now();
   try {
     const requestStartedAt = Date.now();
-    const response = await apiFetch(apiContract.endpoints.camera_stream, { signal: controller.signal });
-    if (!response.ok || !response.body) throw new Error('Camera stream unavailable.');
+    const streamHeaders = new Headers();
+    const currentToken = loadBearerToken() || bearerToken;
+    if (currentToken) streamHeaders.set('Authorization', `******`);
+    const response = await apiFetch(apiContract.endpoints.camera_stream, {
+      headers: streamHeaders,
+      signal: controller.signal,
+    });
+    if (response.status === 401) {
+      cameraAvailable = false;
+      cameraHasFrame = false;
+      setCameraStatus(false, 'Camera access token was rejected. Update the token and reconnect.');
+      return;
+    }
+    if (!response.ok || !response.body) {
+      setCameraReconnecting('Camera stream unavailable; reconnecting…');
+      throw new Error('Camera stream unavailable.');
+    }
     const serverTime = Number(response.headers.get('X-Hsx-Server-Time'));
     if (Number.isFinite(serverTime) && serverTime > 0) {
       cameraClockOffsetMs = serverTime * 1000 - ((requestStartedAt + Date.now()) / 2);
@@ -1062,11 +1168,13 @@ function updateCameraClock() {
     second: '2-digit',
   });
   if (cameraHasFrame) {
-    const clip = Number(document.getElementById('camera-clip-time').dataset.capturedAt);
-    if (Number.isFinite(clip)) setCameraLatency(clip);
+    const clipBrowserTime = Number(document.getElementById('camera-clip-time').dataset.capturedAt);
+    if (Number.isFinite(clipBrowserTime)) {
+      setCameraLatency((clipBrowserTime + cameraClockOffsetMs) / 1000);
+    }
   }
   const currentDelayMs = cameraHasFrame
-    ? Date.now() + cameraClockOffsetMs - Number(document.getElementById('camera-clip-time').dataset.capturedAt) * 1000
+    ? Date.now() - Number(document.getElementById('camera-clip-time').dataset.capturedAt)
     : Date.now() - cameraStreamStartedAt;
   if (
     cameraAvailable
@@ -1331,14 +1439,18 @@ async function openNotification(notification) {
 }
 
 async function refreshArtifacts() {
+  const requestedSessionId = sessionId;
+  const requestId = ++artifactsRequestId;
   const empty = document.createElement('p');
   empty.className = 'artifacts-empty';
   empty.textContent = 'Loading generated files…';
   elements.artifactsList.replaceChildren(empty);
   try {
-    const response = await apiFetch(apiContract.endpoints.outputs);
+    const query = new URLSearchParams({ session_id: requestedSessionId });
+    const response = await apiFetch(`${apiContract.endpoints.outputs}?${query}`);
     if (!response.ok) throw new Error('Could not load generated files.');
     const data = await response.json();
+    if (requestId !== artifactsRequestId || requestedSessionId !== sessionId) return;
     const files = Array.isArray(data.files) ? data.files : [];
     if (!files.length) {
       empty.textContent = 'No generated files yet. Files created by Hsx will appear here.';
@@ -1372,8 +1484,19 @@ async function refreshArtifacts() {
     }
     elements.artifactsList.replaceChildren(fragment);
   } catch {
-    empty.textContent = 'Generated files are unavailable right now. Tap refresh to try again.';
+    if (requestId === artifactsRequestId && requestedSessionId === sessionId) {
+      empty.textContent = 'Generated files are unavailable right now. Tap refresh to try again.';
+    }
   }
+}
+
+function formatElapsed(seconds) {
+  if (!Number.isFinite(seconds)) return '—';
+  const total = Math.max(0, Math.floor(seconds));
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  const remaining = total % 60;
+  return `${minutes}m ${remaining}s`;
 }
 
 async function refreshAgentActivity() {
@@ -1408,6 +1531,27 @@ async function refreshAgentActivity() {
       state.textContent = String(task.state || 'unknown').replaceAll('_', ' ');
       meta.append(state);
       item.append(summary, meta);
+      const addDetail = (label, value) => {
+        const detail = document.createElement('div');
+        detail.className = 'activity-detail';
+        const key = document.createElement('span');
+        key.textContent = label;
+        const text = document.createElement('strong');
+        text.textContent = value;
+        detail.append(key, text);
+        item.append(detail);
+      };
+      addDetail('Agent', `${task.agent_name || 'Hsx'} · ${task.agent_role || 'Assistant'}`);
+      addDetail('Working on', task.task_path || task.summary || 'Task details unavailable');
+      if (['running', 'queued'].includes(task.state)) {
+        addDetail('Elapsed', formatElapsed(Number(task.elapsed_seconds)));
+        addDetail(
+          'ETA',
+          Number.isFinite(Number(task.eta_seconds)) && task.eta_seconds !== null
+            ? formatElapsed(Number(task.eta_seconds))
+            : 'Estimating',
+        );
+      }
       fragment.append(item);
     }
     elements.activityList.replaceChildren(fragment);
@@ -1462,11 +1606,20 @@ async function stopTask() {
 }
 
 function resetConversation() {
+  saveCurrentChatSession();
   sessionId = makeSessionId();
+  chatSessions.set(sessionId, {
+    title: 'New chat',
+    fragment: document.createDocumentFragment(),
+    isEmpty: true,
+    draft: '',
+    attachments: [],
+    pendingQuestion: null,
+  });
   persistSessionId();
   pendingQuestion = null;
   uploadedAttachments = [];
-  elements.stream.querySelectorAll('.message-card, .approval-card, .activity-card').forEach((item) => item.remove());
+  elements.stream.replaceChildren(elements.welcome);
   elements.welcome.hidden = false;
   refreshGreeting();
   elements.prompt.value = '';
@@ -1475,6 +1628,14 @@ function resetConversation() {
   setConversationEmpty(true);
   updateSendButton();
   persistDraft();
+  renderChatHistory();
+  elements.artifactsList.replaceChildren();
+  const empty = document.createElement('p');
+  empty.className = 'artifacts-empty';
+  empty.textContent = 'Generated files for this chat will appear here.';
+  elements.artifactsList.append(empty);
+  refreshArtifacts();
+  refreshAgentActivity();
   elements.prompt.focus();
 }
 

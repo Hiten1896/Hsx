@@ -46,6 +46,7 @@ from agent.orchestrator import run_agent
 from agent.policy import POLICY
 from agent.router import INTENT_ROUTER, LLM_TELEMETRY, ROUTER_LOGGER
 from agent.self_improvement import SelfImprovement
+from agent.system_tools import system_info
 from agent.skill_loader import load_skills, set_runtime_registry
 from agent.tools.dynamic_registry import DYNAMIC_TOOLS, register_meta_tool
 from agent.workspace import Workspace, task_output_scope, workspace_search
@@ -285,12 +286,48 @@ def _generate_greeting(time_of_day: str) -> str:
 
 
 def _is_user_upload_path(raw_path: str) -> bool:
-    parts = Path(raw_path).parts
+    parts = Path(raw_path.replace("\\", "/")).parts
     return any(
         part.casefold() == "uploads"
         or re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{4} uploads(?: \(\d+\))?", part.casefold())
         for part in parts
     )
+
+
+def _camera_status_payload() -> dict:
+    status = CAMERA.health_check()
+    host = system_info()
+    return {
+        **status,
+        "host": {
+            "hostname": host["hostname"],
+            "hardware": host["cpu"]["model"],
+        },
+    }
+
+
+def _session_artifacts(session_id: str) -> list[dict]:
+    if not session_id:
+        return []
+    work_root = WORK_DIR.resolve()
+    files = []
+    for task_dir in ASK_JOBS.artifact_directories(session_id):
+        try:
+            relative_task_dir = WORKSPACE._relative_path(task_dir)
+            task_root = (work_root / relative_task_dir).resolve()
+            WORKSPACE._assert_inside(work_root, task_root)
+            if not task_root.is_dir():
+                continue
+            directory = task_root.relative_to(WORKSPACE.root).as_posix()
+            files.extend(
+                item
+                for item in workspace_search(WORKSPACE, directory=directory, limit=200)
+                if not _is_user_upload_path(item["path"])
+            )
+        except (OSError, ValueError):
+            LOGGER.warning("Skipping invalid artifact directory for session %s.", session_id)
+    unique = {item["path"]: item for item in files}
+    return sorted(unique.values(), key=lambda item: (item["modified"], item["path"]), reverse=True)[:200]
 
 
 def _fail_job(
@@ -841,7 +878,7 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json(telemetry)
             return
         elif path == "/api/mesh/camera/status":
-            self._json(CAMERA.health_check())
+            self._json(_camera_status_payload())
             return
         elif path == "/api/mesh/camera/stream":
             self._stream_camera()
@@ -864,7 +901,7 @@ class HsxHandler(BaseHTTPRequestHandler):
             telemetry["provider_stats"] = PROVIDER_BANDIT.snapshot()["providers"]
             self._json(telemetry)
         elif path == "/api/camera/status":
-            self._json(CAMERA.health_check())
+            self._json(_camera_status_payload())
         elif path == "/api/camera/stream":
             self._stream_camera()
             return
@@ -949,10 +986,22 @@ class HsxHandler(BaseHTTPRequestHandler):
                 return
             self._serve_file(target, inline=path.endswith("/content"))
         elif path == "/api/outputs":
+            session_id = str(query.get("session_id", [""])[0])[:100]
+            if session_id:
+                files = _session_artifacts(session_id)
+            else:
+                files = [
+                    item
+                    for item in workspace_search(
+                        WORKSPACE,
+                        directory=WORK_DIR.relative_to(WORKSPACE_DIR),
+                        limit=200,
+                    )
+                    if not _is_user_upload_path(item["path"])
+                ]
             files = [
                 {"name": item["name"], "path": item["path"], "type": item["type"]}
-                for item in workspace_search(WORKSPACE, directory=WORK_DIR.relative_to(WORKSPACE_DIR), limit=200)
-                if not _is_user_upload_path(item["path"])
+                for item in files
             ]
             self._json({"files": files})
         elif self.path == "/api/video/jobs":

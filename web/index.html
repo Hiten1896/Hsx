@@ -43,6 +43,21 @@
           </div>
         </section>
 
+        <section class="activity-panel history-panel" aria-labelledby="chat-history-title">
+          <div class="artifacts-heading">
+            <div>
+              <p class="panel-eyebrow">THIS BROWSER SESSION</p>
+              <h2 id="chat-history-title">Chat history</h2>
+            </div>
+            <button id="history-toggle" class="panel-collapse-button" type="button" aria-controls="chat-history-list" aria-expanded="true" aria-label="Collapse chat history" title="Collapse chat history">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+            </button>
+          </div>
+          <div id="chat-history-list" class="chat-history-list" aria-live="polite">
+            <p class="artifacts-empty">Your chats in this browser session will appear here.</p>
+          </div>
+        </section>
+
         <div class="sidebar-caption">WORKSPACE</div>
         <div class="sidebar-nav" aria-label="Workspace sections">
           <a class="nav-item nav-item-active" href="#chat-stream" aria-current="page">
@@ -168,7 +183,7 @@
         <div class="camera-panel">
           <div class="camera-heading">
             <div>
-              <p class="panel-eyebrow">HOST HARDWARE</p>
+              <p id="camera-host-label" class="panel-eyebrow">Checking host hardware…</p>
               <h2>Live camera</h2>
             </div>
             <div class="camera-heading-actions">
