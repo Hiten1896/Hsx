@@ -266,6 +266,8 @@ class RouterTelemetry:
             "total_input_tokens": 0,
             "total_output_tokens": 0,
             "route": "idle",
+            "provider_status": "Standby",
+            "provider_error": "",
         }
 
     def update_confidence(self, confidence: float | None, route: str) -> None:
@@ -281,6 +283,8 @@ class RouterTelemetry:
         input_tokens: int,
         output_tokens: int,
         token_usage_estimated: bool,
+        provider_status: str = "Used",
+        provider_error: str = "",
     ) -> None:
         with self._lock:
             self._snapshot.update({
@@ -291,6 +295,8 @@ class RouterTelemetry:
                 "output_tokens": output_tokens,
                 "token_usage_estimated": token_usage_estimated,
                 "route": "llm",
+                "provider_status": provider_status,
+                "provider_error": provider_error,
             })
             self._snapshot["total_input_tokens"] += input_tokens
             self._snapshot["total_output_tokens"] += output_tokens
@@ -305,6 +311,8 @@ class RouterTelemetry:
                 "output_tokens": 0,
                 "token_usage_estimated": False,
                 "route": "direct",
+                "provider_status": "Standby",
+                "provider_error": "",
             })
 
     def snapshot(self) -> dict[str, Any]:

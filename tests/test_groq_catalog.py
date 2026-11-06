@@ -2,7 +2,9 @@ import io
 import json
 import urllib.error
 
-from agent.llm.providers import GroqProvider
+import pytest
+
+from agent.llm.providers import GroqProvider, ProviderError
 from agent.llm.types import LLMRequest
 
 
@@ -32,6 +34,7 @@ def test_groq_model_is_selected_from_live_catalog(monkeypatch, capsys):
         return _Response({"data": [
             {"id": "z-chat"},
             {"id": "whisper-transcriber"},
+            {"id": "retired-chat", "active": False},
             {"id": "a-chat"},
         ]})
 
@@ -41,9 +44,29 @@ def test_groq_model_is_selected_from_live_catalog(monkeypatch, capsys):
     assert provider.model == "a-chat"
     assert seen == [("https://test/models", "Bearer groq-test-key")]
     assert capsys.readouterr().out == (
-        "Groq model retired-model not found. Available: a-chat, whisper-transcriber, z-chat. "
+        "Groq model retired-model not found. Available: a-chat, z-chat. "
         "Set GROQ_MODEL in .env.\n"
     )
+
+
+def test_groq_requires_an_active_text_chat_model():
+    assert GroqProvider._safe_default(["llama-text", "whisper-large", "retired-chat"]) == "llama-text"
+    assert GroqProvider._safe_default(["whisper-large", "embedding-v2"]) == ""
+
+
+def test_groq_explains_one_line_model_fix_when_catalog_has_no_chat_models(monkeypatch, capsys):
+    GroqProvider._catalog_cache.clear()
+
+    def fake_urlopen(_request, timeout):
+        return _Response({"data": [
+            {"id": "whisper-large", "active": True},
+            {"id": "retired-chat", "active": False},
+        ]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(ProviderError, match=r"Set GROQ_MODEL in \.env"):
+        GroqProvider("no-chat-key", "old-model", models_url="https://test/models")
+    assert capsys.readouterr().out.startswith("Groq has no active text chat model. Set GROQ_MODEL in .env")
 
 
 def test_groq_refreshes_catalog_after_model_404_and_retries(monkeypatch, capsys):

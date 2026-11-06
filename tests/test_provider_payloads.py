@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 
@@ -10,6 +11,39 @@ from agent.llm.providers import (
     to_openai_payload,
 )
 from agent.llm.types import LLMRequest
+
+
+def test_gemini_registered_skills_have_complete_schemas_and_real_prompt(monkeypatch):
+    from agent import llm_client
+    from agent.llm.types import LLMEvent
+    import server
+
+    skills = [dict(skill) for skill in server.TOOLS]
+    report = next(skill for skill in skills if skill["name"] == "report")
+    assert report["input_schema"]["properties"]["content"]["type"] == "object"
+    assert report["input_schema"]["properties"]["structure"]["properties"]
+
+    class CaptureRouter:
+        providers = None
+        active_provider = "test"
+        active_model = "test"
+
+        def generate(self, request):
+            self.request = request
+            yield LLMEvent(type="text_delta", text="Captured.")
+            yield LLMEvent(type="stop", stop_reason="stop")
+
+    router = CaptureRouter()
+    monkeypatch.setattr(llm_client, "default_router", lambda: router)
+    llm_client.call_llm(
+        [{"role": "user", "content": "tell the specs of the machine"}],
+        skills,
+        sensitive=True,
+    )
+    payload = to_gemini_payload(router.request)
+    assert len(payload["tools"][0]["functionDeclarations"]) == len(skills)
+    assert "machine facts must come only from tool results" in payload["systemInstruction"]["parts"][0]["text"]
+    assert_payload_valid("gemini", payload)
 
 
 def test_gemini_payload_uses_native_parts_for_text_turns():
@@ -404,6 +438,7 @@ def test_gemini_contract_sanitizes_array_schema_without_items():
         "properties": {"filenames": {
             "type": "array",
             "description": "Files to compress.",
+            "default": [],
             "items": {"type": "string"},
         }},
         "required": ["filenames"],
@@ -421,6 +456,19 @@ def test_gemini_contract_rejects_array_schema_without_items():
                 "parameters": {"type": "array"},
             }]}],
         })
+
+
+@pytest.mark.parametrize("schema,offending_key", [
+    ({"type": "object", "properties": {"x": {}}}, "type"),
+    ({"type": "object", "properties": {"x": {"type": "string", "enum": [1]}}}, "enum"),
+    ({"type": "object", "properties": {"x": {"type": "object"}}}, "properties"),
+    ({"type": "object", "properties": {"x": {"type": "array"}}}, "items"),
+    ({"type": "object", "properties": {"x": {"type": "string", "$schema": "bad"}}}, "$schema"),
+])
+def test_gemini_validator_rejects_invalid_tool_schemas(schema, offending_key):
+    declaration = {"name": "sample", "description": "Example.", "parameters": schema}
+    with pytest.raises(ValueError, match=rf"offending key '{re.escape(offending_key)}'"):
+        assert_payload_valid("gemini", {"contents": [], "tools": [{"functionDeclarations": [declaration]}]})
 
 
 @pytest.mark.parametrize("history,tools", _contract_histories())

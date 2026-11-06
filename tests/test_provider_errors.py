@@ -1,4 +1,5 @@
 import io
+import json
 import urllib.error
 
 import pytest
@@ -8,25 +9,64 @@ from agent.llm.router import LLMRouter
 from agent.llm.types import LLMRequest
 
 
-def test_gemini_http_error_body_is_logged_but_not_shown(monkeypatch, caplog):
+def test_gemini_http_error_body_and_field_path_are_logged_redacted(monkeypatch, caplog, tmp_path):
+    from agent.llm import providers
+
+    error_log = tmp_path / "provider-errors.jsonl"
+    monkeypatch.setattr(providers, "_PROVIDER_ERROR_LOG", error_log)
+
     def fail(_request, timeout):
         raise urllib.error.HTTPError(
             "https://example.test/generate",
             400,
             "Bad Request",
             {},
-            io.BytesIO(b'{"message":"Role function rejected","api_key":"secret-value"}'),
+            io.BytesIO(json.dumps({"error": {
+                "message": "Invalid schema",
+                "details": [{"fieldViolations": [{
+                    "field": "tools[0].functionDeclarations[0].parameters.properties.camera_record.properties.duration.type",
+                    "description": "Missing required type.",
+                }]}],
+                "api_key": "secret-value",
+            }}).encode()),
         )
 
     monkeypatch.setattr("urllib.request.urlopen", fail)
     provider = GeminiProvider("gemini-test", "https://example.test/generate", "secret-value")
 
+    payload = {"contents": [{"role": "user", "parts": [{"text": "hello"}]}], "tools": [{
+        "functionDeclarations": [{
+            "name": "camera_record", "description": "Capture video.",
+            "parameters": {"type": "object", "properties": {"duration": {"type": "integer"}}},
+        }]
+    }]}
     with pytest.raises(ProviderError) as error:
-        list(provider.generate(LLMRequest([{"role": "user", "content": "hello"}])))
+        provider._post(payload)
 
-    assert str(error.value) == "Gemini rejected the conversation format."
+    assert "Gemini rejected tool 'camera_record'" in str(error.value)
+    assert "parameter 'duration' has no type" in str(error.value)
     assert "secret-value" not in caplog.text
-    assert "Role function rejected" in caplog.text
+    assert "Invalid schema" in caplog.text
+    record = json.loads(error_log.read_text(encoding="utf-8"))
+    assert record["violations"][0]["path"].endswith("properties.duration.type")
+    assert "secret-value" not in record["body"]
+
+
+def test_gemini_local_schema_failure_names_tool_and_parameter(monkeypatch, tmp_path):
+    from agent.llm import providers
+
+    monkeypatch.setattr(providers, "_PROVIDER_ERROR_LOG", tmp_path / "provider-errors.jsonl")
+    provider = GeminiProvider("gemini-test", "https://example.test/generate")
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
+        "tools": [{"functionDeclarations": [{
+            "name": "camera_record",
+            "description": "Capture video.",
+            "parameters": {"type": "object", "properties": {"x": {}}},
+        }]}],
+    }
+    with pytest.raises(ProviderError, match="Gemini rejected tool 'camera_record': parameter 'x' has no type"):
+        provider._post(payload)
 
 
 def test_router_reports_provider_failures_in_plain_english():

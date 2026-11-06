@@ -6,9 +6,11 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from .types import EventStream, LLMEvent, LLMRequest, to_plain_data
@@ -23,6 +25,75 @@ class ProviderError(RuntimeError):
 
 
 LOGGER = logging.getLogger("hsx.llm.providers")
+_PROVIDER_ERROR_LOG = Path(__file__).resolve().parents[2] / "logs" / "provider-errors.jsonl"
+_PROVIDER_ERROR_LOG_LOCK = threading.Lock()
+
+
+def _gemini_violations(body: str) -> list[dict[str, str]]:
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        return []
+    error = parsed.get("error", {}) if isinstance(parsed, dict) else {}
+    details = error.get("details", []) if isinstance(error, dict) else []
+    violations = []
+    for detail in details if isinstance(details, list) else []:
+        entries = detail.get("fieldViolations", []) if isinstance(detail, dict) else []
+        for item in entries if isinstance(entries, list) else []:
+            if isinstance(item, dict) and item.get("field"):
+                violations.append({
+                    "path": str(item["field"]),
+                    "description": str(item.get("description", "Invalid value.")),
+                })
+    if not violations and isinstance(error, dict) and error.get("message"):
+        violations.append({"path": "$", "description": str(error["message"])})
+    return violations
+
+
+def _log_provider_error(record: dict[str, Any]) -> None:
+    try:
+        _PROVIDER_ERROR_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with _PROVIDER_ERROR_LOG_LOCK, _PROVIDER_ERROR_LOG.open("a", encoding="utf-8") as log_file:
+            log_file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    except OSError as error:
+        LOGGER.error("Could not write provider error log: %s", error)
+
+
+def _gemini_user_error(payload: dict[str, Any], violations: list[dict[str, str]]) -> str:
+    if violations:
+        violation = violations[0]
+        path = violation["path"]
+        match = re.search(r"tools\[(\d+)\]\.function_?declarations\[(\d+)\]", path, re.IGNORECASE)
+        if match:
+            tool_index, declaration_index = map(int, match.groups())
+            try:
+                declaration = payload["tools"][tool_index]["functionDeclarations"][declaration_index]
+                tool_name = declaration.get("name", "unknown")
+            except (IndexError, KeyError, TypeError):
+                tool_name = "unknown"
+            parameter_matches = re.findall(r"\.properties\.([^.\[]+)", path)
+            description = violation["description"].casefold()
+            if parameter_matches and (path.casefold().endswith(".type") or "no type" in description):
+                parameter = parameter_matches[-1]
+                return f"Gemini rejected tool '{tool_name}': parameter '{parameter}' has no type."
+            reason = violation["description"].strip().rstrip(".") or "invalid schema"
+            return f"Gemini rejected tool '{tool_name}': {reason}."
+    return "Gemini rejected the conversation format. Check its tool schemas and conversation history."
+
+
+def _gemini_validation_violation(error: ValueError) -> dict[str, str]:
+    message = str(error)
+    match = re.search(r"invalid at (.*?); offending key '([^']+)'(?:\: (.*))?$", message)
+    if not match:
+        return {"path": message, "description": message}
+    path, key, detail = match.groups()
+    path = path.replace("functionDeclarations", "function_declarations")
+    if key == "type":
+        path = f"{path}.type"
+        description = "No type was declared."
+    else:
+        description = detail or f"Invalid {key}."
+    return {"path": path, "description": description}
 
 
 class Provider:
@@ -67,8 +138,18 @@ _GEMINI_SCHEMA_KEYS = {
     "maxItems",
     "minProperties",
     "maxProperties",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "example",
+    "anyOf",
+    "default",
+    "minimum",
+    "maximum",
     "propertyOrdering",
 }
+_GEMINI_FUNCTION_NAME = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+_GEMINI_SCHEMA_TYPES = {"string", "number", "integer", "boolean", "array", "object"}
 _OPENAI_SCHEMA_KEYS = {
     "type", "description", "title", "properties", "required", "items", "enum",
     "additionalProperties", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
@@ -86,6 +167,10 @@ def _sanitize_gemini_schema(schema: dict[str, Any]) -> dict[str, Any]:
         }
     if isinstance(sanitized.get("items"), dict):
         sanitized["items"] = _sanitize_gemini_schema(sanitized["items"])
+    if isinstance(sanitized.get("anyOf"), list):
+        sanitized["anyOf"] = [
+            _sanitize_gemini_schema(item) for item in sanitized["anyOf"] if isinstance(item, dict)
+        ]
     if sanitized.get("type") == "array" and "items" not in sanitized:
         sanitized["items"] = {"type": "string"}
     return sanitized
@@ -97,16 +182,45 @@ def _validate_gemini_schema(provider: str, schema: dict[str, Any], path: str) ->
     unknown = set(schema) - _GEMINI_SCHEMA_KEYS
     if unknown:
         raise _shape_error(provider, path, sorted(unknown)[0])
+    schema_type = schema.get("type")
+    if not isinstance(schema_type, str) or schema_type not in _GEMINI_SCHEMA_TYPES:
+        raise _shape_error(provider, path, "type", "required and must be a supported Gemini schema type")
+    if "description" in schema and not isinstance(schema["description"], str):
+        raise _shape_error(provider, f"{path}.description", "description", "must be a string")
+    if "enum" in schema:
+        if schema_type != "string" or not isinstance(schema["enum"], list) or any(
+            not isinstance(value, str) for value in schema["enum"]
+        ):
+            raise _shape_error(provider, f"{path}.enum", "enum", "must contain only strings on string schemas")
     if schema.get("type") == "array" and "items" not in schema:
         raise _shape_error(provider, path, "items", "required for array schemas")
+    if schema.get("type") == "object" and not isinstance(schema.get("properties"), dict):
+        raise _shape_error(provider, path, "properties", "required for object schemas")
     properties = schema.get("properties")
     if properties is not None:
+        if schema_type != "object":
+            raise _shape_error(provider, path, "properties", "only valid for object schemas")
         if not isinstance(properties, dict):
             raise _shape_error(provider, f"{path}.properties", "properties", "must be an object")
         for name, property_schema in properties.items():
+            if not isinstance(name, str) or not name:
+                raise _shape_error(provider, f"{path}.properties", str(name), "property name must be non-empty")
             _validate_gemini_schema(provider, property_schema, f"{path}.properties.{name}")
+    required = schema.get("required", [])
+    if not isinstance(required, list) or any(not isinstance(name, str) for name in required):
+        raise _shape_error(provider, f"{path}.required", "required", "must be a list of strings")
+    if isinstance(properties, dict) and any(name not in properties for name in required):
+        missing = next(name for name in required if name not in properties)
+        raise _shape_error(provider, f"{path}.required", missing, "required property is not declared")
     if "items" in schema:
+        if schema_type != "array":
+            raise _shape_error(provider, path, "items", "only valid for array schemas")
         _validate_gemini_schema(provider, schema["items"], f"{path}.items")
+    if "anyOf" in schema:
+        if not isinstance(schema["anyOf"], list) or not schema["anyOf"]:
+            raise _shape_error(provider, f"{path}.anyOf", "anyOf", "must be a non-empty schema list")
+        for index, option in enumerate(schema["anyOf"]):
+            _validate_gemini_schema(provider, option, f"{path}.anyOf[{index}]")
 
 
 def _sanitize_openai_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -144,9 +258,12 @@ def _validate_openai_schema(schema: dict[str, Any], path: str) -> None:
 
 def _validate_gemini_payload(payload: dict[str, Any]) -> None:
     provider = "gemini"
+    if not isinstance(payload, dict):
+        raise _shape_error(provider, "$", "payload", "must be an object")
     _require_keys(provider, payload, "$", {"contents"}, {"contents", "systemInstruction", "tools"})
     if not isinstance(payload["contents"], list):
         raise _shape_error(provider, "contents", "contents", "must be a list")
+    previous_role = None
     for index, content in enumerate(payload["contents"]):
         path = f"contents[{index}]"
         if not isinstance(content, dict):
@@ -154,8 +271,13 @@ def _validate_gemini_payload(payload: dict[str, Any]) -> None:
         _require_keys(provider, content, path, {"role", "parts"}, {"role", "parts"})
         if content["role"] not in {"user", "model"}:
             raise _shape_error(provider, f"{path}.role", "role", "must be user or model")
+        if content["role"] == previous_role:
+            raise _shape_error(provider, f"{path}.role", "role", "conversation roles must alternate")
+        previous_role = content["role"]
         if not isinstance(content["parts"], list):
             raise _shape_error(provider, f"{path}.parts", "parts", "must be a list")
+        if not content["parts"]:
+            raise _shape_error(provider, f"{path}.parts", "parts", "must not be empty")
         for part_index, part in enumerate(content["parts"]):
             part_path = f"{path}.parts[{part_index}]"
             if not isinstance(part, dict):
@@ -195,35 +317,62 @@ def _validate_gemini_payload(payload: dict[str, Any]) -> None:
                 if not isinstance(function, dict):
                     raise _shape_error(provider, part_path, kind, "must be an object")
                 _require_keys(provider, function, f"{part_path}.functionCall", {"name", "args"}, {"name", "args"})
-                if not isinstance(function["name"], str) or not isinstance(function["args"], dict):
+                if (
+                    not isinstance(function["name"], str)
+                    or not _GEMINI_FUNCTION_NAME.fullmatch(function["name"])
+                    or not isinstance(function["args"], dict)
+                ):
                     raise _shape_error(provider, part_path, kind, "invalid name or args")
             elif kind == "functionResponse":
                 function = part[kind]
                 if not isinstance(function, dict):
                     raise _shape_error(provider, part_path, kind, "must be an object")
                 _require_keys(provider, function, f"{part_path}.functionResponse", {"name", "response"}, {"name", "response"})
-                if not isinstance(function["name"], str) or not isinstance(function["response"], dict):
+                if (
+                    not isinstance(function["name"], str)
+                    or not _GEMINI_FUNCTION_NAME.fullmatch(function["name"])
+                    or not isinstance(function["response"], dict)
+                ):
                     raise _shape_error(provider, part_path, kind, "invalid name or response")
             else:
                 raise _shape_error(provider, part_path, kind)
     if "systemInstruction" in payload:
         instruction = payload["systemInstruction"]
+        if not isinstance(instruction, dict):
+            raise _shape_error(provider, "systemInstruction", "systemInstruction", "must be an object")
         _require_keys(provider, instruction, "systemInstruction", {"parts"}, {"parts"})
         if not isinstance(instruction["parts"], list):
             raise _shape_error(provider, "systemInstruction.parts", "parts", "must be a list")
         for index, part in enumerate(instruction["parts"]):
+            if not isinstance(part, dict):
+                raise _shape_error(provider, f"systemInstruction.parts[{index}]", "part", "must be an object")
             _require_keys(provider, part, f"systemInstruction.parts[{index}]", {"text"}, {"text"})
+            if not isinstance(part["text"], str):
+                raise _shape_error(provider, f"systemInstruction.parts[{index}]", "text", "must be a string")
     if "tools" in payload:
         if not isinstance(payload["tools"], list):
             raise _shape_error(provider, "tools", "tools", "must be a list")
+        names = set()
         for index, tool in enumerate(payload["tools"]):
             path = f"tools[{index}]"
+            if not isinstance(tool, dict):
+                raise _shape_error(provider, path, "tool", "must be an object")
             _require_keys(provider, tool, path, {"functionDeclarations"}, {"functionDeclarations"})
             if not isinstance(tool["functionDeclarations"], list):
                 raise _shape_error(provider, f"{path}.functionDeclarations", "functionDeclarations", "must be a list")
             for declaration_index, declaration in enumerate(tool["functionDeclarations"]):
                 declaration_path = f"{path}.functionDeclarations[{declaration_index}]"
+                if not isinstance(declaration, dict):
+                    raise _shape_error(provider, declaration_path, "declaration", "must be an object")
                 _require_keys(provider, declaration, declaration_path, {"name", "description", "parameters"}, {"name", "description", "parameters"})
+                name = declaration["name"]
+                if not isinstance(name, str) or not _GEMINI_FUNCTION_NAME.fullmatch(name):
+                    raise _shape_error(provider, declaration_path, "name", "must match ^[a-zA-Z_][a-zA-Z0-9_]*$")
+                if name in names:
+                    raise _shape_error(provider, declaration_path, "name", f"duplicate function name {name!r}")
+                names.add(name)
+                if not isinstance(declaration["description"], str) or not declaration["description"].strip():
+                    raise _shape_error(provider, declaration_path, "description", "must be non-empty")
                 if not isinstance(declaration["parameters"], dict):
                     raise _shape_error(provider, declaration_path, "parameters", "must be an object")
                 _validate_gemini_schema(provider, declaration["parameters"], f"{declaration_path}.parameters")
@@ -372,14 +521,40 @@ class JSONHTTPProvider(Provider):
             redacted = redacted.replace(self.api_key, "[REDACTED]")
         redacted = re.sub(r"(?i)(bearer\s+)[^\s,\"']+", r"\1[REDACTED]", redacted)
         redacted = re.sub(r"(?i)([?&]key=)[^&\s]+", r"\1[REDACTED]", redacted)
-        return redacted
+        try:
+            parsed = json.loads(redacted)
+        except json.JSONDecodeError:
+            return redacted
+
+        sensitive_keys = {"api_key", "apikey", "authorization", "password", "secret", "token"}
+
+        def scrub(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {
+                    key: "[REDACTED]" if key.casefold() in sensitive_keys else scrub(child)
+                    for key, child in value.items()
+                }
+            if isinstance(value, list):
+                return [scrub(child) for child in value]
+            return value
+
+        return json.dumps(scrub(parsed), ensure_ascii=False)
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if os.getenv("HSX_DEBUG") == "1":
+        if self.name == "gemini" or os.getenv("HSX_DEBUG") == "1":
             try:
                 assert_payload_valid(self.name, payload)
-            except ValueError:
-                print(json.dumps(payload, ensure_ascii=False, indent=2, default=str), file=sys.stderr)
+            except ValueError as error:
+                if os.getenv("HSX_DEBUG") == "1":
+                    print(json.dumps(payload, ensure_ascii=False, indent=2, default=str), file=sys.stderr)
+                    raise
+                message = str(error)
+                violations = [_gemini_validation_violation(error)]
+                _log_provider_error({"provider": self.name, "status": None, "violations": violations})
+                if self.name == "gemini":
+                    raise ProviderError(
+                        _gemini_user_error(payload, violations), provider=self.name, detail=message
+                    ) from error
                 raise
         request = urllib.request.Request(
             self.endpoint,
@@ -406,12 +581,22 @@ class JSONHTTPProvider(Provider):
             body = error.read().decode("utf-8", errors="replace")
             detail = self._error_detail(str(error.code), body)
             LOGGER.warning("%s provider HTTP %s response: %s", self.name, error.code, self._redact_body(body))
-            if self.name == "gemini" and error.code == 400 and os.getenv("HSX_DEBUG") == "1":
-                print(json.dumps(payload, ensure_ascii=False, indent=2, default=str), file=sys.stderr)
+            if self.name == "gemini":
+                violations = _gemini_violations(body)
+                redacted_body = self._redact_body(body)
+                _log_provider_error({
+                    "provider": self.name,
+                    "status": error.code,
+                    "body": redacted_body,
+                    "violations": violations,
+                })
             if os.getenv("HSX_DEBUG") == "1":
                 message = f"{self.name} request failed (HTTP {error.code}): {detail}"
             elif self.name == "gemini" and error.code == 400:
-                message = "Gemini rejected the conversation format."
+                violations = _gemini_violations(body)
+                message = _gemini_user_error(payload, violations)
+            elif self.name == "gemini" and error.code >= 500:
+                message = f"Gemini returned HTTP {error.code}; trying the configured fallback provider."
             elif self.name == "groq" and error.code == 404:
                 message = "Groq model not found."
             else:
@@ -538,12 +723,18 @@ def to_gemini_payload(request: LLMRequest) -> dict[str, Any]:
     if system_text:
         payload["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_text)}]}
     if request.tools:
-        payload["tools"] = [{
-            "functionDeclarations": [{
+        declarations = []
+        for tool in request.tools:
+            parameters = _sanitize_gemini_schema(tool.get("input_schema", {}))
+            if not parameters:
+                parameters = {"type": "object", "properties": {}}
+            declarations.append({
                 "name": tool["name"],
                 "description": tool.get("description", ""),
-                "parameters": _sanitize_gemini_schema(tool.get("input_schema", {})),
-            } for tool in request.tools]
+                "parameters": parameters,
+            })
+        payload["tools"] = [{
+            "functionDeclarations": declarations,
         }]
     return payload
 
@@ -740,12 +931,18 @@ class GroqProvider(OpenAICompatibleProvider):
         models = self._fetch_models()
         selected = configured_model.strip()
         if selected and selected not in models:
-            self._report_missing_model(selected, models)
+            if models:
+                self._report_missing_model(selected, models)
             selected = self._safe_default(models)
         elif not selected:
             selected = self._safe_default(models)
         if not selected:
-            raise ProviderError("Groq did not return any usable chat models.", provider="groq")
+            fix = (
+                "Groq has no active text chat model. Set GROQ_MODEL in .env to an active chat model from "
+                "https://api.groq.com/openai/v1/models."
+            )
+            print(fix, flush=True)
+            raise ProviderError(fix, provider="groq")
         self.available_models = models
         super().__init__("groq", api_key, selected, endpoint)
 
@@ -785,20 +982,26 @@ class GroqProvider(OpenAICompatibleProvider):
         models = sorted({
             item["id"].strip()
             for item in model_data
-            if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"].strip()
+            if isinstance(item, dict)
+            and item.get("active", True) is not False
+            and isinstance(item.get("id"), str)
+            and item["id"].strip()
+            and self._is_text_chat_model(item["id"].strip())
         })
         self._catalog_cache[cache_key] = (time.monotonic(), models)
         return models
 
     @staticmethod
+    def _is_text_chat_model(model: str) -> bool:
+        return not any(marker in model.casefold() for marker in (
+            "whisper", "embedding", "moderation", "guard", "audio", "transcribe", "playai-tts",
+            "-tts", "speech", "orpheus",
+        ))
+
+    @staticmethod
     def _safe_default(models: list[str]) -> str:
-        if not models:
-            return ""
-        chat_models = [
-            model for model in models
-            if not any(marker in model.casefold() for marker in ("whisper", "embedding", "moderation", "guard"))
-        ]
-        return (chat_models or models)[0]
+        chat_models = [model for model in models if GroqProvider._is_text_chat_model(model)]
+        return chat_models[0] if chat_models else ""
 
     def _report_missing_model(self, model: str, models: list[str]) -> None:
         cache_key = hashlib.sha256(self.api_key.encode()).hexdigest()

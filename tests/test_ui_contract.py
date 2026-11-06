@@ -290,6 +290,8 @@ def test_web_user_actions_accordion_state_and_camera_stream_are_wired():
     assert "Emergency stop is active" in html
     assert "emergency_stop" in script
     assert "banner-resume-button" in script
+    assert "telemetry.provider_status" in script
+    assert "Fallback to Groq" in script or "providerStatus.startsWith('Failed')" in script
     assert "Math.min(\n    frame.capturedAt * 1000 - cameraClockOffsetMs,\n    Date.now()," in script
 
 

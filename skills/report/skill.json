@@ -7,8 +7,77 @@
     "properties": {
       "action": {"type": "string", "enum": ["extract_template", "read_data", "make_pdf"]},
       "file": {"type": "string"},
-      "structure": {"type": "object"},
-      "content": {},
+      "structure": {
+        "type": "object",
+        "properties": {
+          "source_type": {"type": "string", "enum": ["docx", "pdf"]},
+          "source_path": {"type": "string"},
+          "fonts": {"type": "array", "items": {"type": "string"}},
+          "headers": {"type": "array", "items": {"type": "string"}},
+          "footers": {"type": "array", "items": {"type": "string"}},
+          "images": {"type": "array", "items": {"type": "string"}},
+          "page_sections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "page_width_pt": {"type": "number"},
+                "page_height_pt": {"type": "number"},
+                "margins_pt": {
+                  "type": "object",
+                  "properties": {
+                    "left": {"type": "number"},
+                    "right": {"type": "number"},
+                    "top": {"type": "number"},
+                    "bottom": {"type": "number"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "content": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "subtitle": {"type": "string"},
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "heading": {"type": "string"},
+                "body": {"type": "string"},
+                "page_break": {"type": "boolean"},
+                "tables": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                  }
+                }
+              }
+            }
+          },
+          "tables": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                  }
+                }
+              }
+            }
+          },
+          "images": {"type": "array", "items": {"type": "string"}}
+        }
+      },
       "path": {"type": "string"}
     },
     "required": ["action"]

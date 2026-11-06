@@ -96,10 +96,21 @@ def run(
     name: str,
     description: str,
     code: str,
-    input_schema: dict,
+    input_schema: dict | None = None,
     risk: str = "confirm",
     permanent: bool = False,
+    input_schema_json: str = "",
 ) -> dict:
+    if input_schema_json:
+        try:
+            parsed_schema = json.loads(input_schema_json)
+        except json.JSONDecodeError as error:
+            raise ValueError("input_schema_json must contain valid JSON.") from error
+        if not isinstance(parsed_schema, dict):
+            raise ValueError("input_schema_json must contain a JSON object schema.")
+        input_schema = parsed_schema
+    if input_schema is None:
+        raise ValueError("Provide the new tool schema in input_schema_json.")
     _validate_metadata(name, description, input_schema, risk)
     _validate_code(code)
     skills_root = BASE_DIR / "skills"

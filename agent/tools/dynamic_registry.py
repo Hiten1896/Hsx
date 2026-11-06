@@ -216,13 +216,21 @@ def register_meta_tool(tools: list, skill_map: dict) -> None:
                     "type": "string",
                     "enum": sorted(OPERATIONS),
                 },
-                "input_schema": {"type": "object"},
+                "input_schema_json": {
+                    "type": "string",
+                    "description": "JSON-encoded object schema; it may contain a text string property.",
+                },
             },
-            "required": ["task", "name", "description", "operation", "input_schema"],
+            "required": ["task", "name", "description", "operation", "input_schema_json"],
         },
     }
 
     def create(**arguments):
+        if "input_schema_json" in arguments:
+            try:
+                arguments["input_schema"] = json.loads(arguments.pop("input_schema_json"))
+            except json.JSONDecodeError as error:
+                raise ValueError("input_schema_json must contain valid JSON.") from error
         return DYNAMIC_TOOLS.create(
             **arguments,
             tools=tools,

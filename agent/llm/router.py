@@ -23,9 +23,11 @@ class LLMRouter:
         self.active_provider = "unknown"
         self.active_model = "unknown"
         self.provider_result_callback = None
+        self.last_result = {"status": "Standby", "reason": ""}
 
     def generate(self, request: LLMRequest) -> EventStream:
         errors = []
+        self.last_result = {"status": "Standby", "reason": ""}
         for provider in self.providers:
             self.active_provider = provider.name
             self.active_model = getattr(provider, "model", "unknown")
@@ -48,19 +50,40 @@ class LLMRouter:
                         True,
                         (time.perf_counter() - started) * 1000,
                     )
+                self.last_result = {
+                    "status": f"Fallback to {provider.name.title()}" if errors else "Used",
+                    "reason": errors[0][1] if errors else "",
+                }
                 return
         if not errors:
             raise ProviderError("No LLM provider is available. Configure a provider in .env.")
         if len(errors) == 1:
             provider_name, message = errors[0]
+            short_message = message.replace("\n", " ")[:72]
+            self.last_result = {
+                "status": f"Failed ({provider_name.title()}: {short_message})",
+                "reason": message,
+            }
             normalized = message.casefold()
             if "rejected the conversation format" not in normalized and "model not found" not in normalized:
                 raise ProviderError(message, provider=provider_name)
+        elif errors:
+            provider_name, message = errors[-1]
+            short_message = message.replace("\n", " ")[:72]
+            self.last_result = {
+                "status": f"Failed ({provider_name.title()}: {short_message})",
+                "reason": message,
+            }
         provider_names = ", ".join(dict.fromkeys(name.title() for name, _ in errors))
         reasons = {message for _, message in errors}
-        if any("rejected the conversation format" in reason for reason in reasons):
-            reason = "Gemini rejected the conversation format."
-            action = "Check the conversation and tool schema formats, then try again."
+        gemini_failure = next((message for name, message in errors if name.casefold() == "gemini"), None)
+        if gemini_failure:
+            reason = gemini_failure.splitlines()[0]
+            fallback_failure = next(
+                (message for name, message in errors if name.casefold() == "groq"),
+                "The configured fallback providers also failed.",
+            )
+            action = f"Groq fallback did not complete: {fallback_failure[:100]}"
         elif any("model not found" in reason.casefold() for reason in reasons):
             reason = "The configured provider model was not found."
             action = "Refresh the provider model list and set a valid model in .env."

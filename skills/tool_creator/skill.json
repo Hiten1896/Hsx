@@ -1,6 +1,6 @@
 {
   "name": "tool_creator",
-  "description": "Create and validate a narrowly scoped non-dangerous Hsx skill for a missing capability, then register it in the active runtime.",
+  "description": "Create and validate a narrowly scoped non-dangerous Hsx skill for a missing capability, then register it in the active runtime. Provide the new tool input schema as a JSON-encoded string.",
   "risk": "confirm",
   "advisory": "This writes executable Python and metadata into the Hsx skill area. Review the requested capability and generated code before proceeding.",
   "requires_acknowledgement": true,
@@ -11,10 +11,10 @@
       "name": {"type": "string"},
       "description": {"type": "string"},
       "code": {"type": "string"},
-      "input_schema": {"type": "object"},
+      "input_schema_json": {"type": "string", "description": "A JSON string containing the new tool input schema object."},
       "risk": {"type": "string", "enum": ["safe", "confirm"]},
       "permanent": {"type": "boolean"}
     },
-    "required": ["task", "name", "description", "code", "input_schema"]
+    "required": ["task", "name", "description", "code", "input_schema_json"]
   }
 }

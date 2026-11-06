@@ -39,6 +39,26 @@ def test_router_falls_back_to_next_provider(caplog):
     assert "LLM provider primary failed: primary unavailable" in caplog.text
 
 
+@pytest.mark.parametrize("status", [400, 500, 503])
+def test_gemini_client_errors_always_fall_back_to_groq(status):
+    class FailedGemini:
+        name = "gemini"
+        model = "gemini-test"
+
+        def generate(self, _request):
+            raise ProviderError("Gemini request rejected.", provider="gemini", status=status)
+            yield
+
+    class GroqFallback(WorkingProvider):
+        name = "groq"
+        model = "groq-test"
+
+    router = LLMRouter([FailedGemini(), GroqFallback()])
+    events = list(router.generate(LLMRequest([])))
+    assert [event.text for event in events if event.type == "text_delta"] == ["fallback answer"]
+    assert router.last_result["status"] == "Fallback to Groq"
+
+
 def test_llm_client_forwards_text_deltas(monkeypatch, tmp_path):
     from agent import llm_client
 
@@ -54,6 +74,41 @@ def test_llm_client_forwards_text_deltas(monkeypatch, tmp_path):
 
     assert streamed == ["fallback answer"]
     assert "".join(block.text for block in response.content) == "fallback answer"
+
+
+def test_llm_client_records_fallback_provider_status(monkeypatch, tmp_path):
+    from agent import llm_client
+
+    class FailedGemini:
+        name = "gemini"
+        model = "gemini-test"
+
+        def generate(self, _request):
+            raise ProviderError("Gemini rejected the tool schema.", provider="gemini", status=400)
+            yield
+
+    class GroqFallback(WorkingProvider):
+        name = "groq"
+        model = "groq-test"
+
+    class CapturingTelemetry:
+        result = None
+
+        def record_llm(self, *args, **kwargs):
+            self.result = kwargs
+
+    telemetry = CapturingTelemetry()
+    monkeypatch.setattr(
+        llm_client,
+        "PROVIDER_BANDIT",
+        llm_client.ProviderBandit(tmp_path / "bandit.json", random.Random(1)),
+    )
+    monkeypatch.setattr(llm_client, "LLM_TELEMETRY", telemetry)
+    monkeypatch.setattr(llm_client, "default_router", lambda: LLMRouter([FailedGemini(), GroqFallback()]))
+
+    llm_client.call_llm([], [], sensitive=True, prefer_cloud=True)
+
+    assert telemetry.result["provider_status"] == "Fallback to Groq"
 
 
 def test_llm_client_propagates_provider_failure_instead_of_using_local_fallback(monkeypatch, tmp_path):

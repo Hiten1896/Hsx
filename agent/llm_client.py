@@ -327,6 +327,10 @@ def call_llm(
             int(measured_input),
             int(measured_output),
             not any(key in usage for key in ("input_tokens", "prompt_tokens", "output_tokens", "completion_tokens")),
+            provider_status=(
+                "Used" if used_panel else getattr(router, "last_result", {}).get("status", "Used")
+            ),
+            provider_error=getattr(router, "last_result", {}).get("reason", ""),
         )
     if isinstance(providers, list):
         response_provider = (

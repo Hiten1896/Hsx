@@ -1305,7 +1305,11 @@ async function refreshConnections() {
       const telemetry = await telemetryResponse.json();
       const provider = String(telemetry.provider || 'not connected');
       const available = !['not connected', ''].includes(provider.toLowerCase());
-      setConnection('llm-dot', 'llm-state', available ? 'Used' : 'Standby', available ? 'connected' : 'warning');
+      const providerStatus = String(telemetry.provider_status || (available ? 'Used' : 'Standby'));
+      const providerState = providerStatus.startsWith('Failed')
+        ? 'disconnected'
+        : providerStatus === 'Standby' ? 'warning' : 'connected';
+      setConnection('llm-dot', 'llm-state', providerStatus, providerState);
     } else {
       setConnection('llm-dot', 'llm-state', 'Unavailable', 'disconnected');
     }

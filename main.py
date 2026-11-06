@@ -7,15 +7,25 @@ import threading
 from http.server import ThreadingHTTPServer
 
 from agent.hardware import AUDIO_ALERTS, CAMERA, CAMERA_STREAM, MOTION_MONITOR, SPEAKER
+from agent.llm.providers import GroqProvider, ProviderError
 from agent.ml.anomaly import ANOMALY_MONITOR, SystemMetrics
 from agent.ml.forecaster import FORECASTER
 from agent.ml.log_recorder import LOG_RECORDER
 from agent.memory.knowledge_graph import KNOWLEDGE_GRAPH
 from agent.mesh import MeshDiscoveryService
-from config import DATA_DIR, HOST, PORT
+from config import DATA_DIR, GROQ_API_KEY, GROQ_MODEL, HOST, PORT
 from server import APPROVAL_GUARD, MESH_GATEWAY, TOOLS, HsxHandler
 
 LOGGER = logging.getLogger("hsx.main")
+
+
+def _warm_groq_model_catalog() -> None:
+    if not GROQ_API_KEY:
+        return
+    try:
+        GroqProvider(GROQ_API_KEY, GROQ_MODEL)
+    except ProviderError as error:
+        LOGGER.warning("Could not validate the Groq model at startup: %s", error)
 
 
 def _record_resource_sample(metrics: SystemMetrics) -> None:
@@ -62,6 +72,7 @@ def _start_hardware_services() -> None:
 
 
 if __name__ == "__main__":
+    _warm_groq_model_catalog()
     print(f"Hsx ready. Loaded {len(TOOLS)} skills at http://{HOST}:{PORT}")
     if APPROVAL_GUARD.generated_pin:
         print(f"Generated owner PIN (save it; it is only shown once): {APPROVAL_GUARD.generated_pin}")
