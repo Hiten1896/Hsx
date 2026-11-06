@@ -18,7 +18,7 @@
       <aside id="app-sidebar" class="sidebar" aria-label="Workspace navigation">
         <a class="brand" href="/web/" aria-label="Hsx home">
           <img src="/web/icon.svg" width="36" height="36" alt="">
-          <span class="brand-name">Hsx</span>
+          <span class="brand-copy"><span class="brand-name">Hsx</span></span>
         </a>
 
         <button id="new-chat-button" class="new-chat-button" type="button">
@@ -33,12 +33,12 @@
             </div>
             <div class="activity-heading-actions">
               <span id="activity-count" class="connection-summary">Checking</span>
-              <button id="activity-toggle" class="panel-collapse-button" type="button" aria-controls="agent-activity-list" aria-expanded="true" aria-label="Collapse agent activity" title="Collapse agent activity">
+              <button id="activity-toggle" class="panel-collapse-button" type="button" aria-controls="agent-activity-list" aria-expanded="false" aria-label="Expand agent activity" title="Expand agent activity">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
               </button>
             </div>
           </div>
-          <div id="agent-activity-list" class="artifacts-list" aria-live="polite">
+          <div id="agent-activity-list" class="artifacts-list" aria-live="polite" hidden>
             <p class="artifacts-empty">Checking for agent tasks…</p>
           </div>
         </section>
@@ -49,35 +49,20 @@
               <p class="panel-eyebrow">THIS BROWSER SESSION</p>
               <h2 id="chat-history-title">Chat history</h2>
             </div>
-            <button id="history-toggle" class="panel-collapse-button" type="button" aria-controls="chat-history-list" aria-expanded="true" aria-label="Collapse chat history" title="Collapse chat history">
+            <button id="history-toggle" class="panel-collapse-button" type="button" aria-controls="chat-history-list" aria-expanded="false" aria-label="Expand chat history" title="Expand chat history">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
             </button>
           </div>
-          <div id="chat-history-list" class="chat-history-list" aria-live="polite">
+          <div id="chat-history-list" class="chat-history-list" aria-live="polite" hidden>
             <p class="artifacts-empty">Your chats in this browser session will appear here.</p>
           </div>
         </section>
 
-        <div class="sidebar-caption">WORKSPACE</div>
-        <div class="sidebar-nav" aria-label="Workspace sections">
-          <a class="nav-item nav-item-active" href="#chat-stream" aria-current="page">
-            <span class="nav-icon" aria-hidden="true">◌</span> Chat
-          </a>
-        </div>
-
         <div class="sidebar-bottom">
-          <button id="access-token-button" class="token-button" type="button">Set remote access token</button>
-          <form id="access-token-form" class="token-form" hidden>
-            <label for="access-token-input">Remote bearer token</label>
-            <input id="access-token-input" type="password" autocomplete="off" spellcheck="false">
-            <div class="token-actions">
-              <button type="submit">Save for this tab</button>
-              <button id="clear-token-button" type="button">Clear</button>
-            </div>
-            <p>Kept in this tab only. Never added to the URL.</p>
-          </form>
           <details class="feedback-settings">
-            <summary>Feedback settings</summary>
+            <summary>Settings</summary>
+            <button id="emergency-stop-button" type="button">Emergency stop</button>
+            <button id="resume-button" type="button" hidden>Resume</button>
             <p id="feedback-storage-note">Stored on this computer only.</p>
             <label><input id="save-feedback-setting" type="checkbox" checked> Save feedback</label>
             <label><input id="full-conversation-setting" type="checkbox"> Include full conversation in exports</label>
@@ -105,6 +90,10 @@
       </aside>
 
       <main class="chat-area">
+        <div id="emergency-banner" class="emergency-banner" role="alert" hidden>
+          Emergency stop is active. New messages are paused.
+          <button id="banner-resume-button" type="button">Resume</button>
+        </div>
         <div class="chat-controls" aria-label="Chat controls">
           <button id="sidebar-toggle" class="header-icon-button sidebar-toggle" type="button" aria-label="Open connections and navigation" aria-controls="app-sidebar" aria-expanded="false" title="Open menu">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>

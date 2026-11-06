@@ -294,9 +294,6 @@ class HsxTUI(App):
     def _api_request(self, endpoint: str, payload: dict | None = None) -> dict:
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
         headers = {"Content-Type": "application/json"}
-        token = os.getenv("HSX_REMOTE_TOKEN", "").strip()
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
         request = urllib.request.Request(
             self.base_url + endpoint,
             data=data,

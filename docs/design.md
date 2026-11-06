@@ -85,10 +85,7 @@ offers `/activity` and `/artifacts`; the Textual terminal UI shows both in its a
 line. This reports Hsx jobs, not individual specialist/sub-agent execution because the
 current backend does not persist per-sub-agent progress.
 
-Remote bearer tokens are optional, entered through the access-token control, sent only
-in the Authorization header, and kept in sessionStorage for the current tab. The
-static UI shell is available to Tailnet peers so they can enter the token; API routes
-remain bearer-protected. The Tailnet indicator describes whether the page is currently served from a `.ts.net`
+The primary API has no bearer-token prompt or requirement. The Tailnet indicator describes whether the page is currently served from a `.ts.net`
 hostname; the browser network indicator uses `navigator.onLine` and is not a host-side
 internet reachability test.
 

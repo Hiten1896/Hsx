@@ -17,7 +17,10 @@
     "notifications": "/api/notifications",
     "notifications_read": "/api/notifications/read",
     "notifications_stream": "/api/notifications/stream",
-    "stop": "/api/stop"
+    "stop": "/api/stop",
+    "policy_status": "/api/policy/status",
+    "emergency_stop": "/api/emergency-stop",
+    "resume": "/api/resume"
   },
   "stream_events": ["job", "text_delta", "done", "error"]
 }

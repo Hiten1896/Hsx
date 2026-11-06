@@ -1,5 +1,6 @@
 # Test runner.
 pytest
+pytest-timeout
 # Fast Python linting.
 ruff
 # Coverage reporting in CI and local development.

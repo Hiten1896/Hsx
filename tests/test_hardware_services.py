@@ -67,7 +67,6 @@ def test_mjpeg_api_streams_without_an_agent_job(monkeypatch):
     from urllib.request import Request, urlopen
 
     import server
-    from api.auth import AuthService
 
     jpeg = b"\xff\xd8dashboard-frame\xff\xd9"
 
@@ -83,19 +82,10 @@ def test_mjpeg_api_streams_without_an_agent_job(monkeypatch):
 
     monkeypatch.setattr(server, "CAMERA", FakeCamera())
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.HsxHandler)
-    host = f"127.0.0.1:{httpd.server_port}"
-    monkeypatch.setattr(
-        server,
-        "AUTH_SERVICE",
-        AuthService((f"http://{host}",), (host,), "test-camera-token"),
-    )
     thread = threading.Thread(target=httpd.serve_forever)
     thread.start()
     try:
-        request = Request(
-            f"http://127.0.0.1:{httpd.server_port}/api/camera/stream",
-            headers={"Authorization": "Bearer test-camera-token"},
-        )
+        request = Request(f"http://127.0.0.1:{httpd.server_port}/api/camera/stream")
         with urlopen(request, timeout=3) as response:
             body = response.read()
             assert response.status == 200

@@ -104,10 +104,8 @@ terminal client over SSH for keyboard-first work on the HP itself.
 - Browser: `http://127.0.0.1:8000` or the Tailscale URL published by `tailscale serve`.
 - Terminal: `python cli.py` from the project environment; it keeps the local execution
   target and the same approval language as the web client.
-- Access rules: same-origin requests are allowed only for configured hosts; no-origin
-  requests require a bearer token, and all browser traffic keeps credentials out of the
-  URL and logs. Set `HSX_REMOTE_TOKEN` in the CLI/TTY environment when connecting
-  without a browser Origin header.
+- API access: the primary API does not require bearer authentication. Any client that
+  can reach its configured listener can send requests.
 - Data stays local by default: feedback is stored on this computer only unless the user
   opts in to a broader export.
 
@@ -194,9 +192,8 @@ cp .env.example .env
 python main.py
 ```
 
-Open <http://127.0.0.1:8000> after startup. The API accepts local loopback requests
-without a bearer token; keep the server bound to loopback unless you add an external
-authentication boundary.
+Open <http://127.0.0.1:8000> after startup. The API accepts requests without bearer
+authentication, so bind it only to a network you intend to trust.
 
 ### Dependency profiles
 
@@ -225,7 +222,7 @@ Copy `.env.example` to `.env` and fill only the settings you need. Important gro
 | Group | Variables | Purpose |
 | --- | --- | --- |
 | Provider | `HSX_PROVIDER`, `HSX_FALLBACKS`, provider API keys and model names | Select and configure LLMs |
-| Server | `HSX_HOST`, `HSX_PORT`, `HSX_ALLOWED_ORIGINS`, `HSX_ALLOWED_HOSTS`, `HSX_REMOTE_TOKEN` | Bind address, exact browser origins and hosts, and bearer auth for requests without an Origin |
+| Server | `HSX_HOST`, `HSX_PORT` | Bind address and port for the local API |
 | Mesh | `HSX_MESH_HOST`, `HSX_MESH_PORT`, `HSX_MESH_TOKEN`, `HSX_MESH_TLS_CERT`, `HSX_MESH_TLS_KEY` | Optional private-LAN HTTPS node API |
 | Owner approval | `HSX_OWNER_PIN` | Approval for privileged actions |
 | Workspace | `HSX_WORKSPACE`, `HSX_WORK_DIR` | Source files and generated deliverables |
@@ -234,18 +231,10 @@ Copy `.env.example` to `.env` and fill only the settings you need. Important gro
 | Hardware | `HSX_ENABLE_CAMERA_STREAM`, `HSX_ENABLE_MOTION_MONITOR`, `HSX_ENABLE_VISION_CAPTURE`, `HSX_ENABLE_AUDIO_ALERTS`, `HSX_ENABLE_VOICE_ALERTS` | Opt-in camera, motion, and speaker services |
 | Notifications | `HSX_VAPID_*`, `HSX_NOTIFY_*`, `TELEGRAM_*` | Web Push, in-app, and Telegram routing |
 
-The primary API defaults to loopback. Requests with an `Origin` must match
-`HSX_ALLOWED_ORIGINS`, and every request's exact `Host` value must match
-`HSX_ALLOWED_HOSTS`. API requests without an `Origin` require a valid bearer token.
-For direct Tailscale access, bind `HSX_HOST` to the server's Tailscale address
-(preferred) or `0.0.0.0`, then set `HSX_REMOTE_TOKEN` to a random value of at
-least 32 characters. Remote API requests are accepted only from Tailscale IPv4
-(`100.64.0.0/10`) or IPv6 (`fd7a:115c:a1e0::/48`) peers and must include
-`Authorization: Bearer <HSX_REMOTE_TOKEN>`; an unset token keeps remote access
-disabled. Remote browser origins must also be listed exactly in
-`HSX_ALLOWED_ORIGINS`; add their exact host values to `HSX_ALLOWED_HOSTS` as well.
-The same token can be entered in the browser's access-token control for API
-requests without an Origin. The restricted TLS mesh listener remains separate.
+The primary API does not require bearer authentication and accepts requests from
+clients that can reach the configured listener. `HSX_ALLOWED_ORIGINS` remains an
+allowlist for the optional mesh listener. The separate mesh API continues to use
+its own TLS and token settings.
 
 Run `sudo scripts/check.sh` on Debian to check the service, listener, health
 endpoint, Tailscale/serve state, disk headroom, and clock synchronization.
@@ -304,7 +293,7 @@ telemetry, camera status/stream, job status, and task submission; it does not ex
 the general local API. `GET /api/mesh/info` provides node metadata, and the optional
 IPv4 multicast responder on `239.255.42.99:45800` supports discovery on the local
 network (`agent.mesh.discover_nodes`). Discovery advertises only the private HTTPS
-address and node identifier; all API requests still require TLS and the token. No
+address and node identifier; mesh API requests still require TLS and its token. No
 public or wildcard listener is started. For browser-based clients, add the exact HTTPS origin to
 `HSX_ALLOWED_ORIGINS`.
 
@@ -343,11 +332,12 @@ bounded question in the web interface instead of guessing.
 
 ## Safety and security model
 
-- The local API accepts loopback requests without a bearer token and rejects
-  non-loopback HTTP requests. Keep the service bound to localhost.
+- The primary API accepts requests without bearer authentication. Keep the service
+  bound to a trusted network.
 - Skills have policy tiers such as safe, confirm, and dangerous. Decisions are recorded
   in an append-only audit log.
-- `POST /api/stop` provides a global kill switch for active work.
+- `POST /api/stop` cancels one active run. The Settings emergency stop pauses every
+  run until a user resumes the service.
 - Owner-sensitive actions require the separate owner approval flow, with rate limiting
   and lockout.
 - `run_code` uses Docker when available with no network, resource limits, a read-only
@@ -411,11 +401,7 @@ In-app notifications work with the local web interface. Web Push requires VAPID 
 Telegram is an optional backup channel for selected health and heartbeat events. Routing,
 quiet hours, and target selection are configurable through `.env`.
 
-The web dashboard remains intended for local use. Direct remote API clients,
-including `cli.py` when `HSX_REMOTE_TOKEN` is set, can connect over Tailscale
-with bearer authentication. Do not expose the primary listener through Tailscale
-Serve, a reverse proxy, a container port, or a public port; proxying can obscure
-the peer address used to enforce the Tailscale-only policy.
+The optional mesh API remains a separate, limited TLS service with its own token.
 
 ## Diagnostics and development
 

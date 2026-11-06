@@ -8,7 +8,6 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import server
-from api.auth import AuthService
 from agent.ask_user import AskUserJobs, AskUserRequest
 from agent.notifier import Notifier
 from agent.workspace import Workspace
@@ -23,15 +22,9 @@ def _request(
     tokenless: bool = False,
 ):
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.HsxHandler)
-    host = f"127.0.0.1:{httpd.server_port}"
-    token = "test-integration-token"
-    previous_auth_service = server.AUTH_SERVICE
-    server.AUTH_SERVICE = AuthService((f"http://{host}",), (host,), token)
     thread = threading.Thread(target=httpd.handle_request)
     thread.start()
     request_headers = headers or {}
-    if not tokenless:
-        request_headers = {**request_headers, "Authorization": f"Bearer {token}"}
     data = None
     if payload is not None:
         request_headers = {**request_headers, "Content-Type": "application/json"}
@@ -59,7 +52,6 @@ def _request(
     finally:
         thread.join(timeout=15)
         httpd.server_close()
-        server.AUTH_SERVICE = previous_auth_service
     return result
 
 
@@ -195,7 +187,8 @@ def test_chat_stream_forwards_model_text_deltas(tmp_path: Path, monkeypatch):
 
     observed_targets = []
 
-    def fake_run_chat_job(job_id, approvals, sensitive, target_device, on_text_delta):
+    def fake_run_chat_job(job_id, approvals, sensitive, target_device, on_text_delta, cancel_event=None):
+        del cancel_event
         observed_targets.append(target_device)
         on_text_delta("Streaming ")
         on_text_delta("answer")
@@ -231,9 +224,9 @@ def test_files_panel_rejects_traversal(tmp_path: Path, monkeypatch):
     assert status == 404
 
 
-def test_files_panel_requires_bearer_when_origin_is_missing():
+def test_files_panel_is_available_without_bearer_when_origin_is_missing():
     status, _, _ = _request("/api/files", tokenless=True)
-    assert status == 401
+    assert status == 200
 
 
 def test_post_request_body_is_bounded():

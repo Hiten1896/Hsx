@@ -3,6 +3,9 @@ let apiContract;
 let pendingQuestion = null;
 let submitting = false;
 let activeChatController = null;
+let activeRunId = '';
+let queuedMessage = '';
+let chatWatchdog = null;
 let notificationController = null;
 let notificationLastId = 0;
 let notificationInitialized = false;
@@ -16,7 +19,6 @@ let voiceRecognition = null;
 let voiceIsListening = false;
 let voiceDraft = '';
 let voiceStatusMessage = 'Files up to 1 MB each';
-let bearerToken = loadBearerToken();
 let uploadedAttachments = [];
 let cameraObjectUrl = '';
 let cameraStreamController = null;
@@ -50,8 +52,6 @@ const elements = {
   attachmentList: document.getElementById('attachment-list'),
   composerStatus: document.getElementById('composer-status'),
   dropHint: document.getElementById('drop-hint'),
-  tokenForm: document.getElementById('access-token-form'),
-  tokenInput: document.getElementById('access-token-input'),
   sidebar: document.getElementById('app-sidebar'),
   cameraSidebar: document.getElementById('camera-sidebar'),
   panelBackdrop: document.getElementById('panel-backdrop'),
@@ -88,10 +88,6 @@ function loadSessionId() {
   return safeStorageGet('sessionStorage', 'hsx-session-id') || makeSessionId();
 }
 
-function loadBearerToken() {
-  return safeStorageGet('sessionStorage', 'hsx-bearer-token');
-}
-
 function persistSessionId() {
   safeStorageSet('sessionStorage', 'hsx-session-id', sessionId);
 }
@@ -109,10 +105,7 @@ function persistAttachments() {
 }
 
 function apiFetch(url, options = {}) {
-  const storedToken = loadBearerToken();
-  if (storedToken) bearerToken = storedToken;
   const headers = new Headers(options.headers || {});
-  if (bearerToken) headers.set('Authorization', `Bearer ${bearerToken}`);
   return fetch(url, { ...options, headers });
 }
 
@@ -255,7 +248,7 @@ function hasComposerContent() {
 }
 
 function updateSendButton() {
-  elements.send.hidden = submitting || !hasComposerContent();
+  elements.send.hidden = !hasComposerContent();
 }
 
 function setConnection(id, labelId, value, state) {
@@ -263,6 +256,21 @@ function setConnection(id, labelId, value, state) {
   const label = document.getElementById(labelId);
   if (dot) dot.dataset.state = state;
   if (label) label.textContent = value;
+}
+
+function showEmergencyStop(stopped) {
+  document.getElementById('emergency-banner').hidden = !stopped;
+  document.getElementById('resume-button').hidden = !stopped;
+  document.getElementById('emergency-stop-button').hidden = stopped;
+}
+
+async function refreshEmergencyStop() {
+  try {
+    const response = await apiFetch(apiContract.endpoints.policy_status);
+    if (response.ok) showEmergencyStop(Boolean((await response.json()).stopped));
+  } catch {
+    // Leave the last reported policy state visible.
+  }
 }
 
 function relativeMessageTime(timestamp) {
@@ -516,8 +524,27 @@ async function readStream(response, onEvent) {
 function setBusy(isBusy) {
   submitting = isBusy;
   updateSendButton();
-  elements.send.disabled = isBusy;
   elements.stop.hidden = !isBusy;
+  if (chatWatchdog) window.clearTimeout(chatWatchdog);
+  chatWatchdog = null;
+  if (isBusy) {
+    chatWatchdog = window.setTimeout(async () => {
+      if (!activeRunId) {
+        setBusy(false);
+        return;
+      }
+      try {
+        const status = await apiFetch(`/api/runs/status?run_id=${encodeURIComponent(activeRunId)}`);
+        const result = await status.json();
+        if (!status.ok || ['done', 'failed', 'cancelled', 'unknown'].includes(result.state)) {
+          activeChatController?.abort();
+          setBusy(false);
+        }
+      } catch {
+        setBusy(false);
+      }
+    }, 45_000);
+  }
 }
 
 function renderAttachments() {
@@ -817,7 +844,14 @@ async function pollQuestionJob(jobId, activity, signal) {
 async function submitPrompt() {
   const typedMessage = elements.prompt.value.trim();
   const readyAttachments = uploadedAttachments.filter((item) => item.status === 'ready');
-  if ((!typedMessage && !readyAttachments.length) || submitting) return;
+  if ((!typedMessage && !readyAttachments.length)) return;
+  if (submitting) {
+    queuedMessage = typedMessage;
+    elements.prompt.value = '';
+    persistDraft();
+    elements.composerStatus.textContent = 'Next message queued.';
+    return;
+  }
   const userMessage = typedMessage || 'Please review the attached file(s).';
   const attachmentContext = readyAttachments.length
     ? `\n\nUploaded workspace files:\n${readyAttachments.map((item) => `- ${item.path}`).join('\n')}`
@@ -874,14 +908,21 @@ async function submitPrompt() {
     });
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.error || (response.status === 401 ? 'Set the remote access token to continue.' : 'The request could not be completed.'));
+      throw new Error(error.error || 'The request could not be completed.');
     }
     uploadedAttachments = [];
     persistAttachments();
     renderAttachments();
     elements.prompt.value = '';
     activity = appendActivity('Thinking…');
+    setBusy(true);
     await readStream(response, ({ event, data }) => {
+      if (event === 'message_start') {
+        activeRunId = data.run_id || '';
+        setBusy(true);
+      } else if (event === 'abort' || event === 'stream_end') {
+        setBusy(false);
+      }
       if (event === 'text_delta') {
         assistantContent += data.text || '';
         if (!assistantCard) {
@@ -894,6 +935,7 @@ async function submitPrompt() {
         }
       } else if (event === 'job' && data.id) {
         currentJob = data;
+        activeRunId = data.id;
         if (data.state === 'waiting_for_user') {
           pendingQuestion = data;
           activity?.remove();
@@ -945,9 +987,15 @@ async function submitPrompt() {
   } finally {
     if (activeChatController === controller) {
       activeChatController = null;
+      activeRunId = '';
       setBusy(false);
       elements.send.disabled = false;
       elements.prompt.focus();
+    }
+    if (queuedMessage) {
+      elements.prompt.value = queuedMessage;
+      queuedMessage = '';
+      window.setTimeout(() => elements.composer.requestSubmit(), 0);
     }
     refreshArtifacts();
     refreshConnections();
@@ -1003,19 +1051,6 @@ async function refreshCamera() {
     const hostLabel = [host.hostname, host.hardware].filter(Boolean).join(' · ');
     document.getElementById('camera-host-label').textContent =
       hostLabel || 'Host hardware unavailable';
-    if (response.status === 401) {
-      cameraAvailable = false;
-      stopCameraStream();
-      cameraHasFrame = false;
-      if (cameraObjectUrl) {
-        URL.revokeObjectURL(cameraObjectUrl);
-        cameraObjectUrl = '';
-      }
-      elements.camera.removeAttribute('src');
-      setCameraStatus(false, 'Camera feed offline');
-      scheduleCameraReconnect();
-      return;
-    }
     const connected = response.ok && data.running === true;
     if (connected) {
       cameraAvailable = true;
@@ -1177,20 +1212,9 @@ async function startCameraStream() {
   cameraStreamStartedAt = Date.now();
   try {
     const requestStartedAt = Date.now();
-    const streamHeaders = new Headers();
-    const currentToken = loadBearerToken() || bearerToken;
-    if (currentToken) streamHeaders.set('Authorization', 'Bearer ' + currentToken);
     const response = await apiFetch(apiContract.endpoints.camera_stream, {
-      headers: streamHeaders,
       signal: controller.signal,
     });
-    if (response.status === 401) {
-      cameraAvailable = false;
-      cameraHasFrame = false;
-      setCameraStatus(false, 'Camera feed offline');
-      scheduleCameraReconnect();
-      return;
-    }
     if (!response.ok || !response.body) {
       cameraAvailable = false;
       setCameraStatus(false, 'Camera feed offline');
@@ -1271,15 +1295,6 @@ async function refreshConnections() {
       apiFetch(apiContract.endpoints.health),
       apiFetch(apiContract.endpoints.telemetry),
     ]);
-    if (healthResponse.status === 401) {
-      setConnection('api-dot', 'api-state', 'Token needed', 'warning');
-      elements.connection.textContent = 'Token needed';
-      setConnection('llm-dot', 'llm-state', 'Locked', 'warning');
-      document.getElementById('connection-summary').textContent = 'Enter token to connect';
-      if (cameraEnabled) await refreshCamera();
-      else setCameraStatus(false, 'Click to turn on camera');
-      return;
-    }
     setConnection('api-dot', 'api-state', healthResponse.ok ? 'Online' : 'Offline', healthResponse.ok ? 'connected' : 'disconnected');
     elements.connection.replaceChildren();
     const connectionDot = document.createElement('span');
@@ -1403,7 +1418,6 @@ function abortNotificationStream() {
 
 async function consumeNotificationStream(controller) {
   const headers = new Headers();
-  if (bearerToken) headers.set('Authorization', `Bearer ${bearerToken}`);
   headers.set('Last-Event-ID', String(notificationLastId));
   const response = await fetch(apiContract.endpoints.notifications_stream, {
     headers,
@@ -1655,8 +1669,16 @@ async function retryCamera() {
 
 async function stopTask() {
   const controller = activeChatController;
+  const runId = activeRunId;
   if (controller) {
-    activeChatController = null;
+    try {
+      await apiFetch(apiContract.endpoints.stop, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ run_id: runId }),
+      });
+    } catch {
+      elements.composerStatus.textContent = 'The stop request could not reach Hsx.';
+    }
     controller.abort();
     if (!elements.prompt.value) {
       elements.prompt.value = safeStorageGet('sessionStorage', `hsx-draft-${sessionId}`);
@@ -1664,12 +1686,6 @@ async function stopTask() {
     }
   }
   setBusy(false);
-  elements.send.disabled = false;
-  try {
-    await apiFetch(apiContract.endpoints.stop, { method: 'POST' });
-  } catch {
-    elements.composerStatus.textContent = 'The stop request could not reach Hsx.';
-  }
 }
 
 function resetConversation() {
@@ -1706,35 +1722,6 @@ function resetConversation() {
   elements.prompt.focus();
 }
 
-function setupTokenControls() {
-  const tokenButton = document.getElementById('access-token-button');
-  tokenButton.addEventListener('click', () => {
-    elements.tokenForm.hidden = !elements.tokenForm.hidden;
-    if (!elements.tokenForm.hidden) elements.tokenInput.focus();
-  });
-  elements.tokenForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    bearerToken = elements.tokenInput.value.trim();
-    if (bearerToken && !safeStorageSet('sessionStorage', 'hsx-bearer-token', bearerToken)) {
-      elements.composerStatus.textContent = 'Token is active for this page only; session storage is unavailable.';
-    } else if (!bearerToken) {
-      try { window.sessionStorage.removeItem('hsx-bearer-token'); } catch { /* Storage is optional. */ }
-    }
-    elements.tokenInput.value = '';
-    elements.tokenForm.hidden = true;
-    refreshConnections();
-    startNotificationStream();
-  });
-  document.getElementById('clear-token-button').addEventListener('click', () => {
-    bearerToken = '';
-    try { window.sessionStorage.removeItem('hsx-bearer-token'); } catch { /* Storage is optional. */ }
-    elements.tokenInput.value = '';
-    elements.tokenForm.hidden = true;
-    refreshConnections();
-    startNotificationStream();
-  });
-}
-
 async function initialize() {
   const [tokensResponse, contractResponse] = await Promise.all([
     fetch('/web/design-tokens.json'),
@@ -1742,6 +1729,7 @@ async function initialize() {
   ]);
   if (!tokensResponse.ok || !contractResponse.ok) throw new Error('Could not load the Hsx interface contract.');
   apiContract = await contractResponse.json();
+  await refreshEmergencyStop();
   updateGreeting();
   setupVoiceInput();
   setupComposerOptions();
@@ -1822,6 +1810,17 @@ async function initialize() {
       document.getElementById('feedback-count').textContent = 'Feedback could not be deleted.';
     }
   });
+  document.getElementById('emergency-stop-button').addEventListener('click', async () => {
+    if (!window.confirm('Emergency stop pauses all runs until you resume. Continue?')) return;
+    await apiFetch(apiContract.endpoints.emergency_stop, { method: 'POST' });
+    showEmergencyStop(true);
+  });
+  const resumeEmergencyStop = async () => {
+    await apiFetch(apiContract.endpoints.resume, { method: 'POST' });
+    showEmergencyStop(false);
+  };
+  document.getElementById('resume-button').addEventListener('click', resumeEmergencyStop);
+  document.getElementById('banner-resume-button').addEventListener('click', resumeEmergencyStop);
   document.getElementById('notifications-toggle').addEventListener('click', async () => {
     const opening = elements.notificationPanel.hidden;
     elements.notificationPanel.hidden = !opening;
@@ -1848,7 +1847,6 @@ async function initialize() {
     }
   });
   persistSessionId();
-  setupTokenControls();
   const draft = safeStorageGet('sessionStorage', `hsx-draft-${sessionId}`);
   const storedAttachments = safeStorageGet('sessionStorage', `hsx-attachments-${sessionId}`);
   if (storedAttachments) {

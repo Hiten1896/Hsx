@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import platform
 import shutil
 import socket
@@ -29,17 +30,63 @@ def system_info() -> dict:
     now = datetime.now().astimezone()
     return {
         "hostname": socket.gethostname(),
+        "ips": sorted({item.address for values in psutil.net_if_addrs().values() for item in values
+                       if item.family in {socket.AF_INET, socket.AF_INET6} and item.address}),
+        "tailscale": _tailscale_status(),
         "cpu": {
             "model": _cpu_model(),
             "logical_cores": psutil.cpu_count(logical=True) or os.cpu_count() or 1,
             "physical_cores": psutil.cpu_count(logical=False),
         },
-        "memory": {"total_bytes": memory.total, "available_bytes": memory.available},
+        "memory": {"total_bytes": memory.total, "free_bytes": memory.available,
+                   "available_bytes": memory.available},
         "disk": {"path": os.path.abspath(os.sep), "total_bytes": disk.total, "free_bytes": disk.free},
         "os": {"system": platform.system(), "release": platform.release(), "version": platform.version()},
         "uptime_seconds": max(0, int(datetime.now().timestamp() - psutil.boot_time())),
         "local_time": now.isoformat(timespec="seconds"),
     }
+
+
+def _tailscale_status() -> dict:
+    executable = shutil.which("tailscale")
+    if not executable:
+        return {"available": False, "status": "not installed"}
+    try:
+        result = subprocess.run([executable, "status", "--json"], capture_output=True, text=True, timeout=5, check=False)
+        if result.returncode:
+            return {"available": True, "connected": False, "error": result.stderr.strip() or "status command failed"}
+        data = json.loads(result.stdout)
+        return {"available": True, "connected": data.get("BackendState") == "Running",
+                "backend_state": data.get("BackendState", "Unknown"), "self": data.get("Self", {})}
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+        return {"available": True, "connected": False, "error": str(error)}
+
+
+def list_serial_ports() -> dict:
+    try:
+        from serial.tools import list_ports
+        ports = [{"device": port.device, "description": port.description, "manufacturer": port.manufacturer}
+                 for port in list_ports.comports()]
+        return {"success": True, "ports": ports}
+    except ImportError:
+        try:
+            if os.name == "nt":
+                result = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", "[System.IO.Ports.SerialPort]::GetPortNames()"],
+                    capture_output=True, text=True, timeout=5, check=False,
+                )
+                if result.returncode:
+                    return {"success": False, "error": result.stderr.strip() or "Could not enumerate serial ports."}
+                ports = sorted(line.strip() for line in result.stdout.splitlines() if line.strip())
+            else:
+                ports = sorted(
+                    str(port) for pattern in ("ttyUSB*", "ttyACM*", "ttyS*") for port in Path("/dev").glob(pattern)
+                )
+            return {"success": True, "ports": ports, "note": "pyserial unavailable; using device names"}
+        except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+            return {"success": False, "error": str(error)}
+    except (OSError, RuntimeError, ValueError) as error:
+        return {"success": False, "error": str(error)}
 
 
 def disk_usage() -> dict:
@@ -95,6 +142,20 @@ def list_usb() -> dict:
             "devices": [line for line in completed.stdout.splitlines() if line.strip()],
             "success": completed.returncode == 0,
         }
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like 'USB*' } | "
+                 "Select-Object FriendlyName,InstanceId,Status | ConvertTo-Json -Compress"],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            if result.returncode:
+                return {"success": False, "error": result.stderr.strip() or "Could not enumerate USB devices."}
+            devices = json.loads(result.stdout) if result.stdout.strip() else []
+            return {"success": True, "source": "local Windows device inventory", "devices": devices}
+        except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+            return {"success": False, "error": str(error)}
     return {"source": "local host", "devices": [], "available": False}
 
 

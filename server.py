@@ -1,5 +1,3 @@
-import hmac
-import ipaddress
 import base64
 import binascii
 import json
@@ -18,7 +16,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from api.auth import AuthService
 from api.chat import ChatStreamRegistry
 from api.devices import resolve_target_device
 from api.files import resolve_output
@@ -51,8 +48,6 @@ from agent.skill_loader import load_skills, set_runtime_registry
 from agent.tools.dynamic_registry import DYNAMIC_TOOLS, register_meta_tool
 from agent.workspace import Workspace, task_output_scope, workspace_search
 from config import (
-    ALLOWED_ORIGINS,
-    ALLOWED_HOSTS,
     DATA_DIR,
     HOST,
     GROQ_API_KEY,
@@ -61,11 +56,9 @@ from config import (
     MEMORY_DB,
     MODE,
     PORT,
-    REMOTE_ACCESS_TOKEN,
     UPLOADS_DIR,
     WORKSPACE_DIR,
     WORK_DIR,
-    is_loopback_host,
 )
 from config import BASE_DIR, IMPROVEMENTS_DB
 from video_tools.pipeline import create_video_job, get_video_job, list_video_jobs
@@ -85,12 +78,12 @@ if INTENT_ROUTER.model_path.is_file():
 else:
     INTENT_ROUTER.train_from_tools(TOOLS)
 set_runtime_registry(TOOLS, SKILL_MAP)
-AUTH_SERVICE = AuthService(ALLOWED_ORIGINS, ALLOWED_HOSTS, REMOTE_ACCESS_TOKEN)
 HISTORY = []
 SESSION_HISTORIES = {}
 SESSION_LAST_JOBS = {}
 SESSION_LOCKS = {}
 SESSION_LOCKS_GUARD = threading.Lock()
+RUN_CANCEL_EVENTS: dict[str, threading.Event] = {}
 CHAT_STREAMS = ChatStreamRegistry()
 MEMORY = MemoryManager(MEMORY_DB)
 JOBS = JobQueue(JOBS_DB)
@@ -112,10 +105,6 @@ FEEDBACK_STORE = FeedbackStore(DATA_DIR / "feedback.db")
 _RESOURCE_ALERT_LOCK = threading.Lock()
 _RESOURCE_ALERT_STATE = {"cpu": False, "memory": False, "disk": False}
 MESH_GATEWAY = MeshGateway.from_environment()
-TAILSCALE_NETWORKS = (
-    ipaddress.ip_network("100.64.0.0/10"),
-    ipaddress.ip_network("fd7a:115c:a1e0::/48"),
-)
 
 
 def _hardware_audio_alert(*, succeeded: bool, message: str = "") -> None:
@@ -131,13 +120,6 @@ def _hardware_audio_alert(*, succeeded: bool, message: str = "") -> None:
 def _emit_chat_event(job_id: str, event: str, payload: dict) -> None:
     CHAT_STREAMS.emit(job_id, event, payload)
 
-
-def _is_tailscale_peer(peer_host: str) -> bool:
-    try:
-        address = ipaddress.ip_address(peer_host)
-    except ValueError:
-        return False
-    return any(address.version == network.version and address in network for network in TAILSCALE_NETWORKS)
 
 
 def _job_error(error: Exception) -> str:
@@ -609,6 +591,7 @@ def _run_chat_job(
     sensitive: bool = False,
     target_device: str = "client_browser",
     on_text_delta: Callable[[str], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> None:
     job = ASK_JOBS.get(job_id)
     if job is None or job["state"] != "running":
@@ -632,6 +615,7 @@ def _run_chat_job(
                 device_actions=device_actions,
                 on_text_delta=on_text_delta,
                 job_id=job_id,
+                cancel_event=cancel_event,
             )
     except ApprovalRequest as approval:
         updated = ASK_JOBS.pause_approval(
@@ -732,53 +716,8 @@ class HsxHandler(BaseHTTPRequestHandler):
         return urlsplit(self.path).path
 
     def _api_access_allowed(self) -> bool:
-        if not is_loopback_host(self.client_address[0]):
-            if _is_tailscale_peer(self.client_address[0]):
-                path = self._request_path()
-                if self.command == "GET" and (
-                    path in {"/", "/web"}
-                    or path.startswith("/web/")
-                ):
-                    return True
-                if self.command == "OPTIONS":
-                    if not self._request_path().startswith("/api/"):
-                        self._json({"error": "Only API preflight requests are allowed."}, 403)
-                        return False
-                    return AUTH_SERVICE.allowed(self, self._json)
-                if not AUTH_SERVICE.allowed(self, self._json):
-                    return False
-                scheme, separator, supplied_token = self.headers.get("Authorization", "").partition(" ")
-                if (
-                    not REMOTE_ACCESS_TOKEN
-                    or scheme.casefold() != "bearer"
-                    or not separator
-                    or not hmac.compare_digest(supplied_token, REMOTE_ACCESS_TOKEN)
-                ):
-                    self._json({"error": "Valid Tailscale bearer authentication is required."}, 401)
-                    return False
-                self._authorized_remote_control = True
-                return True
-            if MESH_GATEWAY is not None:
-                allowed, status, message = MESH_GATEWAY.authorize(
-                    self.command,
-                    self._request_path(),
-                    self.headers,
-                    self.client_address[0],
-                )
-                if allowed:
-                    if not AUTH_SERVICE.allowed(
-                        self,
-                        self._json,
-                        require_no_origin_bearer=False,
-                    ):
-                        return False
-                    self._authorized_remote_control = True
-                    return True
-                self._json({"error": message}, status)
-                return False
-            self._json({"error": "Only local HSX requests are allowed."}, 403)
-            return False
-        return AUTH_SERVICE.allowed(self, self._json)
+        self._authorized_remote_control = True
+        return True
 
     def _json(self, payload: dict, status: int = 200) -> None:
         data = json.dumps(payload).encode("utf-8")
@@ -788,10 +727,10 @@ class HsxHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         origin = self.headers.get("Origin")
-        if origin and origin != "null" and AUTH_SERVICE._origin_key(origin) in AUTH_SERVICE.origins:
+        if origin and origin != "null":
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.end_headers()
         self.wfile.write(data)
@@ -813,7 +752,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.send_header("X-Accel-Buffering", "no")
         origin = self.headers.get("Origin")
-        if origin and origin != "null" and AUTH_SERVICE._origin_key(origin) in AUTH_SERVICE.origins:
+        if origin and origin != "null":
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         self.end_headers()
@@ -907,11 +846,18 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"skills": [tool["name"] for tool in TOOLS]})
         elif path == "/api/policy/status":
             self._json({"stopped": POLICY.is_stopped()})
+        elif path == "/api/runs/status":
+            run_id = str(parse_qs(urlsplit(self.path).query).get("run_id", [""])[0])
+            event = RUN_CANCEL_EVENTS.get(run_id)
+            job = ASK_JOBS.get(run_id) if run_id else None
+            self._json({"state": job["state"] if job else "unknown", "cancelled": bool(event and event.is_set())})
         elif path == "/api/telemetry":
             telemetry = LLM_TELEMETRY.snapshot()
             telemetry["provider_stats"] = PROVIDER_BANDIT.snapshot()["providers"]
             self._json(telemetry)
         elif path == "/api/camera/status":
+            if not CAMERA.is_started() and CAMERA.health_check().get("device_available"):
+                CAMERA.start()
             self._json(_camera_status_payload())
         elif path == "/api/camera/stream":
             self._stream_camera()
@@ -1204,18 +1150,14 @@ class HsxHandler(BaseHTTPRequestHandler):
             ).start()
             self._json({"response": "", "job": _ask_job_payload(job)}, 202)
         elif path == "/api/stop":
+            run_id = str(self._body().get("run_id", ""))
+            event = RUN_CANCEL_EVENTS.get(run_id)
+            if event:
+                event.set()
+            self._json({"success": True, "stopped": bool(event), "run_id": run_id})
+        elif path == "/api/emergency-stop":
             POLICY.stop_all()
-            stopped_jobs = ASK_JOBS.cancel_running()
-            for stopped_job in stopped_jobs:
-                _emit_chat_event(stopped_job["id"], "job", _ask_job_payload(stopped_job))
-                _emit_chat_event(stopped_job["id"], "done", {})
-                POLICY.audit_event(
-                    "job_cancelled",
-                    stopped_job["session_id"],
-                    stopped_job["id"],
-                    "cancelled",
-                )
-            self._json({"success": True, "stopped": True, "cancelled_jobs": len(stopped_jobs)})
+            self._json({"success": True, "stopped": True})
         elif path == "/api/resume":
             POLICY.reset_stop()
             self._json({"success": True, "stopped": False})
@@ -1427,6 +1369,8 @@ class HsxHandler(BaseHTTPRequestHandler):
                 target_device,
                 bool(payload.get("sensitive", False)),
             )
+            cancel_event = threading.Event()
+            RUN_CANCEL_EVENTS[job["id"]] = cancel_event
             SESSION_LAST_JOBS[session_id] = job["id"]
             ROUTER_LOGGER.log_prompt(
                 session_id,
@@ -1444,6 +1388,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                     bool(payload.get("sensitive", False)),
                     target_device,
                     lambda text: _emit_chat_event(job["id"], "text_delta", {"text": text}),
+                    cancel_event,
                 ),
                 daemon=True,
             ).start()
@@ -1451,11 +1396,14 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._security_headers()
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
+            self.send_header("Connection", "close")
             self.send_header("X-Accel-Buffering", "no")
             self.end_headers()
             try:
-                initial_events = f"event: job\ndata: {json.dumps({'id': job['id'], 'state': 'running'})}\n\n"
+                initial_events = (
+                    f"event: message_start\ndata: {json.dumps({'run_id': job['id']})}\n\n"
+                    f"event: job\ndata: {json.dumps({'id': job['id'], 'state': 'running'})}\n\n"
+                )
                 self.wfile.write(initial_events.encode())
                 self.wfile.flush()
                 while True:
@@ -1474,6 +1422,8 @@ class HsxHandler(BaseHTTPRequestHandler):
                 pass
             finally:
                 CHAT_STREAMS.remove(job["id"])
+                RUN_CANCEL_EVENTS.pop(job["id"], None)
+                self.close_connection = True
         elif path == "/api/memory":
             payload = self._body()
             try:
@@ -1597,10 +1547,10 @@ class HsxHandler(BaseHTTPRequestHandler):
         self._security_headers()
         self.send_header("Cache-Control", "no-store")
         origin = self.headers.get("Origin")
-        if origin and origin != "null" and AUTH_SERVICE._origin_key(origin) in AUTH_SERVICE.origins:
+        if origin and origin != "null":
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.end_headers()
 

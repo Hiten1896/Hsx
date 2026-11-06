@@ -1,4 +1,5 @@
 import json
+import threading
 from pathlib import Path
 
 from agent import orchestrator
@@ -62,6 +63,30 @@ def test_high_confidence_safe_zero_argument_tool_runs_without_llm(tmp_path, monk
     assert events[1]["event"] == "tool_predicted"
     assert events[2]["event"] == "tool_execution"
     assert events[2]["status"] == "succeeded"
+
+
+def test_run_scoped_cancel_does_not_leak_to_the_next_run(monkeypatch):
+    _setup(monkeypatch, "system_status", 0.99)
+    calls = []
+    tool = {"name": "system_status", "risk": "safe", "input_schema": {
+        "type": "object", "properties": {}, "required": [],
+    }}
+    cancelled = threading.Event()
+    cancelled.set()
+    answer, _ = orchestrator.run_agent(
+        "Check system status", [], [tool], {"system_status": lambda: calls.append("called")},
+        cancel_event=cancelled,
+    )
+    assert answer == "This run was stopped."
+    assert calls == []
+
+    answer, _ = orchestrator.run_agent(
+        "Check system status", [], [tool],
+        {"system_status": lambda: calls.append("called") or {"success": True}},
+        cancel_event=threading.Event(),
+    )
+    assert calls == ["called"]
+    assert json.loads(answer) == {"success": True}
 
 
 def test_router_is_not_called_when_no_tools_are_available(monkeypatch):

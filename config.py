@@ -83,9 +83,6 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 MODE = os.getenv("HSX_MODE", "jarvis").strip().lower()
 HOST = os.getenv("HSX_HOST", "0.0.0.0").strip() or "0.0.0.0"
 PORT = int(os.getenv("HSX_PORT", "8000"))
-REMOTE_ACCESS_TOKEN = os.getenv("HSX_REMOTE_TOKEN", "").strip()
-if REMOTE_ACCESS_TOKEN and len(REMOTE_ACCESS_TOKEN) < 32:
-    raise ValueError("HSX_REMOTE_TOKEN must contain at least 32 non-padded characters.")
 ALLOWED_ORIGINS = tuple(
     origin.strip()
     for origin in os.getenv(
@@ -93,14 +90,6 @@ ALLOWED_ORIGINS = tuple(
         "http://127.0.0.1:8000,http://localhost:8000",
     ).split(",")
     if origin.strip()
-)
-ALLOWED_HOSTS = tuple(
-    host.strip().lower()
-    for host in os.getenv(
-        "HSX_ALLOWED_HOSTS",
-        "127.0.0.1:8000,localhost:8000,hsx-server.tail4237ae.ts.net,hsx-server.tail4237ae.ts.net:8000",
-    ).split(",")
-    if host.strip()
 )
 SANDBOX = os.getenv("HSX_SANDBOX", "auto").strip().lower()
 

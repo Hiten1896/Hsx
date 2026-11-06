@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 
 import server
@@ -15,7 +16,8 @@ def test_authenticated_stream_creates_workspace_artifact(tmp_path: Path, monkeyp
     monkeypatch.setattr(server, "ASK_JOBS", AskUserJobs(tmp_path / "jobs.db"))
     monkeypatch.setattr(server.POLICY, "audit_event", lambda *args: None)
 
-    def fake_run_chat_job(job_id, approvals, sensitive, target_device, on_text_delta):
+    def fake_run_chat_job(job_id, approvals, sensitive, target_device, on_text_delta, cancel_event=None):
+        del cancel_event
         del approvals, sensitive, target_device
         artifact = server.WORKSPACE.work_dir / "answer.txt"
         artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -38,6 +40,30 @@ def test_authenticated_stream_creates_workspace_artifact(tmp_path: Path, monkeyp
     assert (root / "Hsx Work" / "answer.txt").read_text(encoding="utf-8") == "e2e answer"
 
 
+def test_chat_stream_sends_done_and_closes_after_final_text_within_two_seconds(monkeypatch):
+    monkeypatch.setattr(server.POLICY, "audit_event", lambda *args: None)
+
+    def fake_run_chat_job(job_id, approvals, sensitive, target_device, on_text_delta, cancel_event=None):
+        del approvals, sensitive, target_device, cancel_event
+        on_text_delta("hello")
+        completed = server.ASK_JOBS.get(job_id)
+        if completed and completed["state"] == "running":
+            server.ASK_JOBS.complete(job_id, "hello", [])
+        server._emit_chat_event(job_id, "done", {})
+
+    monkeypatch.setattr(server, "_run_chat_job", fake_run_chat_job)
+    started = time.monotonic()
+    status, _, body = _request(
+        "/api/chat/stream", method="POST",
+        payload={"message": "hello", "session_id": f"timing-{time.time_ns()}", "target_device": "client_browser"},
+        stop_event="close",
+    )
+    assert status == 200
+    assert b"event: text_delta" in body
+    assert b"event: done" in body
+    assert time.monotonic() - started < 2
+
+
 def test_health_allows_requests_without_token():
     status, _, body = _request("/health", tokenless=True)
     assert status == 200
@@ -49,6 +75,8 @@ def test_stop_endpoint_cancels_running_chat_and_closes_its_stream(tmp_path: Path
     job = jobs.create_running("Long task", "session")
     emitted = []
     stopped = []
+    cancel_event = __import__("threading").Event()
+    server.RUN_CANCEL_EVENTS[job["id"]] = cancel_event
 
     class FakePolicy:
         def stop_all(self):
@@ -65,16 +93,31 @@ def test_stop_endpoint_cancels_running_chat_and_closes_its_stream(tmp_path: Path
         lambda job_id, event, payload: emitted.append((job_id, event, payload)),
     )
 
-    status, _, body = _request("/api/stop", method="POST", payload={})
+    status, _, body = _request("/api/stop", method="POST", payload={"run_id": job["id"]})
 
     assert status == 200
-    assert json.loads(body)["cancelled_jobs"] == 1
-    assert stopped == [True]
-    assert jobs.get(job["id"])["state"] == "cancelled"
-    events = [item for item in emitted if len(item) == 3]
-    assert [item[1] for item in events] == ["job", "done"]
-    assert events[0][2]["id"] == job["id"]
-    assert events[0][2]["state"] == "cancelled"
+    assert json.loads(body)["stopped"] is True
+    assert stopped == []
+    assert cancel_event.is_set()
+    assert jobs.get(job["id"])["state"] == "running"
+
+
+def test_emergency_stop_is_separate_from_run_stop(monkeypatch):
+    calls = []
+
+    class FakePolicy:
+        def stop_all(self):
+            calls.append("stop")
+
+        def reset_stop(self):
+            calls.append("resume")
+
+    monkeypatch.setattr(server, "POLICY", FakePolicy())
+    status, _, _ = _request("/api/emergency-stop", method="POST", payload={})
+    assert status == 200
+    status, _, _ = _request("/api/resume", method="POST", payload={})
+    assert status == 200
+    assert calls == ["stop", "resume"]
 
 
 def test_healthz_reports_clock_and_api_security_headers():

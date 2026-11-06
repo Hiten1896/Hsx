@@ -35,9 +35,6 @@ def _request_headers(accept: str | None = None) -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
     if accept:
         headers["Accept"] = accept
-    token = os.getenv("HSX_REMOTE_TOKEN", "").strip()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
     return headers
 
 

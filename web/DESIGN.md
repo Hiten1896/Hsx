@@ -44,8 +44,7 @@ sends it. The options menu opens the file picker or host camera panel.
 
 The input supports Enter to send, Shift+Enter for a newline, paste, and drag-and-drop.
 The Send action submits to `/api/chat/stream`, Stop calls `/api/stop`, response copy
-uses the Clipboard API, and feedback uses `/api/feedback`. Remote bearer credentials
-are sent through the Authorization header and are never placed in a URL.
+uses the Clipboard API, and feedback uses `/api/feedback`.
 
 The host camera status and still frames come from the server-side capture service.
 When the device or service is unavailable, the panel accurately shows Offline rather

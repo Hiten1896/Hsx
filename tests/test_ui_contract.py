@@ -192,11 +192,11 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert "function setConversationEmpty(isEmpty)" in script
     assert "function setupVoiceInput()" in script
     assert "window.webkitSpeechRecognition" in script
-    assert "Authorization" in script
     assert "login-panel" not in html
-    assert "bearerToken" in script
+    assert "bearerToken" not in script
     assert "telemetry.provider" in script
-    assert "hsx-bearer-token" in script
+    assert "hsx-bearer-token" not in script
+    assert "access-token-input" not in html
     assert "elements.composer.addEventListener('submit'" in script
     assert "elements.stop.addEventListener('click', stopTask)" in script
     assert "new AbortController()" in script
@@ -250,7 +250,7 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert "showLogin" not in legacy_script
 
 
-def test_web_user_actions_accordion_state_and_camera_reauth_are_wired():
+def test_web_user_actions_accordion_state_and_camera_stream_are_wired():
     html = (BASE_DIR / "web" / "index.html").read_text(encoding="utf-8")
     css = (BASE_DIR / "web" / "chat.css").read_text(encoding="utf-8")
     script = (BASE_DIR / "web" / "chat.js").read_text(encoding="utf-8")
@@ -260,8 +260,13 @@ def test_web_user_actions_accordion_state_and_camera_reauth_are_wired():
     assert "id=\"history-toggle\"" in html
     assert "document.getElementById('history-toggle').addEventListener('click'" in script
     assert ".panel-collapse-button[aria-expanded=\"false\"] svg { transform: none; }" in css
-    assert "const storedToken = loadBearerToken();" in script
-    assert "streamHeaders.set('Authorization', 'Bearer ' + currentToken)" in script
+    assert 'aria-expanded="false"' in html
+    assert 'access-token' not in html
+    assert 'Authorization' not in script
+    assert 'id="emergency-banner"' in html
+    assert "Emergency stop is active" in html
+    assert "emergency_stop" in script
+    assert "banner-resume-button" in script
     assert "Math.min(\n    frame.capturedAt * 1000 - cameraClockOffsetMs,\n    Date.now()," in script
 
 
@@ -279,7 +284,7 @@ def test_camera_is_lazy_and_run_state_resets_after_failure_or_stop():
     assert "if (!cameraEnabled) return;" in script
     assert "elements.cameraView.addEventListener('click', toggleCamera)" in script
     assert "elements.cameraView.addEventListener('keydown'" in script
-    assert "elements.send.disabled = isBusy;" in script
+    assert "elements.send.disabled = isBusy;" not in script
     assert "if (activeChatController === controller)" in script
     stop_handler = script[script.index("async function stopTask()"):]
     assert "setBusy(false);" in stop_handler
@@ -378,7 +383,7 @@ def test_tui_composer_stop_and_feedback_buttons_are_wired():
     asyncio.run(verify())
 
 
-def test_tui_api_requests_send_configured_bearer_auth(monkeypatch):
+def test_tui_api_requests_do_not_send_bearer_auth(monkeypatch):
     seen_requests = []
     monkeypatch.setenv("HSX_REMOTE_TOKEN", "test-token")
 
@@ -399,7 +404,7 @@ def test_tui_api_requests_send_configured_bearer_auth(monkeypatch):
     monkeypatch.setattr("agent.tui.urllib.request.urlopen", fake_urlopen)
     HsxTUI("http://127.0.0.1:8000")._api_request("/api/telemetry")
 
-    assert seen_requests[0].get_header("Authorization") == "Bearer test-token"
+    assert seen_requests[0].get_header("Authorization") is None
 
 
 def test_feedback_and_telemetry_api_contract(tmp_path, monkeypatch):
@@ -455,5 +460,5 @@ def test_feedback_and_telemetry_api_contract(tmp_path, monkeypatch):
     monkeypatch.setattr(server.POLICY, "stop_all", lambda: stopped.append(True))
     status, _, body = _request("/api/stop", method="POST", payload={})
     assert status == 200
-    assert json.loads(body) == {"success": True, "stopped": True, "cancelled_jobs": 0}
-    assert stopped == [True]
+    assert json.loads(body)["stopped"] is False
+    assert stopped == []

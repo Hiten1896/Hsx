@@ -32,7 +32,8 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visib
 
 .sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; padding: 22px 16px 14px; border-right: 1px solid var(--border); background: var(--sidebar); }
 .brand, .new-chat-button, .sidebar-caption, .sidebar-nav, .sidebar-bottom, .connections { flex-shrink: 0; }
-.brand { display: flex; align-items: center; gap: 11px; min-height: 42px; margin: 1px 5px 25px; color: var(--text); text-decoration: none; }
+.brand { display: flex; align-items: center; justify-content: center; gap: 11px; min-height: 42px; width: 100%; margin: 1px 0 25px; color: var(--text); text-decoration: none; }
+.brand-copy { display: flex; flex-direction: column; align-items: flex-start; }
 .brand img { flex: 0 0 auto; border-radius: 12px; }
 .brand-name { font-size: 19px; font-weight: 720; letter-spacing: -.035em; }
 .new-chat-button { display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 44px; padding: 0 12px; border: 1px solid #546056; border-radius: 11px; color: var(--text); background: #27302a; font-size: 13px; font-weight: 620; transition: background .16s, border-color .16s; }
@@ -61,18 +62,12 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visib
 .connection-dot[data-state="disconnected"] { background: var(--danger); box-shadow: 0 0 0 3px #e28e881e; }
 .connection-note { margin: 12px 0 0; color: #7e8a80; font-size: 9px; line-height: 1.5; }
 .sidebar-bottom { padding-top: 12px; }
-.token-button { padding: 5px 3px; border: 0; color: var(--muted); background: transparent; font-size: 10px; }
-.token-button:hover { color: var(--text); }
 .local-note { display: flex; align-items: center; gap: 8px; margin-top: 11px; color: #9ca89e; font-size: 10px; }
 .local-note-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
-.token-form { margin-top: 10px; padding: 11px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
-.token-form label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 10px; }
-.token-form input { width: 100%; height: 34px; padding: 0 8px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: var(--surface-input); }
-.token-actions { display: flex; gap: 7px; margin-top: 8px; }
-.token-actions button { min-height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: var(--surface-raised); font-size: 10px; }
-.token-form p { margin: 8px 0 0; color: var(--muted); font-size: 9px; }
 
 .chat-area { position: relative; display: grid; grid-template-rows: minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--background); }
+.emergency-banner { position: absolute; z-index: 11; top: 12px; left: 50%; display: flex; align-items: center; gap: 12px; transform: translateX(-50%); padding: 9px 12px; border: 1px solid #8b4e4a; border-radius: 10px; background: #3b2422; font-size: 12px; white-space: nowrap; }
+.emergency-banner button { border: 1px solid #bd7771; border-radius: 7px; padding: 5px 9px; color: var(--text); background: #633633; }
 .chat-controls { position: absolute; z-index: 10; top: 8px; right: 12px; left: 12px; display: flex; align-items: center; gap: 8px; pointer-events: none; }
 .chat-controls > * { pointer-events: auto; }
 .chat-controls-spacer { flex: 1; }

@@ -149,9 +149,12 @@ def run_agent(
     job_id: str = "",
     enable_planning: bool = True,
     track_intent: bool = True,
+    cancel_event=None,
 ):
     if target_device not in {"local_host", "client_browser"}:
         raise ValueError("target_device must be local_host or client_browser.")
+    if POLICY.is_stopped():
+        return "Hsx is paused by Emergency stop. Open Settings and choose Resume to continue.", conversation_history
     uncertain = False
     complex_task = False
     vision_image_data = ""
@@ -266,6 +269,8 @@ def run_agent(
                 LOGGER.warning("Could not create a task plan; falling back to agent loop: %s", error)
             else:
                 def execute_step(step: PlanStep, index: int, total: int) -> str:
+                    if cancel_event is not None and cancel_event.is_set():
+                        return "This run was stopped."
                     instruction = (
                         f"Overall task: {plan.goal}\n"
                         f"Execute only plan step {index} of {total}: {step.instruction}\n"
@@ -323,6 +328,7 @@ def run_agent(
                             job_id=job_id,
                             enable_planning=False,
                             track_intent=False,
+                            cancel_event=cancel_event,
                         )
                     except AskUserRequest as question:
                         plan_context = (
@@ -397,6 +403,8 @@ def run_agent(
                     _resolve_uncertain(job_id, succeeded=True)
                 return answer, conversation_history
         if direct:
+            if cancel_event is not None and cancel_event.is_set():
+                return "This run was stopped.", conversation_history
             tool_call_id = f"local-{uuid.uuid4().hex}"
             conversation_history.append({
                 "role": "assistant",
@@ -433,6 +441,8 @@ def run_agent(
             )
             started = time.perf_counter()
             try:
+                if cancel_event is not None and cancel_event.is_set():
+                    return "This run was stopped.", conversation_history
                 result = skill_map[predicted_tool]()
             except AskUserRequest as question:
                 ROUTER_LOGGER.log_tool_execution(
@@ -491,7 +501,9 @@ def run_agent(
             LOGGER.exception("Could not retrieve local knowledge graph context.")
     for _ in range(max_iterations):
         if POLICY.is_stopped():
-            return "This run was stopped by the kill switch.", conversation_history
+            return "Hsx is paused by Emergency stop. Open Settings and choose Resume to continue.", conversation_history
+        if cancel_event is not None and cancel_event.is_set():
+            return "This run was stopped.", conversation_history
         memory_context = "\n\n".join(
             context
             for context in (
@@ -580,6 +592,8 @@ def run_agent(
         conversation_history.append({"role": "assistant", "content": to_plain_data(blocks)})
         results = []
         for call_index, call in enumerate(tool_calls):
+            if cancel_event is not None and cancel_event.is_set():
+                return "This run was stopped.", conversation_history
             ROUTER_LOGGER.log_tool_prediction(session_id, job_id, call.name, call.id)
             skill = next((tool for tool in tools if tool["name"] == call.name), None)
             if skill is None:

@@ -77,6 +77,72 @@ def test_real_orchestrator_four_turn_provider_smoke(provider_kind, monkeypatch):
         thread.join()
 
 
+@pytest.mark.parametrize("provider_kind", ["gemini", "groq"])
+def test_system_info_tool_call_returns_live_tool_output(provider_kind, monkeypatch):
+    class Handler(BaseHTTPRequestHandler):
+        requests = []
+
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            assert_payload_valid(provider_kind, payload)
+            type(self).requests.append(payload)
+            if len(type(self).requests) == 1:
+                if provider_kind == "gemini":
+                    body = {"candidates": [{"content": {"parts": [{
+                        "functionCall": {"name": "system_info", "args": {}}
+                    }]}}]}
+                else:
+                    body = {"choices": [{"message": {"content": None, "tool_calls": [{
+                        "id": "sys-call", "type": "function",
+                        "function": {"name": "system_info", "arguments": "{}"},
+                    }]}, "finish_reason": "tool_calls"}]}
+            else:
+                body = ({"candidates": [{"content": {"parts": [{"text": "The CPU model is Test CPU."}]}}]}
+                        if provider_kind == "gemini" else
+                        {"choices": [{"message": {"content": "The CPU model is Test CPU."}, "finish_reason": "stop"}]})
+            encoded = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, *_args):
+            pass
+
+    Handler.requests = []
+    handler = Handler
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        provider = (
+            GeminiProvider("test", f"http://127.0.0.1:{server.server_port}")
+            if provider_kind == "gemini"
+            else OpenAICompatibleProvider("groq", "test", "model", f"http://127.0.0.1:{server.server_port}")
+        )
+        monkeypatch.setattr(llm_client, "default_router", lambda: type("Router", (), {"generate": provider.generate})())
+        monkeypatch.setattr(orchestrator, "INTENT_ROUTER", type("Router", (), {
+            "predict_with_confidence": lambda _self, _prompt: ("system_info", 0.5),
+        })())
+        monkeypatch.setattr(orchestrator.MEMORY, "prompt_context", lambda _prompt: "")
+        monkeypatch.setattr(orchestrator.MEMORY, "record_message", lambda *_args: None)
+        tools = [{"name": "system_info", "description": "Get current machine specs.", "risk": "safe",
+                  "input_schema": {"type": "object", "properties": {}, "required": []}}]
+        answer, history = orchestrator.run_agent(
+            "What are this machine's specs?", [], tools,
+            {"system_info": lambda: {"success": True, "cpu": {"model": "Test CPU"}}},
+            sensitive=True,
+        )
+        assert answer == "The CPU model is Test CPU."
+        assert json.loads(history[2]["content"][0]["content"]) == {
+            "success": True, "cpu": {"model": "Test CPU"}
+        }
+        assert len(Handler.requests) == 2
+    finally:
+        server.shutdown()
+        thread.join()
+
+
 class _FileConversationHandler(BaseHTTPRequestHandler):
     provider = ""
     requests = []
