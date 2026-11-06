@@ -250,6 +250,21 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert "showLogin" not in legacy_script
 
 
+def test_web_user_actions_accordion_state_and_camera_reauth_are_wired():
+    html = (BASE_DIR / "web" / "index.html").read_text(encoding="utf-8")
+    css = (BASE_DIR / "web" / "chat.css").read_text(encoding="utf-8")
+    script = (BASE_DIR / "web" / "chat.js").read_text(encoding="utf-8")
+
+    assert ".message-card[data-role=\"user\"] .message-content" in css
+    assert ".message-card[data-role=\"user\"] .message-actions" in css
+    assert "id=\"history-toggle\"" in html
+    assert "document.getElementById('history-toggle').addEventListener('click'" in script
+    assert ".panel-collapse-button[aria-expanded=\"false\"] svg { transform: none; }" in css
+    assert "const storedToken = loadBearerToken();" in script
+    assert "streamHeaders.set('Authorization', 'Bearer ' + currentToken)" in script
+    assert "Math.min(\n    frame.capturedAt * 1000 - cameraClockOffsetMs,\n    Date.now()," in script
+
+
 def test_tui_has_native_feedback_buttons_with_shared_layout():
     async def verify():
         app = HsxTUI("http://127.0.0.1:1")

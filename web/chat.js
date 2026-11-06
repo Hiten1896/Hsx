@@ -1118,7 +1118,7 @@ async function startCameraStream() {
     const requestStartedAt = Date.now();
     const streamHeaders = new Headers();
     const currentToken = loadBearerToken() || bearerToken;
-    if (currentToken) streamHeaders.set('Authorization', `******`);
+    if (currentToken) streamHeaders.set('Authorization', 'Bearer ' + currentToken);
     const response = await apiFetch(apiContract.endpoints.camera_stream, {
       headers: streamHeaders,
       signal: controller.signal,
@@ -1702,6 +1702,14 @@ async function initialize() {
     button.setAttribute('aria-label', expanded ? 'Expand agent activity' : 'Collapse agent activity');
     button.title = expanded ? 'Expand agent activity' : 'Collapse agent activity';
     elements.activityList.hidden = expanded;
+  });
+  document.getElementById('history-toggle').addEventListener('click', (event) => {
+    const button = event.currentTarget;
+    const expanded = button.getAttribute('aria-expanded') === 'true';
+    button.setAttribute('aria-expanded', String(!expanded));
+    button.setAttribute('aria-label', expanded ? 'Expand chat history' : 'Collapse chat history');
+    button.title = expanded ? 'Expand chat history' : 'Collapse chat history';
+    document.getElementById('chat-history-list').hidden = expanded;
   });
   document.getElementById('feedback-form').addEventListener('submit', (event) => {
     event.preventDefault();
