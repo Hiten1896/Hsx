@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from agent.approval import ApprovalGuard
+from agent.activity_trace import redact_activity_text
 from agent.autonomy import classify_action, is_hard_denied
 from config import BASE_DIR
 
@@ -82,6 +83,7 @@ class PolicyEngine:
             "request_type": "tool_consent",
             "why": self._consequence(name, action),
             "details": f"Tool: {name}. Approval applies only to this action in the current task.",
+            **self._review_details(name, action, arguments),
         }
         if name == "capability_resolver":
             from agent.package_catalog import PACKAGE_CATALOG
@@ -102,6 +104,61 @@ class PolicyEngine:
                 "details": str(arguments.get("command", ""))[:500],
             })
         return {"allowed": False, "status": "waiting_approval", "approval_request": request}
+
+    @staticmethod
+    def _review_details(name: str, action: str, arguments: dict) -> dict:
+        command = arguments.get("command") or arguments.get("code")
+        review = {}
+        if isinstance(command, str) and command.strip():
+            review["command"] = redact_activity_text(command, 1200)
+
+        if action == "firmware_flash":
+            review.update({
+                "host_impact": "Writes firmware to the selected connected device; it does not install software on the HP.",
+                "security_risk": "The device's existing program may be erased or replaced. Confirm the target and firmware file.",
+            })
+        elif name in {"system_execute", "shell", "run_code"}:
+            review.update({
+                "host_impact": (
+                    "Runs on this HP host as the Hsx service account. What changes depends on the command shown."
+                ),
+                "security_risk": (
+                    "The command may read or change files and may use the network. Only approve it if the "
+                    "command and its target are expected; privileged operations remain separately restricted."
+                ),
+            })
+        elif action == "install_packages":
+            review.update({
+                "host_impact": "Downloads the approved package into Hsx's project environment, not system-wide.",
+                "security_risk": "The package's code will run inside Hsx when used. Installation is limited to the pinned package shown.",
+            })
+        elif action == "external_services":
+            review.update({
+                "host_impact": "Uses the configured external service; no host settings are changed.",
+                "security_risk": "The request and required data may be sent to that service for processing.",
+            })
+        elif action in {"delete_owner_files", "overwrite_owner_files"}:
+            review.update({
+                "host_impact": "May delete or replace the named workspace or host files.",
+                "security_risk": "Existing data may be lost. Check the target path and keep a backup if needed.",
+            })
+        elif action == "sudo":
+            review.update({
+                "host_impact": "Attempts a system-level change on this HP host.",
+                "security_risk": "Elevated privileges can affect the operating system and other users; approve only a clearly understood action.",
+            })
+        elif action in {"camera_start", "microphone_start"}:
+            device = "camera" if action == "camera_start" else "microphone"
+            review.update({
+                "host_impact": f"Turns on the HP {device} for this request; it is not intended to stay on afterward.",
+                "security_risk": f"{device.title()} input may contain private information and is processed for this request.",
+            })
+        else:
+            review.update({
+                "host_impact": "Only the action described above is requested; no broader system change is implied.",
+                "security_risk": "Review the tool and details before allowing it to access local or external data.",
+            })
+        return review
 
     @staticmethod
     def _plain_action(action: str, name: str, arguments: dict) -> str:

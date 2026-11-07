@@ -54,7 +54,7 @@ def test_generated_artifact_filter_excludes_current_and_legacy_upload_paths():
     assert not server._is_user_upload_path("Hsx Work/2025-01-03 1215 Report/report.pdf")
 
 
-def test_resource_notifications_fire_once_per_high_resource_episode(monkeypatch):
+def test_resource_alerts_include_disk_and_memory_cooldowns(monkeypatch):
     sent = []
 
     class FakeNotifier:
@@ -68,26 +68,29 @@ def test_resource_notifications_fire_once_per_high_resource_episode(monkeypatch)
         "disk_usage",
         lambda _path: SimpleNamespace(used=disk_used[0], total=100),
     )
-    monkeypatch.setattr(server, "_RESOURCE_ALERT_STATE", {"cpu": False, "memory": False, "disk": False})
-
     high = server.SystemMetrics(cpu_percent=99, ram_percent=95, temperature_c=None, outbound_connections=0)
     normal = server.SystemMetrics(cpu_percent=10, ram_percent=20, temperature_c=None, outbound_connections=0)
     server._notify_resource_alerts(high)
     server._notify_resource_alerts(high)
-    assert len(sent) == 3
+    assert len(sent) == 4
+    assert {event for event, _, _ in sent} == {"disk_full", "low_memory"}
+    assert all(kwargs["cooldown_seconds"] > 0 and kwargs["dedupe_key"] for _, _, kwargs in sent)
 
     disk_used[0] = 50
     server._notify_resource_alerts(normal)
     disk_used[0] = 90
     server._notify_resource_alerts(high)
     assert len(sent) == 6
-    assert all(event == "health_alert" for event, _, _ in sent)
+    assert {event for event, _, _ in sent} == {"disk_full", "low_memory"}
 
 
 def test_notification_sse_disables_buffering_and_resumes_from_requested_id(monkeypatch):
     seen_after = []
 
     class FakeNotifier:
+        def get_broadcast_events_after(self, _last_id):
+            return []
+
         def wait_for_notifications(self, after_id, timeout):
             seen_after.append((after_id, timeout))
             if len(seen_after) == 1:
@@ -194,13 +197,13 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert 'id="camera-toggle"' in html
     assert 'id="panel-backdrop"' in html
     assert 'id="artifacts-list"' in html
-    assert 'id="agent-activity-list"' in html
+    assert 'id="agent-activity-strip"' in html
     assert 'id="camera-retry"' in html
     assert 'class="panel-refresh camera-retry"' in html
     assert 'class="panel-refresh artifacts-refresh"' in html
     assert 'id="notifications-toggle"' in html
     assert 'id="notifications-panel"' in html
-    assert 'id="activity-toggle"' in html
+    assert 'id="activity-toggle"' not in html
     assert 'id="notification-toast"' in html
     assert 'id="camera-clock"' in html
     assert 'id="camera-latency"' in html
@@ -211,8 +214,8 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert 'class="camera-info"' not in html
     assert 'class="camera-caption"' not in html
     assert 'id="browse-files-button"' not in html
-    assert html.index('id="new-chat-button"') < html.index('class="activity-panel sidebar-activity"') < html.index('class="activity-panel history-panel')
-    assert html.count('id="agent-activity-list"') == 1
+    assert html.index('id="new-chat-button"') < html.index('id="agent-activity-strip"') < html.index('class="history-panel"')
+    assert html.count('id="agent-activity-strip"') == 1
     assert 'data-feedback="good"' in html
     assert 'data-feedback="bad"' in html
     assert 'data-action="speak"' in html
@@ -258,7 +261,7 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert "function refreshGreeting()" in script
     assert "startNotificationStream()" in script
     assert "speechSynthesis.speak" in script
-    assert "elements.activityList.hidden = expanded" in script
+    assert "elements.activityList.hidden = false" in script
     assert "function openMobilePanel" in script
     assert "X-Hsx-Captured-At" in script
     assert "WORKSPACE</span>" not in html
@@ -274,10 +277,10 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert ".conversation-layout.is-empty" in css
     assert ".message-card[data-role=\"user\"]" in css
     assert ".message-card { max-width: 790px; margin: 0 auto 25px; padding: 0" in css
-    assert html.index('class="activity-panel history-panel') < html.index('class="sidebar-bottom"')
+    assert html.index('class="history-panel"') < html.index('class="sidebar-bottom"')
 
     service_worker = (BASE_DIR / "web" / "service-worker.js").read_text(encoding="utf-8")
-    assert "'/web/chat.css'" in service_worker
+    assert "'/web/chat.css?v=16'" in service_worker
     assert "'/web/chat.js'" in service_worker
     legacy_script = (BASE_DIR / "web" / "app.js").read_text(encoding="utf-8")
     assert "authToken" not in legacy_script
@@ -291,8 +294,8 @@ def test_web_user_actions_accordion_state_and_camera_stream_are_wired():
 
     assert ".message-card[data-role=\"user\"] .message-content" in css
     assert ".message-card[data-role=\"user\"] .message-actions" in css
-    assert "id=\"history-toggle\"" in html
-    assert "document.getElementById('history-toggle').addEventListener('click'" in script
+    assert 'id="sidebar-toggle"' in html
+    assert "document.getElementById('sidebar-toggle').addEventListener('click'" in script
     assert ".panel-collapse-button[aria-expanded=\"false\"] svg { transform: none; }" in css
     assert 'aria-expanded="false"' in html
     assert 'access-token' not in html
@@ -351,8 +354,7 @@ def test_sidebar_accordions_and_settings_dialog_contract():
     assert 'id="settings-toggle"' in html
     assert 'class="brand-inner"' in html
     assert 'class="workspace-chat-tile"' not in html
-    assert 'id="activity-toggle" class="panel-collapse-button" type="button" aria-controls="agent-activity-list" aria-expanded="false"' in html
-    assert 'id="agent-activity-list" class="artifacts-list" aria-live="polite" hidden' in html
+    assert 'id="agent-activity-strip" class="activity-running" aria-live="polite" hidden' in html
     assert 'id="chat-history-list" class="chat-history-list" aria-live="polite"' in html
     assert '<dialog id="settings-dialog"' in html
     assert 'role="tablist"' in html
@@ -376,10 +378,8 @@ def test_sidebar_defaults_and_live_suggestion_contract():
     html = (BASE_DIR / "web" / "index.html").read_text(encoding="utf-8")
     css = (BASE_DIR / "web" / "chat.css").read_text(encoding="utf-8")
 
-    assert 'id="history-toggle" class="panel-collapse-button" type="button" aria-controls="chat-history-list" aria-expanded="true"' in html
     assert 'id="chat-history-list" class="chat-history-list" aria-live="polite"' in html
-    assert 'id="agent-activity-list" class="artifacts-list" aria-live="polite" hidden' in html
-    assert 'id="activity-count" class="connection-summary"' in html
+    assert 'id="activity-running-title" class="activity-running-title"' in html
     assert 'id="connection-toggle"' in html
     assert html.count('class="suggestion-chip"') == 4
     assert "min-height: 40px" in css

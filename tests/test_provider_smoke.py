@@ -76,7 +76,8 @@ def test_real_orchestrator_four_turn_provider_smoke(provider_kind, monkeypatch):
         answers = []
         for turn in range(4):
             answer, history = orchestrator.run_agent(
-                f"turn {turn}", history, tools, {"echo": lambda value: {"echo": value}}, sensitive=True
+                f"turn {turn}", history, tools, {"echo": lambda value: {"echo": value}},
+                sensitive=True, approvals={"echo": True},
             )
             answers.append(answer)
         assert answers == ["done"] * 4
@@ -142,6 +143,7 @@ def test_system_info_tool_call_returns_live_tool_output(provider_kind, monkeypat
             "What are this machine's specs?", [], tools,
             {"system_info": lambda: {"success": True, "cpu": {"model": "Test CPU"}}},
             sensitive=True,
+            approvals={"system_info": True},
         )
         assert answer == "The CPU model is Test CPU."
         assert json.loads(history[2]["content"][0]["content"]) == {
@@ -291,6 +293,7 @@ def test_file_creation_conversation_uses_native_tool_result_roles(provider_kind,
             sensitive=True,
             session_id=f"file-{provider_kind}",
             resume_tool_result={"tool_call_id": paused.value.tool_call_id, "answer": "hello"},
+            approvals={"create_text_file": True},
         )
         assert answer == "Created note.txt."
         assert created == [("note.txt", "hello")]

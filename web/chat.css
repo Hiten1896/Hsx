@@ -49,7 +49,6 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visib
 .history-panel { margin-top: 10px; }
 .history-panel.is-expanded { flex: 1 1 auto; min-height: 120px; max-height: none; }
 .history-search { width: 100%; min-height: 36px; margin-top: 8px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--surface); font-size: 11px; }
-.history-panel:not(.is-expanded) .history-search { display: none; }
 .history-panel.is-expanded .chat-history-list { max-height: none; min-height: 80px; }
 .sidebar-activity .artifacts-empty, .chat-history-list > .artifacts-empty { min-height: 40px; margin: 0; padding: 9px 8px; overflow-wrap: anywhere; }
 .sidebar-caption { margin: 22px 8px 10px; color: #78847b; font: 9px var(--font-code); letter-spacing: .15em; }
@@ -132,6 +131,7 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visib
 .interactive-question-answer { display: flex; gap: 8px; }
 .interactive-question-answer input { flex: 1 1 auto; min-width: 0; min-height: 40px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; color: var(--text); background: var(--surface-input); }
 .interactive-question-answer button { min-width: 64px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 9px; color: var(--button-text); background: var(--accent); }
+.interactive-question button:disabled { cursor: default; opacity: .6; }
 .markdown-body { overflow-wrap: anywhere; color: #d9e1d9; font-size: 14px; line-height: 1.72; }
 .markdown-body > :first-child { margin-top: 0; }
 .markdown-body > :last-child { margin-bottom: 0; }
@@ -172,13 +172,17 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visib
 .approval-card { width: min(100% - 32px, 790px); margin: 0 auto 18px; padding: 18px 20px; border: 1px solid #b6985b85; border-radius: 13px; background: var(--surface); }
 .approval-card h3 { margin: 0 0 7px; font-size: 14px; }
 .approval-card p { margin: 5px 0; color: var(--muted); font-size: 12px; }
-.approval-card p:nth-of-type(3) { color: var(--warning); font-weight: 650; }
+.approval-card .approval-consequence { color: var(--warning); font-weight: 650; }
+.approval-card .approval-risk { color: var(--warning); }
 .approval-card details { margin-top: 12px; color: var(--muted); font-size: 11px; }
 .approval-card details pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.approval-card details strong { display: block; margin-top: 10px; color: var(--text); }
+.approval-card .approval-command { padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--code-background); color: var(--text); font: 11px/1.5 var(--font-code); }
 .approval-actions { display: flex; gap: 8px; margin-top: 14px; }
 .approval-actions button { min-width: 86px; min-height: 40px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--surface-raised); font-size: 12px; font-weight: 650; }
 .approval-actions button:first-child { border-color: #87c99a80; }
 .approval-actions button:last-child { border-color: #e28e8880; }
+.pending-answer-status { margin: 8px 0 0; color: var(--success); font-size: 11px; }
 .permission-dialog { width: min(620px, calc(100vw - 24px)); max-height: min(80dvh, 680px); overflow: auto; padding: 20px; border: 1px solid #78663f; border-radius: 15px; color: var(--text); background: var(--surface); box-shadow: 0 24px 80px #000a; }
 .permission-dialog::backdrop { background: #080b09c9; backdrop-filter: blur(3px); }
 .permission-dialog .approval-card { width: auto; margin: 0; padding: 0; border: 0; background: transparent; }

@@ -158,6 +158,35 @@ def test_describe_image_rejects_an_unmentioned_path_before_tool_execution(monkey
     assert answer == "I can only describe images you name or attach."
 
 
+def test_attached_image_question_uses_vision_tool_without_planning(monkeypatch):
+    _setup(monkeypatch, "", 0.0)
+    calls = []
+    events = []
+    monkeypatch.setattr(
+        orchestrator,
+        "plan_task",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("image questions do not need a plan")),
+    )
+
+    answer, history = orchestrator.run_agent(
+        "what is this\n\nUploaded workspace files:\n- Hsx Work/Uploads/screenshot.png",
+        [],
+        [{"name": "describe_image"}],
+        {
+            "describe_image": lambda path, question: (
+                calls.append((path, question))
+                or {"success": True, "description": "It shows a Windows storage view."}
+            ),
+        },
+        on_activity_event=lambda event, payload: events.append((event, payload)),
+    )
+
+    assert answer == "It shows a Windows storage view."
+    assert calls == [("Hsx Work/Uploads/screenshot.png", "what is this")]
+    assert [event for event, _ in events] == ["tool_start", "tool_end"]
+    assert history[-1]["content"][0]["text"] == answer
+
+
 def test_router_is_not_called_when_no_tools_are_available(monkeypatch):
     class UnexpectedIntentRouter:
         def predict_with_confidence(self, prompt):

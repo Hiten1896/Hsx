@@ -16,6 +16,9 @@ def _pending(jobs):
             "summary": "run rm old-draft.txt",
             "why": "This action can make an irreversible change.",
             "details": "rm old-draft.txt",
+            "command": "rm old-draft.txt",
+            "host_impact": "May delete the selected workspace file.",
+            "security_risk": "The file may not be recoverable.",
             "arguments": {"action": "exec", "command": "rm old-draft.txt"},
         },
         [{"role": "user", "content": "create a report"}],
@@ -39,6 +42,9 @@ def test_approval_survives_restart_and_requires_matching_id(tmp_path):
 
     public = ask_job_payload(persisted)
     assert public["approval"]["summary"] == "run rm old-draft.txt"
+    assert "arguments" not in public["approval"]
+    assert public["approval"]["command"] == "rm old-draft.txt"
+    assert "HP" in public["approval"]["host_impact"] or "workspace" in public["approval"]["host_impact"]
     assert "arguments" not in public["approval"]
     assert "approval_request" not in public
     assert "waiting_approval" not in str(public)

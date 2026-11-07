@@ -91,6 +91,25 @@ def test_firmware_flash_requires_explicit_one_time_approval(tmp_path):
     assert policy.decide(skill, arguments, "esp32-session")["status"] == "waiting_approval"
 
 
+def test_command_approval_describes_hp_impact_and_redacts_secrets(tmp_path):
+    policy = _policy(tmp_path)
+    command = "python -m tool --password=not-for-display"
+
+    decision = policy.decide(
+        {"name": "system_execute"},
+        {"action": "exec", "command": command},
+        "command-review",
+    )
+
+    request = decision["approval_request"]
+    assert decision["status"] == "waiting_approval"
+    assert request["command"] == "python -m tool --password=[REDACTED]"
+    assert "HP host" in request["host_impact"]
+    assert "files" in request["security_risk"]
+    assert "not-for-display" not in str(request)
+    assert "not-for-display" not in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+
+
 def test_hard_deny_cannot_be_approved_and_audit_does_not_leak_values(tmp_path):
     policy = _policy(tmp_path)
     result = policy.decide(

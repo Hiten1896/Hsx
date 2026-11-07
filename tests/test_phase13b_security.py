@@ -252,6 +252,9 @@ def test_notification_sse_resumes_from_last_event_id_and_sends_heartbeat(monkeyp
             self.with_notification = with_notification
             self.calls = []
 
+        def get_broadcast_events_after(self, _last_id):
+            return []
+
         def wait_for_notifications(self, last_id, timeout):
             self.calls.append((last_id, timeout))
             if self.with_notification and len(self.calls) == 1:

@@ -299,7 +299,6 @@ function renderChatHistory() {
     const rename = document.createElement('button');
     rename.type = 'button';
     rename.className = 'chat-history-action';
-    rename.setAttribute('aria-hidden', 'true');
     rename.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5 5 5M4 20l4-.8L20 7a2.1 2.1 0 0 0-3-3L5 16l-1 4Z"></path></svg>';
     rename.title = 'Rename chat';
     rename.setAttribute('aria-label', `Rename chat: ${session.title || 'New chat'}`);
@@ -317,7 +316,6 @@ function renderChatHistory() {
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'chat-history-action';
-    remove.setAttribute('aria-hidden', 'true');
     remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 3v6m4-6v6"></path></svg>';
     remove.title = 'Delete chat';
     remove.setAttribute('aria-label', `Delete chat: ${session.title || 'New chat'}`);
@@ -622,6 +620,23 @@ function renderMessageAttachments(article, attachments) {
   }
 }
 
+function bindMessageFeedback(article, jobId) {
+  const feedback = article.querySelector('.message-feedback');
+  if (!feedback) return;
+  feedback.hidden = false;
+  feedback.dataset.jobId = jobId;
+  feedback.querySelectorAll('[data-feedback]').forEach((button) => {
+    button.disabled = false;
+    button.removeAttribute('title');
+    button.addEventListener('click', () => {
+      pendingFeedback = { article, rating: button.dataset.feedback };
+      document.getElementById('feedback-reason').value = '';
+      document.getElementById('feedback-note').value = '';
+      document.getElementById('feedback-dialog').showModal();
+    }, { once: true });
+  });
+}
+
 function appendMessage(role, text, jobId = '', options = {}) {
   elements.welcome.hidden = true;
   setConversationEmpty(false);
@@ -705,21 +720,18 @@ function appendMessage(role, text, jobId = '', options = {}) {
   });
 
   const feedback = fragment.querySelector('.message-feedback');
-  if (role === 'assistant' && !options.noFeedback) {
-    feedback.hidden = false;
-    feedback.querySelectorAll('[data-feedback]').forEach((button) => {
-      button.disabled = !jobId;
-      if (jobId) {
-        button.addEventListener('click', () => {
-          pendingFeedback = { article, rating: button.dataset.feedback };
-          document.getElementById('feedback-reason').value = '';
-          document.getElementById('feedback-note').value = '';
-          document.getElementById('feedback-dialog').showModal();
-        });
-      } else {
+  if (role === 'assistant') {
+    if (options.noFeedback) {
+      feedback.hidden = true;
+    } else if (jobId) {
+      bindMessageFeedback(article, jobId);
+    } else {
+      feedback.hidden = false;
+      feedback.querySelectorAll('[data-feedback]').forEach((button) => {
+        button.disabled = true;
         button.title = 'Feedback is unavailable for this message';
-      }
-    });
+      });
+    }
   } else {
     feedback?.remove();
   }
@@ -1827,7 +1839,8 @@ async function answerPendingQuestion(message, signal) {
   const jobId = pendingQuestion.id;
   const approvalPending = ['waiting_for_approval', 'permission_request'].includes(pendingQuestion.state);
   if (approvalPending && message.trim().toLowerCase() === 'details') {
-    const details = elements.permissionDialogContent.querySelector(`[data-approval-job="${CSS.escape(jobId)}"] details`);
+    const details = [...elements.stream.querySelectorAll('.approval-card')]
+      .find((card) => card.dataset.approvalJob === jobId)?.querySelector('details');
     if (details) details.open = true;
     return;
   }
@@ -1844,14 +1857,29 @@ async function answerPendingQuestion(message, signal) {
   if (!response.ok) throw new Error(data.error || 'Could not submit the answer.');
   if (data.job && ['waiting_for_approval', 'permission_request', 'waiting_for_user'].includes(data.job.state)) {
     pendingQuestion = data.job;
-    if (approvalPending) appendApprovalCard(data.job);
-    else if (data.job.error) appendMessage('assistant', data.job.error, data.job.id);
+    if (['waiting_for_approval', 'permission_request'].includes(data.job.state)) {
+      appendApprovalCard(data.job);
+    } else {
+      appendInteractiveQuestion(data.job);
+    }
     return;
   }
-  if (approvalPending) {
-    elements.permissionDialogContent.querySelector(`[data-approval-job="${CSS.escape(jobId)}"]`)?.remove();
-    if (elements.permissionDialog.open) elements.permissionDialog.close();
+  const pendingCard = [...elements.stream.querySelectorAll('.message-card')]
+    .find((article) => article.dataset.jobId === jobId);
+  const pendingUi = pendingCard?.querySelector(approvalPending ? '.approval-card' : '.interactive-question');
+  if (pendingUi) {
+    pendingUi.querySelectorAll('button').forEach((button) => {
+      button.disabled = true;
+      if (button.textContent.trim() === 'Sending…') button.textContent = 'Sent';
+    });
+    const status = document.createElement('p');
+    status.className = 'pending-answer-status';
+    status.textContent = approvalPending
+      ? (message.trim().toLowerCase() === 'reject' ? 'Not approved.' : 'Approved once.')
+      : `Answer sent: ${message}`;
+    pendingUi.append(status);
   }
+  if (elements.permissionDialog.open) elements.permissionDialog.close();
   pendingQuestion = null;
   const activity = appendActivity('Continuing the task…');
   await pollQuestionJob(jobId, activity, signal);
@@ -1859,6 +1887,18 @@ async function answerPendingQuestion(message, signal) {
 
 function submitQuestionChoice(answer) {
   if (!pendingQuestion || !answer.trim() || submitting) return;
+  const jobId = pendingQuestion.id;
+  const article = [...elements.stream.querySelectorAll('.message-card')]
+    .find((item) => item.dataset.jobId === jobId);
+  const card = article?.querySelector('.interactive-question');
+  if (card) {
+    card.dataset.submitting = 'true';
+    card.querySelectorAll('button').forEach((button) => {
+      button.disabled = true;
+      if (button.textContent.trim() === 'Send') button.textContent = 'Sending…';
+    });
+    card.querySelectorAll('input').forEach((input) => { input.disabled = true; });
+  }
   elements.prompt.value = answer;
   elements.prompt.dispatchEvent(new Event('input', { bubbles: true }));
   elements.composer.requestSubmit();
@@ -1957,14 +1997,19 @@ function appendInteractiveQuestion(job) {
 function appendApprovalCard(job) {
   elements.welcome.hidden = true;
   setConversationEmpty(false);
+  pendingQuestion = job;
   const approval = job.approval || {};
   const isPermissionRequest = job.state === 'permission_request' || approval.request_type === 'permission_request';
+  let article = [...elements.stream.querySelectorAll('.message-card')]
+    .find((item) => item.dataset.jobId === job.id);
+  if (!article) {
+    article = appendMessage('assistant', approval.summary || 'Hsx needs your approval.', job.id, { noFeedback: true });
+  }
   const card = document.createElement('section');
   card.className = 'approval-card';
   card.dataset.approvalJob = job.id;
   card.setAttribute('aria-label', 'Hsx action approval');
   const title = document.createElement('h3');
-  title.id = 'permission-dialog-title';
   title.textContent = isPermissionRequest
     ? 'Permission needed'
     : approval.request_type === 'package_install'
@@ -1973,19 +2018,39 @@ function appendApprovalCard(job) {
         ? 'Review before Hsx acts'
         : 'Hsx wants to:';
   const summary = document.createElement('p');
+  summary.className = 'approval-summary';
   summary.textContent = approval.summary || 'Run a tool';
   const why = document.createElement('p');
-  why.textContent = `${approval.request_type === 'tool_consent' ? 'Possible consequence' : 'Why'}: ${approval.why || 'This action needs your approval.'}`;
+  why.className = 'approval-consequence';
+  why.textContent = approval.why || 'This action needs your approval.';
   const policyNote = document.createElement('p');
+  policyNote.className = 'approval-policy-note';
   policyNote.textContent = isPermissionRequest
     ? 'Elevated execution is limited to a non-interactive sudo attempt. Your OS password is never requested or stored.'
     : '';
+  const impact = document.createElement('p');
+  impact.className = 'approval-impact';
+  impact.textContent = approval.host_impact ? `Effect on this HP: ${approval.host_impact}` : '';
+  const risk = document.createElement('p');
+  risk.className = 'approval-risk';
+  risk.textContent = approval.security_risk ? `Security considerations: ${approval.security_risk}` : '';
   const details = document.createElement('details');
   const detailsSummary = document.createElement('summary');
-  detailsSummary.textContent = 'Details';
-  const detailsText = document.createElement('pre');
-  detailsText.textContent = approval.details || 'No additional details.';
-  details.append(detailsSummary, detailsText);
+  detailsSummary.textContent = 'Command and action details';
+  details.append(detailsSummary);
+  if (approval.command) {
+    const commandLabel = document.createElement('strong');
+    commandLabel.textContent = 'Command Hsx will run';
+    const commandText = document.createElement('pre');
+    commandText.className = 'approval-command';
+    commandText.textContent = approval.command;
+    details.append(commandLabel, commandText);
+  }
+  if (approval.details && approval.details !== approval.command) {
+    const detailsText = document.createElement('pre');
+    detailsText.textContent = approval.details;
+    details.append(detailsText);
+  }
   const actions = document.createElement('div');
   actions.className = 'approval-actions';
   const choices = [
@@ -2016,8 +2081,11 @@ function appendApprovalCard(job) {
     });
     actions.appendChild(button);
   }
-  if (policyNote.textContent) card.append(title, summary, why, policyNote, details);
-  else card.append(title, summary, why, details);
+  card.append(title, summary, why);
+  if (impact.textContent) card.append(impact);
+  if (risk.textContent) card.append(risk);
+  if (policyNote.textContent) card.append(policyNote);
+  card.append(details);
   if (job.error) {
     const error = document.createElement('p');
     error.className = 'approval-error';
@@ -2025,8 +2093,9 @@ function appendApprovalCard(job) {
     card.appendChild(error);
   }
   card.appendChild(actions);
-  elements.permissionDialogContent.replaceChildren(card);
-  if (!elements.permissionDialog.open) elements.permissionDialog.showModal();
+  article.querySelector('.message-content').replaceChildren(card);
+  if (elements.permissionDialog.open) elements.permissionDialog.close();
+  elements.permissionDialogContent.replaceChildren();
 }
 
 async function pollQuestionJob(jobId, activity, signal) {
@@ -2093,6 +2162,17 @@ async function submitPrompt() {
     } catch (error) {
       if (error.name !== 'AbortError') {
         appendMessage('assistant', 'Could not submit your answer. Your text is still available in this tab.');
+      }
+      const questionCard = [...elements.stream.querySelectorAll('.message-card')]
+        .find((article) => article.dataset.jobId === pendingQuestion?.id)
+        ?.querySelector('.interactive-question');
+      if (questionCard) {
+        questionCard.dataset.submitting = 'false';
+        questionCard.querySelectorAll('button').forEach((button) => {
+          button.disabled = false;
+          if (button.textContent.trim() === 'Sending…') button.textContent = 'Send';
+        });
+        questionCard.querySelectorAll('input').forEach((input) => { input.disabled = false; });
       }
       elements.prompt.value = typedMessage;
     } finally {
@@ -2205,6 +2285,7 @@ async function submitPrompt() {
             assistantCard.dataset.jobId = data.id;
             assistantCard.dataset.prompt = requestMessage;
             assistantCard.dataset.response = text;
+            bindMessageFeedback(assistantCard, data.id);
           } else {
             assistantCard = appendMessage('assistant', text, data.id, { prompt: requestMessage });
           }

@@ -343,4 +343,4 @@ def test_chat_question_card_answer_resumes_job(tmp_path: Path, monkeypatch):
     assert complete["result"] == "The report is ready."
     assert calls == [None, {"tool_call_id": "ask-call-1", "answer": "layout.docx"}]
     assert notifications[0][0:2] == ("needs_input", "Hsx needs your input")
-    assert notifications[-1][0:2] == ("job_done", "Your Hsx task is complete")
+    assert all(event != "job_done" for event, _, _ in notifications)

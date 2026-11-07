@@ -397,6 +397,9 @@ class BrowserFakeHandler(server.HsxHandler):
                         "summary": "Hsx wants to write firmware to the connected ESP device.",
                         "why": "Writing firmware changes the selected device and can erase or replace its current program.",
                         "details": "python -m esptool --port COM5 write-flash 0x0 firmware.bin",
+                        "command": "python -m esptool --port COM5 write-flash 0x0 firmware.bin",
+                        "host_impact": "Writes firmware to the selected connected device; it does not install software on the HP.",
+                        "security_risk": "The device's existing program may be erased or replaced. Confirm the target and firmware file.",
                     },
                 }),
                 ("done", {}),
@@ -658,6 +661,8 @@ def test_browser_renders_ask_user_options_and_custom_answer_field(browser_app, b
     while not BROWSER_ASK_ANSWERS and time.monotonic() < deadline:
         page.wait_for_timeout(25)
     assert BROWSER_ASK_ANSWERS == [("question-card-job", "Minimalist with warm colors")]
+    card.get_by_text("Answer sent: Minimalist with warm colors").wait_for()
+    assert card.get_by_role("button", name="Sent").is_disabled()
 
 
 def test_browser_option_button_submits_selected_answer(browser_app, browser_page):
@@ -696,10 +701,10 @@ def test_artifact_download_uses_authenticated_fetch(browser_app, browser_page):
     _, page = browser_page
     page.goto(f"{base_url}/web/")
     page.locator('body[data-ready="true"]').wait_for(timeout=10000)
-    link = page.get_by_role("link", name="Download report.txt")
-    link.wait_for()
+    page.get_by_role("button", name="Open artifact report.txt").click()
+    page.locator("#activity-file-viewer[open]").wait_for()
     with page.expect_download() as download_info:
-        link.click()
+        page.get_by_role("button", name="Download").click()
     download = download_info.value
     assert download.suggested_filename == "report.txt"
 
@@ -779,12 +784,13 @@ def test_browser_package_resolver_shows_one_plain_approval_plan(browser_app, bro
     page.locator("#send-button").click()
     card = page.locator(".approval-card")
     card.wait_for()
+    assert page.locator("#permission-dialog").evaluate("dialog => !dialog.open")
     assert page.locator(".approval-card").count() == 1
     assert card.get_by_role("heading", name="Hsx can add this ability").is_visible()
     assert "install yt-dlp==2026.10.26" in card.inner_text()
     assert "about 20 MB" in card.inner_text()
     assert "Permission rule:" not in card.inner_text()
-    card.get_by_text("Details").click()
+    card.get_by_text("Command and action details").click()
     assert "virtual environment only" in card.locator("pre").inner_text()
     assert "No sudo" in card.locator("pre").inner_text()
     assert card.get_by_role("button", name="Allow", exact=True).is_visible()
@@ -804,6 +810,12 @@ def test_browser_firmware_flash_approval_is_always_one_time(browser_app, browser
 
     card = page.locator(".approval-card")
     card.wait_for()
+    assert page.locator("#permission-dialog").evaluate("dialog => !dialog.open")
+    assert card.locator("summary").inner_text() == "Command and action details"
+    card.locator("summary").click()
+    assert "python -m esptool --port COM5 write-flash 0x0 firmware.bin" in card.inner_text()
+    assert "Effect on this HP" in card.inner_text()
+    assert "Security considerations" in card.inner_text()
     assert card.get_by_role("button", name="Allow once").is_visible()
     assert card.get_by_role("button", name="Deny").is_visible()
     assert card.get_by_role("button", name="Always allow this").count() == 0
@@ -852,9 +864,13 @@ def test_browser_history_survives_reload_and_another_browser_and_supports_action
     second.get_by_role("button", name=title).click()
     second.get_by_text("Test answer from fake provider.").wait_for()
     assert second.locator("#chat-stream .message-card").count() == 2
+    second.evaluate("""() => {
+      const toggle = document.getElementById('sidebar-toggle');
+      if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+    }""")
     search = second.locator("#chat-history-search")
     history_row = second.locator(".chat-history-row").first
-    assert history_row.bounding_box()["height"] == 40
+    assert history_row.bounding_box()["height"] == 36
     assert abs(search.bounding_box()["width"] - second.locator("#chat-history-list").bounding_box()["width"]) < 1
     search.fill("does not match")
     assert second.get_by_text("No matching chats.").is_visible()
@@ -1079,46 +1095,25 @@ def test_browser_layout_screenshots_at_requested_widths(browser_app, browser_pag
         page.screenshot(path=str(screenshots / f"after-{width}-long-conversation.png"))
 
 
-def test_sidebar_activity_cards_expand_only_on_request(browser_app, browser_page):
-            base_url, _ = browser_app
-            _, page = browser_page
-            page.route(
-                "**/api/activity?*",
-                lambda route: route.fulfill(
-                    status=200,
-                    content_type="application/json",
-                    body=json.dumps({"tasks": [
-                        {
-                            "state": "running",
-                            "summary": "Build a weekly report",
-                            "agent_name": "Hsx",
-                            "agent_role": "Assistant",
-                            "task_path": "Hsx Work/weekly-report",
-                            "elapsed_seconds": 18,
-                            "eta_seconds": 42,
-                        },
-                        {"state": "done", "summary": "Run validation", "tool_name": "run_code"},
-                        {"state": "done", "summary": "Edit report", "tool_name": "write_file"},
-                    ]}),
-                ),
-            )
-            page.goto(f"{base_url}/web/")
-            page.locator('body[data-ready="true"]').wait_for(timeout=10000)
-            page.locator("#activity-toggle").click()
-            card = page.locator(".activity-item")
-            card.first.wait_for()
-            assert page.locator(".activity-item").count() == 3
-            assert card.nth(0).locator(".activity-task-icon use").get_attribute("href") == "#activity-icon-spinner"
-            assert card.nth(1).locator(".activity-task-icon use").get_attribute("href") == "#activity-icon-terminal"
-            assert card.nth(2).locator(".activity-task-icon use").get_attribute("href") == "#activity-icon-pencil"
-            toggle = card.first.locator(".activity-item-toggle")
-            details = card.first.locator(".activity-card-details")
-            assert toggle.get_attribute("aria-expanded") == "false"
-            assert details.is_hidden()
-            toggle.click()
-            assert toggle.get_attribute("aria-expanded") == "true"
-            assert details.is_visible()
-            assert details.get_by_text("weekly-report").is_visible()
+def test_sidebar_activity_shows_only_the_currently_running_task(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    page.route(
+        "**/api/activity?*",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"tasks": [
+                {"id": "run-1", "state": "running", "summary": "Build a weekly report"},
+                {"id": "run-0", "state": "done", "summary": "Run validation"},
+            ]}),
+        ),
+    )
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.locator("#agent-activity-strip:not([hidden])").wait_for()
+    assert page.locator("#activity-running-title").inner_text() == "Build a weekly report"
+    assert page.locator("#activity-stop").is_visible()
 
 
 def test_sent_attachments_render_as_file_cards_not_query_text(browser_app, browser_page):
@@ -1267,7 +1262,8 @@ def test_browser_activity_binary_file_opens_in_the_file_viewer(browser_app, brow
     assert card.get_by_text("Binary file, 2 KB").is_visible()
     card.get_by_role("button", name="Open").click()
     page.locator("#activity-file-viewer[open]").wait_for()
-    assert page.get_by_role("link", name="Open binary file in a new tab").is_visible()
+    assert page.locator("#activity-viewer-title").inner_text() == "report.pdf"
+    assert page.get_by_role("button", name="Download").is_visible()
 
 
 def test_browser_generated_artifact_is_shown_inline_and_code_blocks_have_copy(browser_app, browser_page):

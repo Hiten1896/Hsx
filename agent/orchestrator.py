@@ -5,6 +5,7 @@ import re
 import time
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 
 from agent.activity_trace import tool_end_event, tool_start_event
 from agent.ask_user import ApprovalRequest, AskUserRequest
@@ -36,6 +37,15 @@ VISUAL_PROMPT = re.compile(
     r"(?:take|capture|snap) (?:a )?(?:photo|picture|frame|snapshot))\b",
     re.IGNORECASE,
 )
+ATTACHED_IMAGE_PROMPT = re.compile(
+    r"\b(?:what(?:'s| is) (?:this|in (?:this|the) (?:image|picture|photo))|"
+    r"what does (?:this|the) (?:image|picture|photo) show|"
+    r"describe (?:this|the) (?:image|picture|photo|it)|"
+    r"identify (?:this|the) (?:image|picture|photo|object)|"
+    r"read (?:the )?text (?:in|from) (?:this|the) (?:image|picture|photo))\b",
+    re.IGNORECASE,
+)
+IMAGE_SUFFIXES = {".avif", ".bmp", ".gif", ".heic", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
 CAMERA_START_PROMPT = re.compile(
     r"\b(?:turn on (?:the )?camera|start (?:the )?camera|open (?:the )?camera|show (?:me )?(?:the )?room|activate (?:the )?camera)\b",
     re.IGNORECASE,
@@ -133,6 +143,19 @@ def _image_path_was_named(user_input: str, path: str) -> bool:
         rf"(?<![\w/-])(?<!\w\.){re.escape(normalized_path)}(?![\w/-]|\.\w)",
         normalized_request,
     ) is not None
+
+
+def _attached_image_paths(user_input: str) -> list[str]:
+    marker = "\n\nUploaded workspace files:"
+    if marker not in user_input:
+        return []
+    attachment_list = user_input.split(marker, 1)[1]
+    return [
+        path
+        for line in attachment_list.splitlines()
+        if (path := line.strip().removeprefix("- ").strip())
+        and Path(path).suffix.casefold() in IMAGE_SUFFIXES
+    ]
 
 
 def _friendly_structured_answer(value: object) -> str:
@@ -286,6 +309,36 @@ def run_agent(
             fact_to_save = clean_fact or user_input.strip()
             MEMORY.save_fact(session_id, fact_to_save)
             answer = f"I will remember that: {fact_to_save}."
+            conversation_history.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
+            MEMORY.record_message(session_id, "assistant", answer)
+            return answer, conversation_history
+
+        image_paths = _attached_image_paths(user_input)
+        request_text = user_input.split("\n\nUploaded workspace files:", 1)[0].strip()
+        if image_paths and ATTACHED_IMAGE_PROMPT.search(request_text):
+            describe_image = skill_map.get("describe_image")
+            if describe_image is None:
+                answer = "Image description is unavailable because the describe_image tool is not configured."
+                conversation_history.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
+                return answer, conversation_history
+            call_id = f"image-{uuid.uuid4().hex}"
+            activity = emit_activity_start(
+                "describe_image",
+                {"path": image_paths[0], "question": request_text},
+                call_id,
+            )
+            started = time.perf_counter()
+            try:
+                result = describe_image(path=image_paths[0], question=request_text)
+                description = str(result.get("description", "")).strip() if isinstance(result, dict) else ""
+                if not description:
+                    raise RuntimeError("The image tool returned no description.")
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
+                emit_activity_end(activity, {"success": False, "error": str(error)}, started, failed=True)
+                answer = f"I couldn't describe the attached image: {error}"
+            else:
+                emit_activity_end(activity, result, started)
+                answer = description
             conversation_history.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
             MEMORY.record_message(session_id, "assistant", answer)
             return answer, conversation_history
