@@ -1993,6 +1993,8 @@ async function submitPrompt() {
         const error = new Error(data.message || 'The task failed.');
         error.noReconnect = true;
         throw error;
+      } else if (event === 'camera_state') {
+        handleCameraStateEvent(data);
       } else if (event === 'done' && activeChatController === controller) {
         elements.providerNotice.hidden = true;
         setBusy(false);
@@ -2177,6 +2179,24 @@ async function refreshCamera() {
     if (cameraHasFrame) setCameraReconnecting('Camera feed offline; retrying…');
     else setCameraStatus(false, 'Camera feed offline');
     scheduleCameraReconnect();
+  }
+}
+
+function handleCameraStateEvent(data) {
+  const active = Boolean(data && data.active);
+  if (active) {
+    if (!cameraEnabled) {
+      cameraEnabled = true;
+      openMobilePanel(elements.cameraSidebar);
+      setCameraStatus(false, 'Live feed active…');
+      refreshCamera();
+      window.clearTimeout(cameraAutoOffTimer);
+      cameraAutoOffTimer = window.setTimeout(stopCameraAndStandby, 5 * 60 * 1000);
+    }
+  } else {
+    if (cameraEnabled) {
+      stopCameraAndStandby();
+    }
   }
 }
 
@@ -2812,6 +2832,10 @@ async function consumeNotificationStream(controller) {
       if (block.startsWith(':')) continue;
       const id = Number(block.match(/^id:\s*(\d+)/m)?.[1]);
       const event = parseSseBlock(block);
+      if (event && event.event === 'camera_state') {
+        handleCameraStateEvent(event.data);
+        continue;
+      }
       if (!event || event.event !== 'notification' || !Number.isInteger(id) || id <= notificationLastId) continue;
       notificationLastId = id;
       handleLiveNotification(event.data);

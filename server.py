@@ -1216,10 +1216,21 @@ class HsxHandler(BaseHTTPRequestHandler):
         self.send_header("X-Accel-Buffering", "no")
         self._cors_headers()
         self.end_headers()
+        last_broadcast_id = 0
         try:
             while True:
+                broadcasts = NOTIFIER.get_broadcast_events_after(last_broadcast_id)
+                for b in broadcasts:
+                    payload = json.dumps(b["data"], separators=(",", ":"))
+                    self.wfile.write(f"event: {b['event']}\ndata: {payload}\n\n".encode())
+                    last_broadcast_id = b["id"]
                 notifications = NOTIFIER.wait_for_notifications(last_id, timeout=15)
-                if not notifications:
+                broadcasts = NOTIFIER.get_broadcast_events_after(last_broadcast_id)
+                for b in broadcasts:
+                    payload = json.dumps(b["data"], separators=(",", ":"))
+                    self.wfile.write(f"event: {b['event']}\ndata: {payload}\n\n".encode())
+                    last_broadcast_id = b["id"]
+                if not notifications and not broadcasts:
                     self.wfile.write(b": keepalive\n\n")
                     self.wfile.flush()
                     continue
@@ -1238,7 +1249,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         except ValueError:
             self._json({"error": "Turn on the camera in this browser session first."}, 403)
             return
-        if not CAMERA.has_owner(owner):
+        if not (CAMERA.has_owner(owner) or CAMERA.is_started()):
             self._json({"error": "Turn on the camera in this browser session first."}, 403)
             return
         frame = CAMERA.latest_frame()

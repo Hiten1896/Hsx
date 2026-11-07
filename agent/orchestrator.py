@@ -36,6 +36,14 @@ VISUAL_PROMPT = re.compile(
     r"(?:take|capture|snap) (?:a )?(?:photo|picture|frame|snapshot))\b",
     re.IGNORECASE,
 )
+CAMERA_START_PROMPT = re.compile(
+    r"\b(?:turn on (?:the )?camera|start (?:the )?camera|open (?:the )?camera|show (?:me )?(?:the )?room|activate (?:the )?camera)\b",
+    re.IGNORECASE,
+)
+CAMERA_STOP_PROMPT = re.compile(
+    r"\b(?:turn off (?:the )?camera|stop (?:the )?camera|close (?:the )?camera|shut off (?:the )?camera|deactivate (?:the )?camera)\b",
+    re.IGNORECASE,
+)
 WEB_SEARCH_PROMPT = re.compile(
     r"\b(?:weather|news|latest|current|today|search (?:the )?web|look up|find online|what happened)\b",
     re.IGNORECASE,
@@ -263,7 +271,98 @@ def run_agent(
     else:
         MEMORY.record_message(session_id, "user", user_input)
         conversation_history.append({"role": "user", "content": user_input})
-        visual_request = _vision_request(user_input)
+
+        if CAMERA_STOP_PROMPT.search(user_input):
+            from agent.hardware.camera import CAMERA, camera_session_owner
+            from agent.notifier import NOTIFIER
+            try:
+                owner = camera_session_owner(session_id)
+                CAMERA.release(owner)
+            except Exception:
+                pass
+            CAMERA.release("chat-active")
+            POLICY.audit_event("camera_off", session_id, job_id, "stopped")
+            NOTIFIER.broadcast_event("camera_state", {"active": False})
+            if on_activity_event is not None:
+                on_activity_event("camera_state", {"active": False})
+            answer = "I've turned off the camera."
+            conversation_history.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
+            MEMORY.record_message(session_id, "assistant", answer)
+            return answer, conversation_history
+
+        if CAMERA_START_PROMPT.search(user_input) or _vision_request(user_input):
+            from agent.hardware.camera import CAMERA, camera_session_owner
+            from agent.notifier import NOTIFIER
+            import os
+            import shutil
+            import threading
+
+            POLICY.audit_event("camera_access", session_id, job_id, "approved")
+
+            if not shutil.which("ffmpeg"):
+                return _finish_vision_notice(
+                    "The camera cannot start because ffmpeg is not installed on this host. Please install ffmpeg to enable camera streaming.",
+                    conversation_history,
+                    session_id,
+                )
+            if not os.path.exists(CAMERA.device):
+                return _finish_vision_notice(
+                    f"The camera device ({CAMERA.device}) is not available or disconnected. Please ensure your HP camera is plugged in.",
+                    conversation_history,
+                    session_id,
+                )
+
+            try:
+                owner = camera_session_owner(session_id)
+                CAMERA.acquire(owner)
+            except Exception:
+                owner = ""
+            CAMERA.acquire("chat-active")
+
+            def _auto_stop_camera():
+                time.sleep(300)
+                if owner and CAMERA.has_owner(owner):
+                    CAMERA.release(owner)
+                CAMERA.release("chat-active")
+                if not CAMERA.is_started():
+                    POLICY.audit_event("camera_auto_stop", session_id, job_id, "stopped")
+                    NOTIFIER.broadcast_event("camera_state", {"active": False})
+            threading.Thread(target=_auto_stop_camera, daemon=True).start()
+
+            NOTIFIER.broadcast_event("camera_state", {"active": True, "device": CAMERA.device})
+            if on_activity_event is not None:
+                on_activity_event("camera_state", {"active": True, "device": CAMERA.device})
+
+            is_describe = bool(_vision_request(user_input) or re.search(r"\b(?:what do you see|describe|show (?:me )?(?:the )?room)\b", user_input, re.I))
+            if is_describe:
+                frame = CAMERA.wait_for_frame(-1, timeout=3.0) or CAMERA.latest_frame()
+                if frame and frame.data:
+                    encoded = base64.b64encode(frame.data).decode("ascii")
+                    vision_resp = call_llm(
+                        [{"role": "user", "content": [
+                            {"type": "text", "text": "Describe what you see in the room through the camera in 2-3 concise sentences."},
+                            {"type": "image", "mime_type": "image/jpeg", "data": encoded},
+                        ]}],
+                        [],
+                        "You are describing what you see through the HP camera.",
+                        sensitive=sensitive,
+                        on_provider_notice=on_provider_notice,
+                        job_id=job_id,
+                        prefer_cloud=True,
+                        disable_panel=True,
+                    )
+                    description = _response_text(vision_resp)
+                    answer = f"{description}\n\nThe live camera feed is active on your screen."
+                else:
+                    answer = "I've started the camera. The live feed is now visible in the camera card on all open tabs."
+            else:
+                answer = "I've started the camera. The live feed is now visible in the camera card on all open tabs."
+
+            conversation_history.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
+            MEMORY.record_message(session_id, "assistant", answer)
+            return answer, conversation_history
+
+        visual_request = False
         if visual_request:
             if sensitive:
                 return _finish_vision_notice(

@@ -129,6 +129,8 @@ class Notifier:
         self.vapid_public_key = vapid_public_key or os.getenv("HSX_VAPID_PUBLIC_KEY", "")
         self.push_sender = push_sender
         self._condition = threading.Condition()
+        self._broadcast_events: list[dict] = []
+        self._next_broadcast_id: int = 1
         self._initialize()
 
     @staticmethod
@@ -518,3 +520,20 @@ class Notifier:
                         (after_id,),
                     ).fetchall()
         return [dict(row) for row in rows]
+
+    def broadcast_event(self, event_type: str, data: dict) -> None:
+        with self._condition:
+            self._broadcast_events.append({
+                "id": self._next_broadcast_id,
+                "event": event_type,
+                "data": data,
+                "created": datetime.now(UTC).isoformat(),
+            })
+            self._next_broadcast_id += 1
+            if len(self._broadcast_events) > 50:
+                self._broadcast_events = self._broadcast_events[-50:]
+            self._condition.notify_all()
+
+    def get_broadcast_events_after(self, after_id: int) -> list[dict]:
+        with self._condition:
+            return [e for e in self._broadcast_events if e["id"] > after_id]
