@@ -90,6 +90,29 @@ it does not imply live hardware or production-provider verification.
 | Rich CLI rows, spinner, `/steps N`, Syntax diffs and width/no-color behavior | DONE + TESTED | `cli.py`, `requirements-core.txt`, `tests/test_cli.py`; tests render at 60, 80 and 120 columns with colors disabled. |
 | Exact comparison to reference screenshots and live camera/attached-image sources | PARTLY | The requested reference PNGs are not present under `docs/design/`; `docs/design.md` documents the current UI, and `docs/screens/after-{360,768,1280}-activity-trace.png` are generated from the implemented UI. Exact screenshot matching and live device streams remain unverified. |
 
+## UI-v5 / V6 Implementation Audit (2026-11-07)
+
+### Previous Prompt Items (1–5) Status
+
+| Item | Requirement | Status | Notes / Evidence |
+|---|---|---|---|
+| 1 | Left Sidebar Redesign | **DONE** | Flattened list grouped by Today, Yesterday, Previous 7 days, Older. 36px rows, running task strip pinned above, single scrollbar, muted workspace status. Committed in `89858ce`. |
+| 2 | Camera Card Height | **DONE** | Compact 40px header with tooltip hardware info, 32px footer, video aspect ratio preserved, freed vertical height given to Artifacts. Committed in `2cf69e8`. |
+| 3 | Artifacts = Real Deliverables Only | **DONE** | `ArtifactStore` SQLite backing with family/version grouping; `artifact: true` on user-facing outputs; scratch files isolated to `data/scratch/<run id>/` and deleted on run completion; Claude-style cards with Preview, Code, Details, Copy, Download, version picker; empty state updated; legacy scratch migration in `agent/artifacts.py`. Committed in `3c8e2b0`. |
+| 4 | Notifications = Background Events Only | **PARTLY** | Schema updated (`severity`, `link`, `thumbnail`), 8 background event types added, per-type settings storage in `agent/notifier.py`. Remaining: remove remaining in-app task completion/failure notices, add clear-all endpoint, system health checks (CPU temp from `/sys/class/thermal`, disk, memory, network), settings UI toggles, and motion alert cooldown. |
+| 5 | Camera from Chat | **PARTLY** | `CameraService` and `camera_snapshot` exist. Remaining: chat router/intent detection for "show me the room" / "turn on camera", SSE `camera_state` event broadcast to turn on client camera cards across open tabs, "camera on" indicator, 5-minute auto-stop, audit logging, and `describe_image` snapshot analysis. |
+
+### Roadmap (Sections A – F & G Finish)
+- **Finish Item 4**: Complete notification background events, system monitors, settings API & UI, clear all, and suppress task completion/failure notices.
+- **Finish Item 5**: Implement chat-driven camera activation, multi-tab `camera_state` broadcast, consent/audit logging, auto-stop, and snapshot descriptions.
+- **Section A**: Fix "Plan step 1 failed after 2 attempt(s)" — request classifier routing (conversation/preferences bypass planner), dedicated tools first, proposal repair loop with exact error feedback (up to 4 retries), plain-English failure card with interactive options, run-id failure deduplication.
+- **Section B**: Step row state machine bug — queued/running/done/failed/cancelled states; server guarantees `tool_end` on exceptions (`finally`); client terminates spinner on stream end/abort/history restore; verb tenses match states.
+- **Section C**: Settings > Capabilities — categorized groups (Files, Research, Machine, Camera, Automation, Memory), search, toggle all, server-side tool filtering/enforcement, audit logging, reset defaults.
+- **Section D**: Interactive Questions — Claude-style card UI, 2-4 buttons + "Other" text input, multi-step progress, keyboard shortcuts (numbers, Enter, Esc), paused run state (`waiting_for_user`), terminal TUI support.
+- **Section E**: Light Theme Token Redesign — semantic CSS color tokens, high WCAG AA contrast, no un-tokenized component colors, theme switcher (Light/Dark/System), contrast audit and viewport screenshots.
+- **Section F**: Sensitive Data Rules — regex redaction of credentials/OTPs/keys before sending to LLMs, turn-local memory store, cleanup after turn, Privacy settings notice.
+- **Section 7**: Full suite + ruff run, fix any failures, push, tag `ui-v6`, and report.
+
 ## Baseline verification
 
 - Initial full-suite attempt exited 1 because Playwright Chromium was not yet
