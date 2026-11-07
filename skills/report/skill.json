@@ -1,35 +1,83 @@
 {
   "name": "report",
   "description": "Extract a DOCX/PDF layout, read source data from XLSX/CSV/DOCX/PDF, then generate a PDF report. If the template or data mapping is ambiguous, ask_user before generating; PDF styling is approximated, not pixel-perfect.",
-  "risk": "safe",
   "input_schema": {
     "type": "object",
     "properties": {
-      "action": {"type": "string", "enum": ["extract_template", "read_data", "make_pdf"]},
-      "file": {"type": "string"},
+      "action": {
+        "type": "string",
+        "enum": [
+          "extract_template",
+          "read_data",
+          "make_pdf"
+        ]
+      },
+      "file": {
+        "type": "string"
+      },
       "structure": {
         "type": "object",
         "properties": {
-          "source_type": {"type": "string", "enum": ["docx", "pdf"]},
-          "source_path": {"type": "string"},
-          "fonts": {"type": "array", "items": {"type": "string"}},
-          "headers": {"type": "array", "items": {"type": "string"}},
-          "footers": {"type": "array", "items": {"type": "string"}},
-          "images": {"type": "array", "items": {"type": "string"}},
+          "source_type": {
+            "type": "string",
+            "enum": [
+              "docx",
+              "pdf"
+            ]
+          },
+          "source_path": {
+            "type": "string"
+          },
+          "fonts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "headers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "footers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "page_sections": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "page_width_pt": {"type": "number"},
-                "page_height_pt": {"type": "number"},
+                "page_width_pt": {
+                  "type": "number"
+                },
+                "page_height_pt": {
+                  "type": "number"
+                },
                 "margins_pt": {
                   "type": "object",
                   "properties": {
-                    "left": {"type": "number"},
-                    "right": {"type": "number"},
-                    "top": {"type": "number"},
-                    "bottom": {"type": "number"}
+                    "left": {
+                      "type": "number"
+                    },
+                    "right": {
+                      "type": "number"
+                    },
+                    "top": {
+                      "type": "number"
+                    },
+                    "bottom": {
+                      "type": "number"
+                    }
                   }
                 }
               }
@@ -40,21 +88,33 @@
       "content": {
         "type": "object",
         "properties": {
-          "title": {"type": "string"},
-          "subtitle": {"type": "string"},
+          "title": {
+            "type": "string"
+          },
+          "subtitle": {
+            "type": "string"
+          },
           "sections": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "heading": {"type": "string"},
-                "body": {"type": "string"},
-                "page_break": {"type": "boolean"},
+                "heading": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": "string"
+                },
+                "page_break": {
+                  "type": "boolean"
+                },
                 "tables": {
                   "type": "array",
                   "items": {
                     "type": "array",
-                    "items": {"type": "string"}
+                    "items": {
+                      "type": "string"
+                    }
                   }
                 }
               }
@@ -69,17 +129,28 @@
                   "type": "array",
                   "items": {
                     "type": "array",
-                    "items": {"type": "string"}
+                    "items": {
+                      "type": "string"
+                    }
                   }
                 }
               }
             }
           },
-          "images": {"type": "array", "items": {"type": "string"}}
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       },
-      "path": {"type": "string"}
+      "path": {
+        "type": "string"
+      }
     },
-    "required": ["action"]
+    "required": [
+      "action"
+    ]
   }
 }

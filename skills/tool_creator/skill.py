@@ -54,7 +54,7 @@ def _validate_code(code: str) -> None:
             raise ValueError("Generated skill cannot mutate global state.")
 
 
-def _validate_metadata(name: str, description: str, input_schema: dict, risk: str) -> None:
+def _validate_metadata(name: str, description: str, input_schema: dict) -> None:
     if not _NAME.fullmatch(name):
         raise ValueError("Tool name must be 3-40 lowercase letters, numbers, or underscores.")
     if name in {"tool_creator", "system_execute", "shell"}:
@@ -63,21 +63,16 @@ def _validate_metadata(name: str, description: str, input_schema: dict, risk: st
         raise ValueError("Tool description is required and must be under 500 characters.")
     if not isinstance(input_schema, dict) or input_schema.get("type") != "object":
         raise ValueError("input_schema must be a JSON object schema.")
-    if risk not in {"safe", "confirm"}:
-        raise ValueError("Generated tools may only use safe or confirm risk levels.")
     json.dumps(input_schema)
 
 
-def _write_skill(destination: Path, name: str, description: str, code: str, input_schema: dict, risk: str) -> None:
+def _write_skill(destination: Path, name: str, description: str, code: str, input_schema: dict) -> None:
     destination = destination.resolve()
     destination.mkdir(parents=True, exist_ok=False)
     (destination / "skill.py").write_text(code.rstrip() + "\n", encoding="utf-8")
     metadata = {
         "name": name,
         "description": description,
-        "risk": risk,
-        "advisory": "This generated tool may perform the requested bounded operation.",
-        "requires_acknowledgement": risk == "confirm",
         "input_schema": input_schema,
     }
     (destination / "skill.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
@@ -97,7 +92,6 @@ def run(
     description: str,
     code: str,
     input_schema: dict | None = None,
-    risk: str = "confirm",
     permanent: bool = False,
     input_schema_json: str = "",
 ) -> dict:
@@ -111,14 +105,14 @@ def run(
         input_schema = parsed_schema
     if input_schema is None:
         raise ValueError("Provide the new tool schema in input_schema_json.")
-    _validate_metadata(name, description, input_schema, risk)
+    _validate_metadata(name, description, input_schema)
     _validate_code(code)
     skills_root = BASE_DIR / "skills"
     destination = (skills_root if permanent else SCRATCH_DIR / "dynamic_skills") / name
     if destination.exists():
         raise FileExistsError(f"A generated skill already exists: {name}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    _write_skill(destination, name, description, code, input_schema, risk)
+    _write_skill(destination, name, description, code, input_schema)
     try:
         tool = register_runtime_skill(destination)
     except Exception:

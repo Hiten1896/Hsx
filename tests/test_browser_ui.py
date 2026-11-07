@@ -2,6 +2,7 @@ import json
 import threading
 import time
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 from playwright.sync_api import sync_playwright
@@ -78,12 +79,13 @@ def browser_page():
 def test_browser_new_chat_saves_thread_and_does_not_save_empty_chats(browser_app, browser_page):
     base_url, _ = browser_app
     browser, page = browser_page
+    page.set_default_timeout(5000)
     page.goto(f"{base_url}/web/")
     page.locator('body[data-ready="true"]').wait_for(timeout=10000)
     composer = page.locator("#prompt-input")
     composer.fill("A saved browser conversation")
     page.locator("#send-button").click()
-    page.get_by_text("Test answer from fake provider.").wait_for()
+    page.locator('.message-card[data-role="assistant"]').last.get_by_text("Test answer from fake provider.").wait_for()
     page.locator("#new-chat-button").click()
     assert composer.evaluate("element => document.activeElement === element")
     assert page.locator("#chat-stream .message-card").count() == 0
@@ -171,12 +173,149 @@ def test_browser_composer_keyboard_suggestions_and_empty_send_state(browser_app,
     assert chips.count() == 4
     chips.first.click()
     assert "CPU" in composer.input_value()
+    assert not send.is_disabled()
+    send.click()
+    page.get_by_text("Test answer from fake provider.").wait_for()
     composer.press("Shift+Enter")
     assert "\n" in composer.input_value()
     composer.fill("Keyboard submits a real message")
     composer.press("Enter")
-    page.get_by_text("Test answer from fake provider.").wait_for()
+    page.locator('.message-card[data-role="assistant"]').last.get_by_text("Test answer from fake provider.").wait_for()
     assert send.is_disabled()
+
+
+def test_browser_layout_contracts_and_connection_popover(browser_app, browser_page):
+    base_url, _ = browser_app
+    browser, page = browser_page
+    page.set_default_timeout(5000)
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    assert page.locator("#composer-options-button").count() == 0
+    page.set_viewport_size({"width": 360, "height": 800})
+    page.locator("#connection-toggle").click()
+    popover = page.locator("#connections-panel")
+    assert popover.is_visible()
+    bounds = popover.bounding_box()
+    assert bounds["x"] >= 0 and bounds["x"] + bounds["width"] <= 360
+    page.keyboard.press("Escape")
+    assert page.evaluate("document.activeElement.id") == "connection-toggle"
+    page.locator("#connection-toggle").click()
+    page.mouse.click(2, 2)
+    assert popover.is_hidden()
+    assert page.evaluate("document.activeElement.id") == "connection-toggle"
+    page.set_viewport_size({"width": 1280, "height": 900})
+    page.locator(".suggestion-chip").first.click()
+    page.locator("#send-button").click()
+    first = page.locator("#chat-stream .message-card").first
+    first.wait_for()
+    controls = page.locator(".chat-controls").bounding_box()
+    message = first.bounding_box()
+    assert controls["y"] + controls["height"] <= message["y"]
+    for row in page.locator(".connection-list li, .chat-history-row").all():
+        assert row.evaluate("el => el.scrollWidth <= el.clientWidth")
+
+
+def test_browser_send_and_stop_share_one_composer_slot(browser_app, browser_page):
+    base_url, _ = browser_app
+    browser, page = browser_page
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.locator("#prompt-input").fill("slow response")
+    send = page.locator("#send-button")
+    send_box = send.bounding_box()
+    page.locator("#send-button").click()
+    stop = page.locator("#stop-button")
+    stop.wait_for(state="visible")
+    assert page.locator("#send-button").is_hidden()
+    stop_box = stop.bounding_box()
+    assert abs(send_box["x"] - stop_box["x"]) < 5
+    page.locator("#prompt-input").fill("queued draft")
+    page.locator("#prompt-input").press("Enter")
+    assert page.locator("#prompt-input").input_value() == "queued draft"
+    stop.click()
+
+
+def test_browser_layout_screenshots_at_requested_widths(browser_app, browser_page):
+    base_url, database = browser_app
+    browser, page = browser_page
+    screenshots = Path(__file__).resolve().parents[1] / "docs" / "screens"
+    screenshots.mkdir(parents=True, exist_ok=True)
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+
+    for width in (360, 768, 1280):
+        page.set_viewport_size({"width": width, "height": 900})
+        page.wait_for_timeout(250)
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        page.screenshot(path=str(screenshots / f"after-{width}-empty-history.png"))
+        page.locator("#connection-toggle").click()
+        popover = page.locator("#connections-panel")
+        bounds = popover.bounding_box()
+        assert bounds["x"] >= 0 and bounds["x"] + bounds["width"] <= width
+        assert bounds["y"] >= 0 and bounds["y"] + bounds["height"] <= 900
+        for row in popover.locator(".connection-list li").all():
+            assert row.evaluate("el => el.scrollWidth <= el.clientWidth")
+        page.screenshot(path=str(screenshots / f"after-{width}-connections-open.png"))
+        page.keyboard.press("Escape")
+
+    store = ConversationStore(database)
+    for index in range(24):
+        store.save(
+            f"seed-chat-{index}",
+            f"A deliberately long conversation title {index:02d} about the history sidebar fitting narrow screens",
+            {"messages": []},
+        )
+    server.CONVERSATIONS = store
+    page.reload()
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    assert page.locator(".chat-history-row").count() >= 20
+    for width in (360, 768, 1280):
+        page.set_viewport_size({"width": width, "height": 900})
+        page.wait_for_timeout(250)
+        page.screenshot(path=str(screenshots / f"after-{width}-long-titles-24-chats.png"))
+        for row in page.locator(".chat-history-row").all():
+            assert row.evaluate("el => el.scrollWidth <= el.clientWidth")
+
+    page.locator("#new-chat-button").click()
+    composer = page.locator("#prompt-input")
+    for index in range(6):
+        assistant_count = page.locator('.message-card[data-role="assistant"]').count()
+        composer.fill(f"Long conversation message {index}: " + ("detail " * 80))
+        page.locator("#send-button").click()
+        page.locator('.message-card[data-role="assistant"]').nth(assistant_count).wait_for()
+    for width in (360, 1280):
+        page.set_viewport_size({"width": width, "height": 900})
+        page.wait_for_timeout(250)
+        stream = page.locator(".message-stream").bounding_box()
+        first_box = next(
+            box for box in (card.bounding_box() for card in page.locator(".message-card").all())
+            if box["y"] + box["height"] > stream["y"] and box["y"] < stream["y"] + stream["height"]
+        )
+        visible_top = max(first_box["y"], stream["y"])
+        visible_bottom = min(first_box["y"] + first_box["height"], stream["y"] + stream["height"])
+        first_message = {**first_box, "y": visible_top, "height": visible_bottom - visible_top}
+        for selector in ("#notifications-toggle", "#connection-toggle", "#settings-toggle"):
+            icon = page.locator(selector).bounding_box()
+            vertical_overlap = icon["y"] < first_message["y"] + first_message["height"] and first_message["y"] < icon["y"] + icon["height"]
+            horizontal_overlap = icon["x"] < first_message["x"] + first_message["width"] and first_message["x"] < icon["x"] + icon["width"]
+            assert not (vertical_overlap and horizontal_overlap)
+        page.screenshot(path=str(screenshots / f"after-{width}-long-conversation.png"))
+
+
+def test_browser_empty_history_and_permissions_settings(browser_app, browser_page):
+    base_url, _ = browser_app
+    browser, page = browser_page
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    assert page.get_by_text("No chats yet. Start with New chat.").is_visible()
+    page.locator("#settings-toggle").click()
+    page.locator("#settings-tab-permissions").click()
+    panel = page.locator("#settings-panel-permissions")
+    assert panel.is_visible()
+    checkboxes = panel.locator(".permission-action-row input[type=checkbox]")
+    checkboxes.first.wait_for()
+    assert checkboxes.count() == 11
+    assert page.get_by_role("heading", name="Always allow").is_visible()
 
 
 def test_browser_stop_is_per_run_and_next_message_succeeds(browser_app, browser_page):

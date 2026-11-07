@@ -25,7 +25,6 @@ class AuditWriter:
         request_id: str,
         action: str,
         args: dict[str, Any],
-        tier: str,
         decision: str,
         result: str,
     ) -> None:
@@ -34,7 +33,6 @@ class AuditWriter:
             "timestamp": datetime.now(UTC).isoformat(),
             "action": action,
             "args_summary": self._summary(args),
-            "tier": tier,
             "decision": decision,
             "result": result,
         }

@@ -434,7 +434,7 @@ class AskUserJobs:
             now = self._now().isoformat()
             if decision is None:
                 reminder = (
-                    "Choose accept once, accept for this session, or reject for: "
+                    "Choose Allow once, Always allow this, or Deny for: "
                     f"{approval.get('summary', 'this action')}"
                 )
                 connection.execute(
@@ -442,8 +442,8 @@ class AskUserJobs:
                     (reminder, now, job_id),
                 )
             else:
-                if choice == "session":
-                    approval["grant_scope"] = "session"
+                if choice == "always":
+                    approval["grant_scope"] = "always"
                 answers = json.loads(row["answers"])
                 answers.append(answer)
                 connection.execute(

@@ -1,6 +1,9 @@
 {
   "name": "disk_usage",
   "description": "Return structured local disk capacity and free-space information from the HSX server host.",
-  "risk": "safe",
-  "input_schema": {"type": "object", "properties": {}, "required": []}
+  "input_schema": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  }
 }

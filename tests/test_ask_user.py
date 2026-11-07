@@ -115,7 +115,7 @@ def test_agent_question_checkpoint_resumes_without_replaying_tool_call(tmp_path:
         orchestrator.run_agent(
             "Make a report",
             history,
-            [{"name": "ask_user", "risk": "safe"}],
+            [{"name": "ask_user"}],
             {"ask_user": ask_user},
         )
     assert raised.value.tool_call_id == "ask-call-123"
@@ -169,7 +169,7 @@ def test_agent_overrides_media_tool_target_with_request_context(monkeypatch):
     answer, _ = orchestrator.run_agent(
         "Play the sound on this host",
         [],
-        [{"name": "audio_play", "risk": "safe"}],
+        [{"name": "audio_play"}],
         {"audio_play": fake_audio},
         target_device="local_host",
         device_actions=actions,

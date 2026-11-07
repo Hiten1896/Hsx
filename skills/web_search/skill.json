@@ -1,1 +1,15 @@
-{"name":"web_search","description":"Search the configured web search endpoint.","risk":"safe","input_schema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}
+{
+  "name": "web_search",
+  "description": "Search the configured web search endpoint.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ]
+  }
+}

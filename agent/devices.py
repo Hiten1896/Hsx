@@ -17,7 +17,7 @@ SYSTEM_BODY = {
     "host": "local Linux host running HSX",
     "microphone": "ears; local audio input processed with VAD before transcription",
     "speakers": "voice; local audio playback through the configured host output",
-    "webcam": "eyes; camera capture from /dev/video0 when available and approved",
+    "webcam": "eyes; CameraService capture from the configured HSX_CAMERA_DEVICE when available and approved",
     "tty": "local consciousness screen; interactive client runs independently of the server",
     "execution": "motor control; host commands run with the HSX service account's OS permissions",
 }
@@ -62,6 +62,8 @@ def resolve_target_device(
 
 
 def system_body_state(target_device: str = "client_browser") -> dict:
+    camera_device = os.getenv("HSX_CAMERA_DEVICE", "/dev/video0")
+    vision_capture_enabled = os.getenv("HSX_ENABLE_VISION_CAPTURE", "0").strip().casefold() in {"1", "true", "yes", "on"}
     return {
         "metaphor": "System-as-Body is an interface model, not an assertion of sentience.",
         "host": SYSTEM_BODY["host"],
@@ -70,6 +72,8 @@ def system_body_state(target_device: str = "client_browser") -> dict:
         "execution_permissions": "current service account only; no implicit privilege escalation",
         "target_device": target_device,
         "audio_device": os.getenv("HSX_AUDIO_DEVICE", "alsa/default"),
+        "camera_device": camera_device,
+        "camera_snapshot_setting_enabled": vision_capture_enabled,
         "interfaces": {
             "microphone": {
                 "role": SYSTEM_BODY["microphone"],
@@ -81,7 +85,7 @@ def system_body_state(target_device: str = "client_browser") -> dict:
             },
             "webcam": {
                 "role": SYSTEM_BODY["webcam"],
-                "available": os.path.exists("/dev/video0"),
+                "available": os.path.exists(camera_device),
             },
             "tty": {
                 "role": SYSTEM_BODY["tty"],

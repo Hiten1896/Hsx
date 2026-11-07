@@ -4,12 +4,27 @@
   "input_schema": {
     "type": "object",
     "properties": {
-      "prompt": { "type": "string" },
-      "source_files": { "type": "array", "items": { "type": "string" } },
-      "output_filename": { "type": "string" },
-      "trim_start": { "type": "number" },
-      "trim_end": { "type": "number" }
+      "prompt": {
+        "type": "string"
+      },
+      "source_files": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "output_filename": {
+        "type": "string"
+      },
+      "trim_start": {
+        "type": "number"
+      },
+      "trim_end": {
+        "type": "number"
+      }
     },
-    "required": ["prompt"]
+    "required": [
+      "prompt"
+    ]
   }
 }

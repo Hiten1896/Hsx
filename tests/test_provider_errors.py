@@ -85,3 +85,40 @@ def test_router_reports_provider_failures_in_plain_english():
     assert len(lines) <= 3
     assert lines[0].startswith("Provider failure:")
     assert not any(token in str(error.value) for token in ("{", "}", "Role 'function'"))
+
+
+def test_gemini_503_retries_twice_then_router_falls_back(monkeypatch):
+    from agent.llm.types import LLMEvent
+
+    calls = []
+    delays = []
+
+    def unavailable(request, timeout):
+        calls.append((request.full_url, timeout))
+        raise urllib.error.HTTPError(
+            request.full_url,
+            503,
+            "Service Unavailable",
+            {},
+            io.BytesIO(b'{"error":{"message":"temporary outage"}}'),
+        )
+
+    class WorkingGroq:
+        name = "groq"
+        model = "test-model"
+
+        def generate(self, _request):
+            yield LLMEvent(type="text_delta", text="Fallback answer.")
+            yield LLMEvent(type="stop")
+
+    monkeypatch.setattr("urllib.request.urlopen", unavailable)
+    monkeypatch.setattr("agent.llm.providers.time.sleep", delays.append)
+    request = LLMRequest([{"role": "user", "content": "hello"}])
+    router = LLMRouter([GeminiProvider("test-model", "http://gemini.test"), WorkingGroq()])
+
+    events = list(router.generate(request))
+
+    assert [event.text for event in events if event.type == "text_delta"] == ["Fallback answer."]
+    assert len(calls) == 3
+    assert delays == [0.1, 0.2]
+    assert router.last_result["status"] == "Fallback to Groq"

@@ -5,12 +5,13 @@ import os
 import wave
 from pathlib import Path
 from types import SimpleNamespace
+from time import monotonic
 
 import pytest
 
 from agent.hardware.audio_alerts import AudioAlerts
 from agent.hardware.camera import CameraFrame, CameraService
-from agent.hardware.camera_stream import CameraStream, _validate_rtsp_url
+from agent.hardware.camera_stream import CameraStream
 from agent.hardware.motion_monitor import MotionMonitor
 from agent.hardware.speaker import Speaker
 from agent.llm.providers import ProviderError, assert_payload_valid, to_gemini_payload, to_openai_payload
@@ -18,19 +19,15 @@ from agent.llm.types import LLMRequest
 from agent.tools import vision_capture
 
 
-def test_camera_stream_is_low_resolution_and_requires_local_rtsp_target():
-    stream = CameraStream(rtsp_url="rtsp://192.168.10.12:8554/cam")
+def test_legacy_camera_stream_delegates_to_single_camera_service():
+    stream = CameraStream()
     command = stream.command("ffmpeg")
 
     assert command[command.index("-video_size") + 1] == "640x480"
     assert command[command.index("-framerate") + 1] == "15"
-    assert command[command.index("-preset") + 1] == "ultrafast"
-    assert command[-1] == "rtsp://192.168.10.12:8554/cam"
-    assert _validate_rtsp_url("rtsp://camera.local:8554/cam")
-    with pytest.raises(ValueError, match="local/private"):
-        _validate_rtsp_url("rtsp://198.51.100.10:8554/cam")
-    with pytest.raises(ValueError, match="credentials"):
-        _validate_rtsp_url("rtsp://user:password@192.168.1.2/cam")
+    assert command[-1] == "pipe:1"
+    with pytest.raises(ValueError, match="removed"):
+        CameraStream(rtsp_url="rtsp://192.168.10.12:8554/cam")
 
 
 def test_active_dashboard_contains_camera_panel():
@@ -110,6 +107,7 @@ def test_camera_stop_terminates_supervised_ffmpeg_process(monkeypatch):
         threading.Event().wait(0.01)
     camera.stop()
     assert process_holder
+    assert len(process_holder) == 1
     assert process_holder[0].poll() is not None
 
 
@@ -124,6 +122,9 @@ def test_mjpeg_api_streams_without_an_agent_job(monkeypatch):
     jpeg = b"\xff\xd8dashboard-frame\xff\xd9"
 
     class FakeCamera:
+        def has_owner(self, _owner):
+            return True
+
         def latest_frame(self):
             return CameraFrame(1, jpeg, monotonic(), 1234.5)
 
@@ -138,7 +139,7 @@ def test_mjpeg_api_streams_without_an_agent_job(monkeypatch):
     thread = threading.Thread(target=httpd.serve_forever)
     thread.start()
     try:
-        request = Request(f"http://127.0.0.1:{httpd.server_port}/api/camera/stream")
+        request = Request(f"http://127.0.0.1:{httpd.server_port}/api/camera/stream?session_id=test")
         with urlopen(request, timeout=3) as response:
             body = response.read()
             assert response.status == 200
@@ -176,6 +177,46 @@ def test_camera_status_is_read_only_and_does_not_start_camera(monkeypatch):
     assert camera.started is False
 
 
+def test_camera_consent_is_bound_to_session_start_and_stop(monkeypatch):
+    import server
+    from agent.hardware.camera import camera_session_owner
+    from tests.test_files_panel import _request
+
+    class FakeCamera:
+        owners = set()
+
+        def acquire(self, owner):
+            self.owners.add(owner)
+            return True
+
+        def release(self, owner):
+            self.owners.discard(owner)
+
+        def has_owner(self, owner):
+            return owner in self.owners
+
+        def is_started(self):
+            return bool(self.owners)
+
+        def health_check(self):
+            return {"running": bool(self.owners), "device_available": True}
+
+    camera = FakeCamera()
+    monkeypatch.setattr(server, "CAMERA", camera)
+
+    status, _, _ = _request("/api/camera/start", method="POST", payload={"session_id": "browser-one"})
+    assert status == 202
+    assert camera.has_owner(camera_session_owner("browser-one"))
+
+    status, _, body = _request("/api/camera/stop", method="POST", payload={"session_id": "browser-two"})
+    assert status == 200
+    assert camera.has_owner(camera_session_owner("browser-one"))
+
+    status, _, _ = _request("/api/camera/stop", method="POST", payload={"session_id": "browser-one"})
+    assert status == 200
+    assert not camera.has_owner(camera_session_owner("browser-one"))
+
+
 
 
 
@@ -211,13 +252,11 @@ def test_motion_monitor_writes_headless_config_and_bounds_snapshots(tmp_path):
 def test_vision_capture_requires_opt_in_and_atomically_writes_jpeg(tmp_path, monkeypatch):
     monkeypatch.setenv("HSX_ENABLE_VISION_CAPTURE", "1")
     destination = tmp_path / "snapshots" / "latest.jpg"
-    monkeypatch.setattr(vision_capture.shutil, "which", lambda binary: "ffmpeg" if binary == "ffmpeg" else None)
-
-    def fake_run(command, **kwargs):
-        Path(command[-1]).write_bytes(b"\xff\xd8frame-data\xff\xd9")
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(vision_capture.subprocess, "run", fake_run)
+    frame = CameraFrame(1, b"\xff\xd8frame-data\xff\xd9", monotonic())
+    monkeypatch.setattr(vision_capture.CAMERA, "health_check", lambda: {"device_available": True})
+    monkeypatch.setattr(vision_capture.CAMERA, "is_started", lambda: True)
+    monkeypatch.setattr(vision_capture.CAMERA, "latest_frame", lambda: frame)
+    monkeypatch.setattr(vision_capture.CAMERA, "wait_for_frame", lambda *_args, **_kwargs: frame)
     result = vision_capture.capture_frame(output_path=destination)
 
     assert result == destination
@@ -233,12 +272,10 @@ def test_vision_capture_rejects_disabled_or_invalid_output(tmp_path, monkeypatch
         vision_capture.capture_frame(output_path=tmp_path / "latest.jpg")
 
     monkeypatch.setenv("HSX_ENABLE_VISION_CAPTURE", "1")
-    monkeypatch.setattr(vision_capture.shutil, "which", lambda _: "ffmpeg")
-    def fake_run(command, **kwargs):
-        Path(command[-1]).write_bytes(b"not-a-jpeg")
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(vision_capture.subprocess, "run", fake_run)
+    monkeypatch.setattr(vision_capture.CAMERA, "health_check", lambda: {"device_available": True})
+    monkeypatch.setattr(vision_capture.CAMERA, "is_started", lambda: True)
+    monkeypatch.setattr(vision_capture.CAMERA, "latest_frame", lambda: CameraFrame(1, b"invalid", monotonic()))
+    monkeypatch.setattr(vision_capture.CAMERA, "wait_for_frame", lambda *_args, **_kwargs: CameraFrame(1, b"invalid", monotonic()))
     with pytest.raises(RuntimeError, match="JPEG"):
         vision_capture.capture_frame(output_path=tmp_path / "latest.jpg")
 
@@ -249,15 +286,52 @@ def test_vision_capture_uses_shared_camera_without_reopening_device(tmp_path, mo
     monkeypatch.setattr(vision_capture.CAMERA, "is_started", lambda: True)
     monkeypatch.setattr(vision_capture.CAMERA, "latest_frame", lambda: CameraFrame(1, b"", 0.0))
     monkeypatch.setattr(vision_capture.CAMERA, "wait_for_frame", lambda *_args, **_kwargs: frame)
-    monkeypatch.setattr(
-        vision_capture.subprocess,
-        "run",
-        lambda *_args, **_kwargs: pytest.fail("shared camera capture must not reopen /dev/video0"),
-    )
-
     destination = tmp_path / "snapshots" / "latest.jpg"
     assert vision_capture.capture_frame(output_path=destination) == destination
     assert destination.read_bytes() == frame.data
+
+
+def test_camera_snapshot_reuses_live_stream_without_approval(tmp_path, monkeypatch):
+    from agent.tools import vision_capture
+
+    jpeg = b"\xff\xd8live-frame\xff\xd9"
+    calls = []
+    frame = CameraFrame(7, jpeg, monotonic())
+    monkeypatch.setattr(vision_capture.CAMERA, "is_started", lambda: True)
+    monkeypatch.setattr(vision_capture.CAMERA, "latest_frame", lambda: frame)
+    monkeypatch.setattr(vision_capture.CAMERA, "wait_for_frame", lambda *_args, **_kwargs: frame)
+    monkeypatch.setattr(vision_capture.CAMERA, "start", lambda: calls.append("start"))
+    monkeypatch.setattr(vision_capture.CAMERA, "stop", lambda: calls.append("stop"))
+    result = vision_capture.camera_snapshot(output_path=tmp_path / "live.jpg")
+    assert result.read_bytes() == jpeg
+    assert calls == []
+
+
+def test_camera_snapshot_starts_and_stops_shared_service_when_off(tmp_path, monkeypatch):
+    from agent.tools import vision_capture
+
+    jpeg = b"\xff\xd8brief-frame\xff\xd9"
+    frame = CameraFrame(1, jpeg, monotonic())
+    state = {"running": False}
+    calls = []
+    monkeypatch.setenv("HSX_ENABLE_VISION_CAPTURE", "1")
+    monkeypatch.setattr(vision_capture.CAMERA, "health_check", lambda: {"device_available": True})
+    monkeypatch.setattr(vision_capture.CAMERA, "is_started", lambda: state["running"])
+    monkeypatch.setattr(vision_capture.CAMERA, "latest_frame", lambda: None)
+    monkeypatch.setattr(vision_capture.CAMERA, "wait_for_frame", lambda *_args, **_kwargs: frame)
+    monkeypatch.setattr(vision_capture.CAMERA, "acquire", lambda _owner: (calls.append("start"), state.update(running=True)))
+    monkeypatch.setattr(vision_capture.CAMERA, "release", lambda _owner: (calls.append("stop"), state.update(running=False)))
+    result = vision_capture.camera_snapshot(output_path=tmp_path / "brief.jpg")
+    assert result.read_bytes() == jpeg
+    assert calls == ["start", "stop"]
+    assert state["running"] is False
+
+
+def test_camera_disabled_reason_names_setting(monkeypatch):
+    from agent.tools import vision_capture
+
+    monkeypatch.delenv("HSX_ENABLE_VISION_CAPTURE", raising=False)
+    assert "HSX_ENABLE_VISION_CAPTURE=1" in vision_capture.disabled_reason()
 
 
 def test_speaker_and_alert_tones_use_bounded_alsa_payloads(tmp_path, monkeypatch):
@@ -340,6 +414,7 @@ def test_visual_orchestrator_uses_ephemeral_image_and_requires_approval(tmp_path
     frame = tmp_path / "latest.jpg"
     frame.write_bytes(b"\xff\xd8frame\xff\xd9")
     monkeypatch.setenv("HSX_ENABLE_VISION_CAPTURE", "1")
+    monkeypatch.setattr(orchestrator.CAMERA if hasattr(orchestrator, "CAMERA") else vision_capture.CAMERA, "health_check", lambda: {"device_available": True})
     monkeypatch.setattr(vision_capture, "capture_frame", lambda: frame)
     monkeypatch.setattr(orchestrator.POLICY, "decide", lambda *args: {"allowed": True})
     monkeypatch.setattr(orchestrator.MEMORY, "prompt_context", lambda _: "")
@@ -381,13 +456,14 @@ def test_visual_orchestrator_does_not_capture_without_policy_approval(monkeypatc
 
     captured = []
     monkeypatch.setenv("HSX_ENABLE_VISION_CAPTURE", "1")
+    monkeypatch.setattr(vision_capture.CAMERA, "health_check", lambda: {"device_available": True})
     monkeypatch.setattr(vision_capture, "capture_frame", lambda: captured.append(True))
     monkeypatch.setattr(orchestrator.POLICY, "decide", lambda *args: {"allowed": False})
     monkeypatch.setattr(orchestrator.MEMORY, "record_message", lambda *args: None)
 
     answer, _ = orchestrator.run_agent("What do you see?", [], [], {})
 
-    assert "confirmation" in answer
+    assert "permission" in answer
     assert captured == []
 
 

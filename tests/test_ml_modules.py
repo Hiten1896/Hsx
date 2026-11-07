@@ -460,7 +460,6 @@ def test_orchestrator_queues_uncertain_intent_and_prefers_cloud(monkeypatch, tmp
         [],
         [{
             "name": "lookup",
-            "risk": "safe",
             "input_schema": {
                 "type": "object",
                 "properties": {"query": {"type": "string"}},

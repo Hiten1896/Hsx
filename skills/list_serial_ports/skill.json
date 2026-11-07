@@ -1,1 +1,9 @@
-{"name":"list_serial_ports","description":"List serial ports connected to the local machine.","risk":"safe","input_schema":{"type":"object","properties":{},"required":[]}}
+{
+  "name": "list_serial_ports",
+  "description": "List serial ports connected to the local machine.",
+  "input_schema": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  }
+}

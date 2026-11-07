@@ -1,0 +1,13 @@
+ask_first:
+  - delete_owner_files
+  - overwrite_owner_files
+  - sudo
+  - system_services
+  - shutdown_reboot
+  - pipe_to_shell
+  - read_secrets
+  - camera_start
+  - microphone_start
+  - install_packages
+  - external_services
+always_allow: []

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,14 @@ def atomic_write_json(path: Path, payload: Any) -> None:
             destination.write("\n")
             destination.flush()
             os.fsync(destination.fileno())
-        temporary_path.replace(path)
+        for attempt in range(5):
+            try:
+                temporary_path.replace(path)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.02 * (attempt + 1))
     except Exception:
         temporary_path.unlink(missing_ok=True)
         raise

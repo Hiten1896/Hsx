@@ -44,6 +44,7 @@ def test_gemini_registered_skills_have_complete_schemas_and_real_prompt(monkeypa
     assert len(payload["tools"][0]["functionDeclarations"]) == len(skills)
     assert "machine facts must come only from tool results" in payload["systemInstruction"]["parts"][0]["text"]
     assert_payload_valid("gemini", payload)
+    assert_payload_valid("groq", to_openai_payload(router.request, "test-model"))
 
 
 def test_gemini_payload_uses_native_parts_for_text_turns():
@@ -83,7 +84,9 @@ def test_gemini_replays_thought_signature_on_original_parts_and_ids():
     assert_payload_valid("gemini", payload)
 
 
-def test_gemini_summarizes_legacy_unsigned_tool_turns():
+def test_gemini_uses_documented_signature_for_legacy_unsigned_tool_turns():
+    from agent.llm.providers import LEGACY_GEMINI_THOUGHT_SIGNATURE
+
     payload = to_gemini_payload(LLMRequest([
         {"role": "assistant", "content": [
             {"type": "tool_use", "name": "system_info", "input": {}, "id": "old-call"},
@@ -93,10 +96,17 @@ def test_gemini_summarizes_legacy_unsigned_tool_turns():
         ]},
     ]))
 
-    assert all("functionCall" not in part and "functionResponse" not in part
-               for content in payload["contents"] for part in content["parts"])
-    assert "system_info" in json.dumps(payload)
-    assert "Old CPU" in json.dumps(payload)
+    assert payload["contents"][0]["parts"] == [{
+        "functionCall": {"name": "system_info", "args": {}, "id": "old-call"},
+        "thoughtSignature": LEGACY_GEMINI_THOUGHT_SIGNATURE,
+    }]
+    assert payload["contents"][1]["parts"] == [{
+        "functionResponse": {
+            "name": "system_info",
+            "response": {"cpu": "Old CPU"},
+            "id": "old-call",
+        },
+    }]
 
 
 def test_gemini_captures_response_part_thought_signature():

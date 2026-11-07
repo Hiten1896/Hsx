@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import heapq
+import io
 import logging
 import os
 import re
-import shutil
 import subprocess
 import threading
 from datetime import UTC, datetime
@@ -24,7 +24,7 @@ def _enabled(value: str | None) -> bool:
 
 
 class MotionMonitor:
-    """Supervise headless Motion and index only its local snapshots."""
+    """Detect frame changes from the shared CameraService without opening a device."""
 
     def __init__(
         self,
@@ -51,6 +51,7 @@ class MotionMonitor:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._process: subprocess.Popen | None = None
+        self._camera_owned = False
         self._lock = threading.RLock()
         self._seen: set[str] = set()
         self._last_error = ""
@@ -91,13 +92,16 @@ class MotionMonitor:
         temporary.replace(self.config_path)
 
     def health_check(self) -> dict:
+        from agent.hardware.camera import CAMERA
+
         with self._lock:
-            process = self._process
+            running = self._thread is not None and self._thread.is_alive()
+            camera = CAMERA.health_check()
             return {
-                "running": process is not None and process.poll() is None,
-                "device_available": os.path.exists(self.device),
-                "pid": process.pid if process is not None and process.poll() is None else None,
-                "last_error": self._last_error,
+                "running": running,
+                "device_available": camera.get("device_available", False),
+                "pid": CAMERA.health_check().get("pid"),
+                "last_error": self._last_error or camera.get("last_error", ""),
             }
 
     def start(self) -> bool:
@@ -132,6 +136,11 @@ class MotionMonitor:
         if process is not None and process.poll() is None:
             process.kill()
             process.wait(timeout=timeout)
+        if self._camera_owned:
+            from agent.hardware.camera import CAMERA
+
+            CAMERA.release("motion-monitor", timeout=timeout)
+            self._camera_owned = False
 
     def _record_new_snapshots(self) -> None:
         recent_with_times: list[tuple[int, str, Path]] = []
@@ -205,55 +214,42 @@ class MotionMonitor:
                     LOGGER.exception("Could not publish Motion event %s.", event["snapshot"])
 
     def _supervise(self) -> None:
-        binary = shutil.which("motion")
-        if binary is None:
-            self._last_error = "motion is not installed."
-            LOGGER.error("Motion monitor is disabled: install motion.")
+        try:
+            from PIL import Image, ImageChops, ImageStat
+        except ImportError:
+            self._last_error = "Frame motion needs Pillow. Use the approved Pillow setup recipe."
             return
+
+        from agent.hardware.camera import CAMERA
+
+        self._camera_owned = True
+        CAMERA.acquire("motion-monitor")
+        previous = None
+        last_version = -1
+        self._last_error = ""
         while not self._stop.is_set():
-            self._record_new_snapshots()
-            if not os.path.exists(self.device):
-                self._last_error = f"Camera device is unavailable: {self.device}"
-                LOGGER.warning("%s", self._last_error)
-                self._stop.wait(self.restart_seconds)
-                continue
-            try:
-                process = subprocess.Popen(
-                    [binary, "-n", "-c", str(self.config_path)],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    close_fds=True,
-                )
-                with self._lock:
-                    self._process = process
-                while not self._stop.wait(self.poll_seconds):
-                    self._record_new_snapshots()
-                    if process.poll() is not None:
-                        self._last_error = f"motion exited with status {process.returncode}."
-                        LOGGER.warning("%s", self._last_error)
-                        break
-                    if not os.path.exists(self.device):
-                        self._last_error = f"Camera device disconnected: {self.device}"
-                        LOGGER.warning("%s", self._last_error)
-                        process.terminate()
-                        break
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
-            except OSError:
-                self._last_error = "Could not start the Motion monitor."
-                LOGGER.exception("%s", self._last_error)
-            finally:
-                with self._lock:
-                    self._process = None
-            self._record_new_snapshots()
-            if not self._stop.is_set():
-                self._stop.wait(self.restart_seconds)
+            frame = CAMERA.latest_frame()
+            if frame and frame.version != last_version:
+                last_version = frame.version
+                try:
+                    current = Image.open(io.BytesIO(frame.data)).convert("L").resize((80, 60))
+                    if previous is not None:
+                        difference = ImageStat.Stat(ImageChops.difference(previous, current)).mean[0]
+                        if difference >= 18:
+                            self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+                            destination = self.snapshot_dir / f"motion-{frame.version:012d}.jpg"
+                            destination.write_bytes(frame.data)
+                            self._record_new_snapshots()
+                    previous = current
+                except (OSError, ValueError):
+                    LOGGER.exception("Camera frame motion analysis failed.")
+            status = CAMERA.health_check()
+            if not status.get("running"):
+                self._last_error = str(status.get("last_error") or "CameraService is not running.")
+            self._stop.wait(self.poll_seconds)
+        if self._camera_owned:
+            CAMERA.release("motion-monitor")
+            self._camera_owned = False
 
 
 MOTION_MONITOR = MotionMonitor()

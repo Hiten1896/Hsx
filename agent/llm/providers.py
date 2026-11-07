@@ -25,6 +25,7 @@ class ProviderError(RuntimeError):
 
 
 LOGGER = logging.getLogger("hsx.llm.providers")
+LEGACY_GEMINI_THOUGHT_SIGNATURE = "context_engineering_is_the_way_to_go"
 _PROVIDER_ERROR_LOG = Path(__file__).resolve().parents[2] / "logs" / "provider-errors.jsonl"
 _PROVIDER_ERROR_LOG_LOCK = threading.Lock()
 
@@ -544,8 +545,22 @@ class JSONHTTPProvider(Provider):
 
         return json.dumps(scrub(parsed), ensure_ascii=False)
 
+    def _open_with_503_retry(self, request: urllib.request.Request):
+        for retry in range(3):
+            try:
+                return urllib.request.urlopen(request, timeout=30)
+            except urllib.error.HTTPError as error:
+                if error.code != 503 or retry == 2:
+                    raise
+                error.close()
+                delay = 0.1 * (retry + 1)
+                LOGGER.warning("%s provider returned HTTP 503; retrying in %.1f seconds.", self.name, delay)
+                time.sleep(delay)
+
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if self.name == "gemini" or os.getenv("HSX_DEBUG") == "1":
+        if self.name == "gemini" or os.getenv("HSX_DEBUG") == "1" or self.name in {
+            "groq", "grok", "openrouter", "openai", "openai_compatible",
+        }:
             try:
                 assert_payload_valid(self.name, payload)
             except ValueError as error:
@@ -567,7 +582,7 @@ class JSONHTTPProvider(Provider):
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with self._open_with_503_retry(request) as response:
                 status = getattr(response, "status", 200)
                 body = response.read().decode("utf-8", errors="replace")
                 try:
@@ -722,9 +737,6 @@ def to_gemini_payload(request: LLMRequest) -> dict[str, Any]:
                 provider_meta = block.get("provider_meta") or {}
                 request_id = provider_meta.get("gemini_function_call_id", call_id)
                 tool_request_ids[call_id] = request_id if isinstance(request_id, str) and request_id else None
-                if call_id in legacy_calls:
-                    parts.append({"text": f"Previous unsigned tool call: {function_name}."})
-                    continue
                 arguments = block.get("input", {})
                 function_call = {
                     "name": function_name,
@@ -735,23 +747,22 @@ def to_gemini_payload(request: LLMRequest) -> dict[str, Any]:
                     function_call["id"] = request_id
                 part = {"functionCall": function_call}
                 signature = (block.get("provider_meta") or {}).get("gemini_thought_signature")
+                if call_id in legacy_calls:
+                    signature = LEGACY_GEMINI_THOUGHT_SIGNATURE
                 if isinstance(signature, str) and signature:
                     part["thoughtSignature"] = signature
                 parts.append(part)
             elif block_type == "tool_result":
                 call_id = block.get("tool_use_id", "")
                 name = tool_names.get(call_id, legacy_calls.get(call_id, block.get("name", "")))
-                if call_id in legacy_calls:
-                    parts.append({"text": f"Previous tool result for {name}: {_gemini_text(block.get('content', ''))}"})
-                else:
-                    response = {
-                        "name": name if isinstance(name, str) and name else "unknown_function",
-                        "response": _gemini_response_value(block.get("content", "")),
-                    }
-                    request_id = tool_request_ids.get(call_id, call_id)
-                    if isinstance(request_id, str) and request_id:
-                        response["id"] = request_id
-                    parts.append({"functionResponse": response})
+                response = {
+                    "name": name if isinstance(name, str) and name else "unknown_function",
+                    "response": _gemini_response_value(block.get("content", "")),
+                }
+                request_id = tool_request_ids.get(call_id, call_id)
+                if isinstance(request_id, str) and request_id:
+                    response["id"] = request_id
+                parts.append({"functionResponse": response})
             elif block_type == "gemini_part":
                 part = block.get("part")
                 if isinstance(part, dict):

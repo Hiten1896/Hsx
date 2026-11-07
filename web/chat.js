@@ -67,6 +67,7 @@ const elements = {
   fileInput: document.getElementById('file-input'),
   attachmentList: document.getElementById('attachment-list'),
   composerStatus: document.getElementById('composer-status'),
+  providerNotice: document.getElementById('provider-notice'),
   dropHint: document.getElementById('drop-hint'),
   sidebar: document.getElementById('app-sidebar'),
   cameraSidebar: document.getElementById('camera-sidebar'),
@@ -183,7 +184,7 @@ function renderChatHistory() {
     const empty = document.createElement('p');
     empty.className = 'artifacts-empty';
     empty.textContent = document.getElementById('chat-history-search')?.value.trim()
-      ? 'No matching chats.' : 'No saved chats yet.';
+      ? 'No matching chats.' : 'No chats yet. Start with New chat.';
     list.replaceChildren(empty);
     return;
   }
@@ -342,6 +343,7 @@ async function restoreConversation(id) {
 
 async function switchChatSession(nextSessionId) {
   if (nextSessionId === sessionId) return;
+  if (cameraEnabled) stopCameraAndStandby();
   saveCurrentChatSession();
   const previousSessionId = sessionId;
   sessionId = nextSessionId;
@@ -378,15 +380,16 @@ function hasComposerContent() {
 }
 
 function updateSendButton() {
-  elements.send.hidden = false;
-  elements.send.disabled = !hasComposerContent();
+  elements.send.hidden = submitting;
+  elements.send.disabled = submitting || !hasComposerContent();
+  elements.stop.hidden = !submitting;
 }
 
 function setConnection(id, labelId, value, state) {
   const dot = document.getElementById(id);
   const label = document.getElementById(labelId);
   if (dot) dot.dataset.state = state;
-  if (label) label.textContent = value;
+  if (label) { label.textContent = value; label.title = value; }
 }
 
 function showEmergencyStop(stopped) {
@@ -587,11 +590,375 @@ function appendMessage(role, text, jobId = '', options = {}) {
 
 function appendActivity(label) {
   const fragment = elements.activityTemplate.content.cloneNode(true);
-  const activity = fragment.querySelector('.activity-card');
-  activity.lastElementChild.textContent = label;
+  const activity = fragment.querySelector('.activity-trace');
+  activity.querySelector('.activity-thinking span').textContent = label.replace(/…$/, '');
+  const summary = activity.querySelector('.activity-group-summary');
+  summary.addEventListener('click', () => {
+    activity.dataset.groupsExpanded = String(summary.getAttribute('aria-expanded') !== 'true');
+    updateActivityGrouping(activity);
+  });
+  const showSteps = activity.querySelector('.activity-show-steps');
+  showSteps.addEventListener('click', () => {
+    activity.dataset.groupsExpanded = String(showSteps.getAttribute('aria-expanded') !== 'true');
+    updateActivityGrouping(activity);
+  });
   elements.stream.appendChild(fragment);
   scrollToLatest();
   return activity;
+}
+
+const activityImageObjectUrls = new Set();
+
+function activityIcon(name, extraClass = '') {
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.classList.add('activity-icon');
+  if (extraClass) icon.classList.add(extraClass);
+  icon.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use.setAttribute('href', `#activity-icon-${name || 'gear'}`);
+  icon.append(use);
+  return icon;
+}
+
+function appendActionButton(parent, label, action) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'activity-detail-action';
+  button.textContent = label;
+  button.addEventListener('click', action);
+  parent.append(button);
+  return button;
+}
+
+function activityDuration(value) {
+  const seconds = Math.max(0, Math.round(Number(value) / 1000));
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function toggleActivityDetails(step, toggle, details, expanded = !details.hidden) {
+  details.hidden = !expanded;
+  toggle.setAttribute('aria-expanded', String(expanded));
+  step.dataset.expanded = String(expanded);
+}
+
+async function openActivityFileViewer(path, imageId = '') {
+  const dialog = document.getElementById('activity-file-viewer');
+  const title = document.getElementById('activity-viewer-title');
+  const content = document.getElementById('activity-viewer-content');
+  title.textContent = path || 'File preview';
+  content.replaceChildren();
+  try {
+    if (imageId) {
+      const response = await apiFetch(`/api/activity/image?id=${encodeURIComponent(imageId)}&thumbnail=0`);
+      if (!response.ok) throw new Error('Image preview is unavailable.');
+      const image = document.createElement('img');
+      image.alt = path || 'Activity image';
+      image.src = URL.createObjectURL(await response.blob());
+      activityImageObjectUrls.add(image.src);
+      content.append(image);
+    } else {
+      const query = new URLSearchParams({ path });
+      const response = await apiFetch(`/api/files/preview?${query}`);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'File preview is unavailable.');
+      const pre = document.createElement('pre');
+      pre.textContent = result.content || '';
+      content.append(pre);
+    }
+    if (!dialog.open) dialog.showModal();
+  } catch (error) {
+    const message = document.createElement('p');
+    message.textContent = error.message || 'File preview is unavailable.';
+    content.replaceChildren(message);
+    if (!dialog.open) dialog.showModal();
+  }
+}
+
+function appendDiffCard(details, data) {
+  const diff = data.diff;
+  const card = document.createElement('section');
+  card.className = 'activity-diff-card';
+  const header = document.createElement('header');
+  const file = document.createElement('button');
+  file.type = 'button';
+  file.className = 'activity-file-link';
+  file.textContent = diff.path || data.file_path || data.target;
+  file.title = file.textContent;
+  file.addEventListener('click', () => openActivityFileViewer(diff.path || data.file_path));
+  const counts = document.createElement('span');
+  counts.className = 'activity-diff-counts';
+  counts.append(
+    Object.assign(document.createElement('span'), { className: 'activity-added-count', textContent: `+${diff.added || 0}` }),
+    document.createTextNode(' '),
+    Object.assign(document.createElement('span'), { className: 'activity-removed-count', textContent: `-${diff.removed || 0}` }),
+  );
+  header.append(file, counts);
+  appendActionButton(header, 'Copy', async () => {
+    const text = (diff.hunks || []).flatMap((hunk) => [
+      hunk.header,
+      ...(hunk.lines || []).map((line) => `${line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' '}${line.text}`),
+    ]).join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      details.querySelector('.activity-copy-status').textContent = 'Could not copy the diff.';
+      return;
+    }
+    details.querySelector('.activity-copy-status').textContent = 'Diff copied.';
+  });
+  card.append(header);
+  if (diff.binary) {
+    const binary = document.createElement('p');
+    binary.textContent = `Binary file, ${Math.max(1, Math.round((diff.size_bytes || 0) / 1024))} KB`;
+    card.append(binary);
+    appendActionButton(card, 'Open', () => openActivityFileViewer(diff.path || data.file_path));
+  } else {
+    const list = document.createElement('div');
+    list.className = 'activity-diff-lines';
+    const rows = (diff.hunks || []).flatMap((hunk) => [
+      { kind: 'header', text: hunk.header },
+      ...(hunk.lines || []).map((line) => ({ ...line, kind: line.kind })),
+    ]);
+    rows.forEach((line, index) => {
+      const row = document.createElement('div');
+      row.className = `activity-diff-line ${line.kind}`;
+      if (line.kind === 'header') {
+        row.textContent = line.text;
+      } else {
+        const number = document.createElement('span');
+        number.className = 'activity-diff-line-number';
+        number.textContent = line.kind === 'added'
+          ? String(line.new_line || '')
+          : line.kind === 'removed'
+            ? String(line.old_line || '')
+            : `${line.old_line || ''}:${line.new_line || ''}`;
+        const value = document.createElement('code');
+        const prefix = line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' ';
+        value.textContent = `${prefix}${line.text || ''}`;
+        row.append(number, value);
+      }
+      if (index >= 200) row.hidden = true;
+      list.append(row);
+    });
+    card.append(list);
+    if (rows.length > 200) {
+      appendActionButton(card, 'Show more', (event) => {
+        const hiddenRows = [...list.children].filter((row) => row.hidden);
+        const showMore = hiddenRows.length > 0;
+        hiddenRows.forEach((row) => { row.hidden = !showMore; });
+        event.currentTarget.textContent = showMore ? 'Show less' : 'Show more';
+      });
+    }
+    if (diff.truncated) {
+      const notice = document.createElement('p');
+      notice.textContent = 'The diff reached its storage limit; additional lines are not available.';
+      card.append(notice);
+    }
+  }
+  const copyStatus = document.createElement('span');
+  copyStatus.className = 'activity-copy-status';
+  copyStatus.setAttribute('role', 'status');
+  card.append(copyStatus);
+  details.append(card);
+}
+
+function appendActivityImages(details, images) {
+  if (!Array.isArray(images) || !images.length) return;
+  const gallery = document.createElement('div');
+  gallery.className = 'activity-image-gallery';
+  images.slice(0, 5).forEach((item) => {
+    if (!item || typeof item.id !== 'string') return;
+    const figure = document.createElement('figure');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'activity-image-open';
+    button.setAttribute('aria-label', `View image ${item.path || ''}`);
+    const image = document.createElement('img');
+    image.alt = item.path || 'Viewed image';
+    button.append(image);
+    button.addEventListener('click', () => openActivityFileViewer(item.path, item.id));
+    const caption = document.createElement('figcaption');
+    caption.textContent = item.path || 'Image';
+    figure.append(button, caption);
+    gallery.append(figure);
+    apiFetch(`/api/activity/image?id=${encodeURIComponent(item.id)}&thumbnail=1`)
+      .then((response) => {
+        if (!response.ok) throw new Error('Thumbnail unavailable.');
+        return response.blob();
+      })
+      .then((blob) => {
+        image.src = URL.createObjectURL(blob);
+        activityImageObjectUrls.add(image.src);
+      })
+      .catch(() => { image.alt = `Preview unavailable: ${item.path || 'image'}`; });
+  });
+  if (images.length > 5) {
+    const more = document.createElement('span');
+    more.className = 'activity-image-more';
+    more.textContent = `+${images.length - 5} more`;
+    gallery.append(more);
+  }
+  details.append(gallery);
+}
+
+function updateActivityGrouping(trace) {
+  const completed = [...trace.querySelectorAll('.activity-step[data-status="completed"]')];
+  const runningOrFailed = [...trace.querySelectorAll('.activity-step')]
+    .filter((step) => ['running', 'failed', 'waiting'].includes(step.dataset.status));
+  const summary = trace.querySelector('.activity-group-summary');
+  const toggle = trace.querySelector('.activity-show-steps');
+  if (completed.length > 6) {
+    summary.hidden = false;
+    summary.textContent = `${completed.every((step) => step.dataset.past === 'Ran') ? 'Ran' : 'Completed'} ${completed.length} steps`;
+    const expanded = trace.dataset.groupsExpanded === 'true';
+    summary.setAttribute('aria-expanded', String(expanded));
+    completed.forEach((step) => { step.hidden = !expanded; });
+    runningOrFailed.forEach((step) => { step.hidden = false; });
+    toggle.hidden = false;
+    toggle.textContent = expanded ? 'Show fewer steps' : 'Show steps';
+    toggle.setAttribute('aria-expanded', String(expanded));
+  } else {
+    summary.hidden = true;
+    completed.forEach((step) => { step.hidden = false; });
+    runningOrFailed.forEach((step) => { step.hidden = false; });
+    toggle.hidden = true;
+  }
+}
+
+function renderActivityEvent(trace, event, data) {
+  if (!trace || !data) return;
+  if (event === 'activity_narration') {
+    const narration = document.createElement('p');
+    narration.className = 'activity-narration';
+    narration.textContent = data.text || '';
+    trace.querySelector('.activity-steps').append(narration);
+    return;
+  }
+  if (!['tool_start', 'tool_end'].includes(event)) return;
+  trace.querySelector('.activity-thinking')?.remove();
+  const steps = trace.querySelector('.activity-steps');
+  let step = [...steps.querySelectorAll('.activity-step')]
+    .find((item) => item.dataset.toolCallId === data.tool_call_id);
+  if (!step) {
+    step = document.createElement('article');
+    step.className = 'activity-step';
+    step.dataset.toolCallId = data.tool_call_id || '';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'activity-row-toggle';
+    toggle.setAttribute('aria-expanded', 'false');
+    const icon = activityIcon(data.icon);
+    icon.classList.add('activity-step-icon');
+    const verb = document.createElement('span');
+    verb.className = 'activity-verb';
+    const target = document.createElement('span');
+    target.className = 'activity-target-chip';
+    const spinner = activityIcon('spinner', 'activity-running-spinner');
+    const metadata = document.createElement('span');
+    metadata.className = 'activity-metadata';
+    const changes = document.createElement('span');
+    changes.className = 'activity-change-count';
+    const chevron = activityIcon('chevron', 'activity-chevron');
+    toggle.append(icon, verb, target, spinner, metadata, changes, chevron);
+    const details = document.createElement('div');
+    details.className = 'activity-details';
+    details.hidden = true;
+    toggle.addEventListener('click', () => {
+      toggleActivityDetails(step, toggle, details);
+    });
+    step.append(toggle, details);
+    steps.append(step);
+  }
+  const toggle = step.querySelector('.activity-row-toggle');
+  const details = step.querySelector('.activity-details');
+  const currentExpanded = toggle.getAttribute('aria-expanded') === 'true';
+  step.dataset.status = data.status || (event === 'tool_start' ? 'running' : 'completed');
+  step.dataset.past = data.past || '';
+  toggle.setAttribute('aria-label', `${event === 'tool_start' ? data.present : data.past} ${data.target || data.tool || ''}`);
+  step.querySelector('.activity-step-icon use').setAttribute('href', `#activity-icon-${data.icon || 'gear'}`);
+  step.querySelector('.activity-verb').textContent = event === 'tool_start' ? data.present || 'Working' : data.status === 'failed' ? 'Failed' : data.past || 'Completed';
+  const target = step.querySelector('.activity-target-chip');
+  target.textContent = data.target || data.tool || 'request';
+  target.title = data.file_path || data.target || data.tool || '';
+  step.querySelector('.activity-running-spinner').hidden = event !== 'tool_start';
+  const diff = data.diff;
+  step.querySelector('.activity-metadata').textContent = event === 'tool_start'
+    ? ''
+    : activityDuration(data.duration_ms || 0);
+  const changeCount = step.querySelector('.activity-change-count');
+  changeCount.replaceChildren();
+  if (diff && !diff.binary) {
+    const added = document.createElement('span');
+    added.className = 'activity-added-count';
+    added.textContent = `+${diff.added || 0}`;
+    const removed = document.createElement('span');
+    removed.className = 'activity-removed-count';
+    removed.textContent = `-${diff.removed || 0}`;
+    changeCount.append(added, document.createTextNode(' '), removed);
+  }
+  step.classList.toggle('is-failed', step.dataset.status === 'failed');
+  if (event === 'tool_end') {
+    details.replaceChildren();
+    if (diff) {
+      appendDiffCard(details, data);
+    } else if (data.icon === 'terminal') {
+      const command = document.createElement('pre');
+      command.className = 'activity-command';
+      command.textContent = data.details?.command || data.target || '';
+      details.append(command);
+      appendActionButton(details, 'Copy command', async () => {
+        await navigator.clipboard.writeText(command.textContent);
+      });
+      const exit = document.createElement('p');
+      exit.textContent = `Exit status: ${data.details?.exit_status ?? (data.status === 'failed' ? 'failed' : 'unknown')}`;
+      details.append(exit);
+      const output = document.createElement('pre');
+      output.className = 'activity-command-output';
+      const lines = data.details?.output_lines || [];
+      output.textContent = lines.slice(0, 200).join('\n');
+      details.append(output);
+      if (lines.length > 200) {
+        appendActionButton(details, 'Show more', (button) => {
+          output.textContent = button.currentTarget.textContent === 'Show more'
+            ? lines.join('\n')
+            : lines.slice(0, 200).join('\n');
+          button.currentTarget.textContent = button.currentTarget.textContent === 'Show more' ? 'Show less' : 'Show more';
+        });
+      }
+    } else {
+      const tool = document.createElement('p');
+      tool.textContent = `Tool: ${data.tool || 'unknown'}`;
+      const argumentsBlock = document.createElement('pre');
+      argumentsBlock.textContent = JSON.stringify(data.details?.arguments || {}, null, 2);
+      const output = document.createElement('p');
+      output.textContent = data.output || 'No additional output.';
+      details.append(tool, argumentsBlock, output);
+    }
+    appendActivityImages(details, data.images);
+    if (data.file_path && !diff) {
+      const link = document.createElement('button');
+      link.type = 'button';
+      link.className = 'activity-file-link';
+      link.textContent = data.file_path;
+      link.addEventListener('click', () => openActivityFileViewer(data.file_path));
+      details.append(link);
+    }
+    if (step.dataset.status === 'failed') {
+      appendActionButton(details, 'Retry step', () => retryActivityStep(data, trace));
+    }
+    toggleActivityDetails(step, toggle, details, step.dataset.status === 'failed' || step.dataset.status === 'waiting' || currentExpanded);
+  }
+  updateActivityGrouping(trace);
+}
+
+async function retryActivityStep(data, trace) {
+  const prompt = trace?.dataset.retryPrompt || elements.prompt.value.trim();
+  if (!prompt) {
+    elements.composerStatus.textContent = 'Restore the original request before retrying this step.';
+    return;
+  }
+  elements.prompt.value = prompt;
+  await submitPrompt();
 }
 
 async function submitFeedback(article, feedback) {
@@ -652,6 +1019,80 @@ async function refreshFeedbackSettings() {
     document.getElementById('feedback-storage-note').textContent = settings.storage;
   } catch {
     document.getElementById('feedback-count').textContent = 'Feedback settings unavailable';
+  }
+}
+
+const permissionActionLabels = {
+  delete_owner_files: 'Delete owner files',
+  overwrite_owner_files: 'Overwrite owner files',
+  sudo: 'Use sudo or root',
+  system_services: 'Edit system services or /etc',
+  shutdown_reboot: 'Shut down or reboot',
+  pipe_to_shell: 'Pipe curl or wget into a shell',
+  read_secrets: 'Read .env or secret files',
+  camera_start: 'Start the camera from chat',
+  microphone_start: 'Start the microphone from chat',
+  install_packages: 'Install packages into the Hsx environment',
+  external_services: 'Send data to services outside the configured LLM',
+};
+
+async function refreshPermissionSettings() {
+  const actions = document.getElementById('permission-actions');
+  const saved = document.getElementById('always-allow-list');
+  try {
+    const response = await apiFetch(apiContract.endpoints.permissions);
+    if (!response.ok) throw new Error('Permission settings are unavailable.');
+    const policy = await response.json();
+    actions.replaceChildren();
+    Object.entries(permissionActionLabels).forEach(([name, label]) => {
+      const row = document.createElement('label');
+      row.className = 'settings-check permission-action-row';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = policy.ask_first.includes(name);
+      checkbox.addEventListener('change', async () => {
+        checkbox.disabled = true;
+        try {
+          await apiFetch(apiContract.endpoints.permissions, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: name, enabled: checkbox.checked }),
+          });
+          await refreshPermissionSettings();
+        } catch {
+          checkbox.checked = !checkbox.checked;
+        }
+      });
+      row.append(checkbox, document.createTextNode(label));
+      actions.append(row);
+    });
+    saved.replaceChildren();
+    if (!policy.always_allow.length) {
+      const empty = document.createElement('p');
+      empty.textContent = 'No saved rules.';
+      saved.append(empty);
+    }
+    policy.always_allow.forEach((pattern) => {
+      const row = document.createElement('div');
+      row.className = 'permission-action-row';
+      const label = document.createElement('span');
+      label.textContent = pattern;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'settings-action';
+      remove.textContent = 'Remove';
+      remove.setAttribute('aria-label', `Remove always allow rule: ${pattern}`);
+      remove.addEventListener('click', async () => {
+        await apiFetch(apiContract.endpoints.permissions, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ remove_always_allow: pattern }),
+        });
+        await refreshPermissionSettings();
+      });
+      row.append(label, remove);
+      saved.append(row);
+    });
+  } catch {
+    actions.textContent = 'Permission policy is unavailable.';
   }
 }
 
@@ -717,7 +1158,6 @@ async function readStream(response, onEvent) {
 function setBusy(isBusy) {
   submitting = isBusy;
   updateSendButton();
-  elements.stop.hidden = !isBusy;
   if (!isBusy) queueConversationSave();
   if (chatWatchdog) window.clearTimeout(chatWatchdog);
   chatWatchdog = null;
@@ -897,28 +1337,6 @@ function setupVoiceInput() {
   });
 }
 
-function setupComposerOptions() {
-  const button = document.getElementById('composer-options-button');
-  const menu = document.getElementById('composer-options-menu');
-  const closeMenu = () => {
-    menu.hidden = true;
-    button.setAttribute('aria-expanded', 'false');
-  };
-  button.addEventListener('click', () => {
-    menu.hidden = !menu.hidden;
-    button.setAttribute('aria-expanded', String(!menu.hidden));
-  });
-  menu.addEventListener('click', (event) => {
-    const action = event.target.closest('[data-composer-action]')?.dataset.composerAction;
-    if (action === 'attach') elements.fileInput.click();
-    if (action === 'camera') document.getElementById('camera-toggle').click();
-    closeMenu();
-  });
-  document.addEventListener('click', (event) => {
-    if (!event.target.closest('.composer-options')) closeMenu();
-  });
-}
-
 async function answerPendingQuestion(message, signal) {
   const jobId = pendingQuestion.id;
   const approvalPending = ['waiting_for_approval', 'permission_request'].includes(pendingQuestion.state);
@@ -964,15 +1382,15 @@ function appendApprovalCard(job) {
   card.setAttribute('aria-label', 'Hsx action approval');
   const title = document.createElement('h3');
   title.id = 'permission-dialog-title';
-  title.textContent = isPermissionRequest ? 'Permission needed' : 'Hsx wants to:';
+  title.textContent = isPermissionRequest ? 'Permission needed' : approval.request_type === 'package_install' ? 'Hsx can add this ability' : 'Hsx wants to:';
   const summary = document.createElement('p');
   summary.textContent = approval.summary || 'Run a tool';
   const why = document.createElement('p');
   why.textContent = `Why: ${approval.why || 'This action needs your approval.'}`;
-  const risk = document.createElement('p');
-  risk.textContent = isPermissionRequest
+  const policyNote = document.createElement('p');
+  policyNote.textContent = isPermissionRequest
     ? 'Elevated execution is limited to a non-interactive sudo attempt. Your OS password is never requested or stored.'
-    : `Risk: ${approval.risk || 'UNKNOWN'}${approval.risk === 'DANGEROUS' ? ' (cannot be undone)' : ''}`;
+    : approval.action_pattern ? `Permission rule: ${approval.action_pattern}` : '';
   const details = document.createElement('details');
   const detailsSummary = document.createElement('summary');
   detailsSummary.textContent = 'Details';
@@ -981,11 +1399,12 @@ function appendApprovalCard(job) {
   details.append(detailsSummary, detailsText);
   const actions = document.createElement('div');
   actions.className = 'approval-actions';
-  for (const [label, answer] of [
-    ['Accept', 'accept_once'],
-    ['Accept for this session', 'accept_session'],
-    ['Reject', 'reject'],
-  ]) {
+  const choices = [
+    [approval.request_type === 'package_install' ? 'Allow' : 'Allow once', 'accept_once'],
+    ['Always allow this', 'always_allow'],
+    [approval.request_type === 'package_install' ? 'Not now' : 'Deny', 'reject'],
+  ];
+  for (const [label, answer] of choices) {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = label;
@@ -1009,7 +1428,8 @@ function appendApprovalCard(job) {
     });
     actions.appendChild(button);
   }
-  card.append(title, summary, why, risk, details);
+  if (policyNote.textContent) card.append(title, summary, why, policyNote, details);
+  else card.append(title, summary, why, details);
   if (job.error) {
     const error = document.createElement('p');
     error.className = 'approval-error';
@@ -1080,6 +1500,7 @@ async function submitPrompt() {
     try {
       await answerPendingQuestion(requestMessage, controller.signal);
       elements.prompt.value = '';
+      elements.prompt.dispatchEvent(new Event('input', { bubbles: true }));
       uploadedAttachments = [];
       persistAttachments();
       renderAttachments();
@@ -1123,13 +1544,20 @@ async function submitPrompt() {
     persistAttachments();
     renderAttachments();
     elements.prompt.value = '';
+    elements.prompt.dispatchEvent(new Event('input', { bubbles: true }));
     updateSendButton();
     activity = appendActivity('Thinking…');
+    activity.dataset.retryPrompt = requestMessage;
     setBusy(true);
     await readStream(response, ({ event, data }) => {
       if (event === 'message_start') {
         activeRunId = data.run_id || '';
         setBusy(true);
+      } else if (event === 'provider_notice') {
+        elements.providerNotice.textContent = data.message || '';
+        elements.providerNotice.hidden = !data.message;
+      } else if (['tool_start', 'tool_end', 'activity_narration'].includes(event)) {
+        renderActivityEvent(activity, event, data);
       } else if (event === 'abort' || event === 'stream_end') {
         setBusy(false);
       }
@@ -1137,7 +1565,7 @@ async function submitPrompt() {
         assistantContent += data.text || '';
         if (!assistantCard) {
           assistantCard = appendMessage('assistant', assistantContent, '', { noFeedback: true });
-          activity.remove();
+          if (!activity?.querySelector('.activity-step')) activity?.remove();
         } else {
           assistantCard.dataset.response = assistantContent;
           renderMarkdown(assistantContent, assistantCard.querySelector('.message-content'));
@@ -1148,24 +1576,26 @@ async function submitPrompt() {
         activeRunId = data.id;
         if (data.state === 'waiting_for_user') {
           pendingQuestion = data;
-          activity?.remove();
+          if (!activity?.querySelector('.activity-step')) activity?.remove();
           appendMessage('assistant', data.question || 'I need a little more information.', data.id);
         }
         if (['waiting_for_approval', 'permission_request'].includes(data.state)) {
           pendingQuestion = data;
-          activity?.remove();
+          if (!activity?.querySelector('.activity-step')) activity?.remove();
           appendApprovalCard(data);
         }
         if (['done', 'failed', 'cancelled'].includes(data.state)) {
-          activity?.remove();
+          if (!activity?.querySelector('.activity-step')) activity?.remove();
           const text = assistantContent || data.result || data.error || 'The task was cancelled.';
           assistantCard?.remove();
           appendMessage('assistant', text, data.id, { prompt: requestMessage });
         }
       } else if (event === 'error') {
+        elements.providerNotice.hidden = true;
         setBusy(false);
         throw new Error(data.message || 'The task failed.');
       } else if (event === 'done' && activeChatController === controller) {
+        elements.providerNotice.hidden = true;
         setBusy(false);
         elements.prompt.focus();
       }
@@ -1233,6 +1663,10 @@ function setCameraStatus(connected, message) {
     ? connected ? 'Connecting to camera…' : 'Camera unavailable'
     : 'Camera is off';
   document.getElementById('camera-clip-time').hidden = !connected || !cameraHasFrame;
+  const composerCamera = document.getElementById('composer-camera-button');
+  composerCamera.setAttribute('aria-pressed', String(cameraEnabled));
+  composerCamera.setAttribute('aria-label', cameraEnabled ? 'Turn camera off' : 'Turn camera on');
+  composerCamera.title = cameraEnabled ? 'Turn camera off' : 'Turn camera on';
 }
 
 function stopCameraAndStandby() {
@@ -1240,7 +1674,14 @@ function stopCameraAndStandby() {
   stopCameraVision(true);
   window.clearTimeout(cameraAutoOffTimer);
   cameraAutoOffTimer = null;
-  if (apiContract) void apiFetch(apiContract.endpoints.camera_stop, { method: 'POST' });
+  if (apiContract) {
+    void apiFetch(apiContract.endpoints.camera_stop, {
+      method: 'POST',
+      keepalive: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+  }
   cameraAvailable = false;
   cameraHasFrame = false;
   stopCameraStream();
@@ -1258,7 +1699,11 @@ function stopCameraAndStandby() {
 async function refreshCamera() {
   if (!cameraEnabled) return;
   try {
-    const startResponse = await apiFetch(apiContract.endpoints.camera_start, { method: 'POST' });
+    const startResponse = await apiFetch(apiContract.endpoints.camera_start, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
     if (!startResponse.ok) throw new Error('Camera could not be started.');
     const response = await apiFetch(apiContract.endpoints.camera_status);
     const data = await response.json();
@@ -1610,7 +2055,9 @@ async function startCameraStream() {
   cameraStreamStartedAt = Date.now();
   try {
     const requestStartedAt = Date.now();
-    const response = await apiFetch(apiContract.endpoints.camera_stream, {
+    const streamUrl = new URL(apiContract.endpoints.camera_stream, window.location.href);
+    streamUrl.searchParams.set('session_id', sessionId);
+    const response = await apiFetch(streamUrl.toString(), {
       signal: controller.signal,
     });
     if (!response.ok || !response.body) {
@@ -2002,7 +2449,18 @@ function toggleHeaderPopover(panel, button) {
   closeHeaderPopovers();
   panel.hidden = !opening;
   button.setAttribute('aria-expanded', String(opening));
+  if (opening && panel.id === 'connections-panel') positionConnectionsPopover();
   return opening;
+}
+
+function positionConnectionsPopover() {
+  const panel = document.getElementById('connections-panel');
+  const dot = document.getElementById('connection-toggle');
+  if (window.innerWidth < 480) return;
+  const rect = dot.getBoundingClientRect();
+  panel.style.left = 'auto';
+  panel.style.right = `${Math.max(12, window.innerWidth - rect.right)}px`;
+  panel.style.top = `${rect.bottom + 8}px`;
 }
 
 function updateActivityElapsed() {
@@ -2132,6 +2590,7 @@ async function stopTask() {
 }
 
 function resetConversation(saveCurrent = true) {
+  if (cameraEnabled) stopCameraAndStandby();
   if (saveCurrent) saveCurrentChatSession();
   sessionId = makeSessionId();
   chatSessions.set(sessionId, {
@@ -2166,6 +2625,16 @@ function resetConversation(saveCurrent = true) {
 }
 
 async function initialize() {
+  document.body.append(document.getElementById('connections-panel'));
+  const viewer = document.getElementById('activity-file-viewer');
+  document.getElementById('activity-viewer-close').addEventListener('click', () => viewer.close());
+  viewer.addEventListener('click', (event) => {
+    if (event.target === viewer) viewer.close();
+  });
+  window.addEventListener('pagehide', () => {
+    activityImageObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+    activityImageObjectUrls.clear();
+  });
   elements.permissionDialog.addEventListener('cancel', (event) => {
     event.preventDefault();
   });
@@ -2212,7 +2681,6 @@ async function initialize() {
   refreshGreeting();
   await refreshEmergencyStop();
   setupVoiceInput();
-  setupComposerOptions();
   document.getElementById('sidebar-toggle').addEventListener('click', () => {
     if (elements.sidebar.classList.contains('is-open')) closeMobilePanels();
     else openMobilePanel(elements.sidebar);
@@ -2225,6 +2693,10 @@ async function initialize() {
       openMobilePanel(elements.cameraSidebar);
       refreshArtifacts();
     }
+  });
+  document.getElementById('composer-camera-button').addEventListener('click', () => {
+    if (!cameraEnabled) toggleCamera();
+    else stopCameraAndStandby();
   });
   document.getElementById('camera-close').addEventListener('click', () => {
     stopCameraAndStandby();
@@ -2302,7 +2774,10 @@ async function initialize() {
     }
   });
   document.querySelectorAll('[data-settings-tab]').forEach((tab) => {
-    tab.addEventListener('click', () => selectSettingsTab(tab.dataset.settingsTab));
+    tab.addEventListener('click', () => {
+      selectSettingsTab(tab.dataset.settingsTab);
+      if (tab.dataset.settingsTab === 'permissions') refreshPermissionSettings();
+    });
     tab.addEventListener('keydown', (event) => {
       const tabs = [...document.querySelectorAll('[data-settings-tab]')];
       const index = tabs.indexOf(tab);
@@ -2315,6 +2790,13 @@ async function initialize() {
       event.preventDefault();
       selectSettingsTab(tabs[next].dataset.settingsTab, true);
     });
+  });
+  document.getElementById('reset-always-allow').addEventListener('click', async () => {
+    await apiFetch(apiContract.endpoints.permissions, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reset_always_allow: true }),
+    });
+    await refreshPermissionSettings();
   });
   document.getElementById('theme-setting').addEventListener('change', (event) => {
     safeStorageSet('localStorage', 'hsx-theme', event.target.value);
@@ -2399,9 +2881,25 @@ async function initialize() {
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
+      const connectionPanel = document.getElementById('connections-panel');
+      const connectionWasOpen = !connectionPanel.hidden;
       closeMobilePanels();
       closeHeaderPopovers();
+      if (connectionWasOpen) document.getElementById('connection-toggle').focus();
     }
+  });
+  document.addEventListener('click', (event) => {
+    const connections = document.getElementById('connections-panel');
+    const toggle = document.getElementById('connection-toggle');
+    if (!connections.hidden && !connections.contains(event.target) && !toggle.contains(event.target)) {
+      connections.hidden = true;
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.focus();
+    }
+  });
+  window.addEventListener('resize', () => {
+    const panel = document.getElementById('connections-panel');
+    if (!panel.hidden) positionConnectionsPopover();
   });
   persistSessionId();
   const draft = safeStorageGet('sessionStorage', `hsx-draft-${sessionId}`);
@@ -2438,6 +2936,7 @@ async function initialize() {
     submitPrompt();
   });
   elements.prompt.addEventListener('keydown', (event) => {
+    if (submitting && event.key === 'Enter') { event.preventDefault(); return; }
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       elements.composer.requestSubmit();
@@ -2458,7 +2957,9 @@ async function initialize() {
   document.querySelectorAll('[data-prompt]').forEach((button) => {
     button.addEventListener('click', () => {
       elements.prompt.value = button.dataset.prompt;
+      elements.prompt.dispatchEvent(new Event('input', { bubbles: true }));
       elements.prompt.focus();
+      elements.prompt.setSelectionRange(elements.prompt.value.length, elements.prompt.value.length);
       persistDraft();
     });
   });

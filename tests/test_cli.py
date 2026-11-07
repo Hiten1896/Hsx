@@ -7,14 +7,15 @@ def test_approval_card_is_human_readable_and_contains_no_payload_json(capsys):
         "approval": {
             "summary": "delete 3 files in /home/hsxshare/Reports",
             "why": "This action can make an irreversible change.",
-            "risk": "DANGEROUS",
+            "action_pattern": "delete_owner_files",
             "details": "rm old-draft.txt",
         },
     })
     output = capsys.readouterr().out
-    assert "HSX wants to: delete 3 files in /home/hsxshare/Reports" in output
-    assert "Risk: DANGEROUS (cannot be undone)" in output
-    assert "Reply: yes / no / details" in output
+    assert "Hsx wants to:" in output
+    assert "delete 3 files" in output
+    assert "Permission rule: delete_owner_files" in output
+    assert "Reply: Allow once / Always allow this / Deny / details" in output
     assert "waiting_approval" not in output
     assert "{" not in output and "}" not in output
 
@@ -28,7 +29,7 @@ def test_resume_routes_next_message_to_existing_approval(monkeypatch, capsys):
         "approval": {
             "summary": "restart the ssh service",
             "why": "This action can make an irreversible or security-sensitive change.",
-            "risk": "DANGEROUS",
+            "action_pattern": "system_services",
             "details": "systemctl restart ssh",
         },
     }

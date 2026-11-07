@@ -43,7 +43,6 @@ def test_high_confidence_safe_zero_argument_tool_runs_without_llm(tmp_path, monk
         [],
         [{
             "name": "system_status",
-            "risk": "safe",
             "input_schema": {"type": "object", "properties": {}, "required": []},
         }],
         {"system_status": system_status},
@@ -52,7 +51,7 @@ def test_high_confidence_safe_zero_argument_tool_runs_without_llm(tmp_path, monk
     )
 
     assert calls == ["called"]
-    assert json.loads(answer) == {"success": True, "status": "online"}
+    assert answer == "The request completed, but returned no readable details."
     assert [message["role"] for message in history] == ["user", "assistant", "user", "assistant"]
     assert history[1]["content"][0]["type"] == "tool_use"
     assert history[2]["content"][0]["type"] == "tool_result"
@@ -68,7 +67,7 @@ def test_high_confidence_safe_zero_argument_tool_runs_without_llm(tmp_path, monk
 def test_run_scoped_cancel_does_not_leak_to_the_next_run(monkeypatch):
     _setup(monkeypatch, "system_status", 0.99)
     calls = []
-    tool = {"name": "system_status", "risk": "safe", "input_schema": {
+    tool = {"name": "system_status", "input_schema": {
         "type": "object", "properties": {}, "required": [],
     }}
     cancelled = threading.Event()
@@ -86,7 +85,32 @@ def test_run_scoped_cancel_does_not_leak_to_the_next_run(monkeypatch):
         cancel_event=threading.Event(),
     )
     assert calls == ["called"]
-    assert json.loads(answer) == {"success": True}
+    assert answer == "The request completed, but returned no readable details."
+
+
+def test_raw_json_model_answer_becomes_a_readable_file_list():
+    answer = orchestrator._friendly_model_answer(
+        '{"success": true, "files": [{"name": "report.pdf"}, {"path": "notes.md"}]}'
+    )
+    assert answer == "I found these files:\n• report.pdf\n• notes.md"
+    assert not answer.lstrip().startswith("{")
+
+
+def test_weather_request_calls_registered_web_search(monkeypatch):
+    _setup(monkeypatch, "system_status", 0.1)
+    queries = []
+    monkeypatch.setattr(orchestrator, "call_llm", lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("weather lookup should route to web_search")
+    ))
+    answer, _ = orchestrator.run_agent(
+        "What is the weather in Delhi?", [],
+        [{"name": "web_search", "input_schema": {
+            "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"],
+        }}],
+        {"web_search": lambda query: queries.append(query) or {"success": True, "results": ["Sunny"]}},
+    )
+    assert queries == ["What is the weather in Delhi?"]
+    assert "Sunny" in answer
 
 
 def test_router_is_not_called_when_no_tools_are_available(monkeypatch):
@@ -142,7 +166,6 @@ def test_high_confidence_tool_with_required_arguments_uses_llm(monkeypatch):
         [],
         [{
             "name": "read_file",
-            "risk": "safe",
             "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
         }],
         {"read_file": lambda path: {"path": path}},
@@ -153,7 +176,7 @@ def test_high_confidence_tool_with_required_arguments_uses_llm(monkeypatch):
     assert llm_calls == [True]
 
 
-def test_high_confidence_unapproved_tool_uses_llm(monkeypatch):
+def test_high_confidence_unlisted_tool_runs_without_policy_prompt(monkeypatch):
     _setup(monkeypatch, "system_status", 0.99)
     llm_calls = []
     monkeypatch.setattr(
@@ -167,14 +190,10 @@ def test_high_confidence_unapproved_tool_uses_llm(monkeypatch):
     answer, _ = orchestrator.run_agent(
         "Check status.",
         [],
-        [{
-            "name": "system_status",
-            "risk": "confirm",
-            "input_schema": {"type": "object", "properties": {}, "required": []},
-        }],
+        [{"name": "system_status", "input_schema": {"type": "object", "properties": {}, "required": []}}],
         {"system_status": lambda: {"success": True}},
-        job_id="risk-job",
+        job_id="policy-job",
     )
 
-    assert answer == "Safe fallback."
-    assert llm_calls == [True]
+    assert "completed" in answer.casefold()
+    assert llm_calls == []

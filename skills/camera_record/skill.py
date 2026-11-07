@@ -1,5 +1,3 @@
-import shutil
-import subprocess
 from pathlib import Path, PureWindowsPath
 
 from agent.workspace import Workspace
@@ -41,29 +39,12 @@ def run(
     if target_device != "local_host":
         raise ValueError("target_device must be local_host or client_browser.")
 
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        raise RuntimeError("ffmpeg is required for host camera capture. Install it with: sudo apt install ffmpeg")
     output = task_output_path(WORKSPACE, requested_name)
-    if mode == "snapshot":
-        command = [ffmpeg, "-nostdin", "-v", "error", "-y", "-f", "v4l2", "-i", "/dev/video0", "-frames:v", "1", str(output)]
-    else:
-        command = [
-            ffmpeg, "-nostdin", "-v", "error", "-y", "-f", "v4l2", "-i", "/dev/video0",
-            "-t", str(duration_seconds), "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            str(output),
-        ]
-    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
-        try:
-            _, stderr = process.communicate(timeout=duration_seconds + 20)
-        except subprocess.TimeoutExpired as error:
-            process.kill()
-            process.communicate()
-            raise RuntimeError(
-                f"Camera capture timed out after {duration_seconds + 20} seconds."
-            ) from error
-    if process.returncode:
-        raise RuntimeError(stderr[-2000:] or f"ffmpeg exited with {process.returncode}.")
+    if mode != "snapshot":
+        raise RuntimeError("Host video recording is unavailable. Use the browser camera recorder, or request a still snapshot.")
+    from agent.tools.vision_capture import camera_snapshot
+
+    camera_snapshot(output_path=output)
     return {
         "success": True,
         "target_device": "local_host",

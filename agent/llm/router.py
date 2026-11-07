@@ -12,7 +12,7 @@ from .providers import (
     ProviderError,
 )
 from .panel import PanelRouter
-from .types import EventStream, LLMRequest
+from .types import EventStream, LLMEvent, LLMRequest
 
 LOGGER = logging.getLogger("hsx.llm.router")
 
@@ -28,7 +28,7 @@ class LLMRouter:
     def generate(self, request: LLMRequest) -> EventStream:
         errors = []
         self.last_result = {"status": "Standby", "reason": ""}
-        for provider in self.providers:
+        for index, provider in enumerate(self.providers):
             self.active_provider = provider.name
             self.active_model = getattr(provider, "model", "unknown")
             started = time.perf_counter()
@@ -57,7 +57,15 @@ class LLMRouter:
                 else:
                     LOGGER.warning("LLM provider %s failed: %s", provider.name, error)
                 errors.append((provider.name, str(error)))
+                if index + 1 < len(self.providers):
+                    next_provider = self.providers[index + 1]
+                    yield LLMEvent(
+                        type="provider_notice",
+                        text=f"{provider.name.title()} is unavailable; trying {next_provider.name.title()}.",
+                    )
             else:
+                if errors:
+                    yield LLMEvent(type="provider_notice_clear")
                 yield from provider_events
                 if self.provider_result_callback is not None:
                     self.provider_result_callback(

@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import threading
 import time
+import hashlib
 from dataclasses import dataclass
 
 LOGGER = logging.getLogger("hsx.hardware.camera")
@@ -24,6 +25,13 @@ class CameraFrame:
     data: bytes
     captured_at: float
     captured_at_wall: float = 0.0
+
+
+def camera_session_owner(session_id: str) -> str:
+    if not isinstance(session_id, str) or not session_id or len(session_id) > 256:
+        raise ValueError("Camera consent requires a valid browser session.")
+    digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:40]
+    return f"web-ui:{digest}"
 
 
 class CameraService:
@@ -64,6 +72,8 @@ class CameraService:
         self._process: subprocess.Popen | None = None
         self._frame: CameraFrame | None = None
         self._last_error = ""
+        self._lifecycle_lock = threading.RLock()
+        self._owners: set[str] = set()
 
     def command(self, ffmpeg: str) -> list[str]:
         return [
@@ -95,6 +105,18 @@ class CameraService:
         ]
 
     def start(self) -> bool:
+        with self._lifecycle_lock:
+            self._owners.add("manual")
+            return self._start_capture()
+
+    def acquire(self, owner: str) -> bool:
+        if not owner or len(owner) > 80:
+            raise ValueError("Camera owner must be a short non-empty name.")
+        with self._lifecycle_lock:
+            self._owners.add(owner)
+            return self._start_capture()
+
+    def _start_capture(self) -> bool:
         if self._thread is not None and self._thread.is_alive():
             return False
         self._stop.clear()
@@ -107,6 +129,16 @@ class CameraService:
         return True
 
     def stop(self, timeout: float = 5.0) -> None:
+        self.release("manual", timeout=timeout)
+
+    def release(self, owner: str, timeout: float = 5.0) -> None:
+        with self._lifecycle_lock:
+            self._owners.discard(owner)
+            if self._owners:
+                return
+            self._stop_capture(timeout)
+
+    def _stop_capture(self, timeout: float) -> None:
         self._stop.set()
         with self._condition:
             process = self._process
@@ -128,6 +160,10 @@ class CameraService:
 
     def is_started(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    def has_owner(self, owner: str) -> bool:
+        with self._lifecycle_lock:
+            return owner in self._owners
 
     def wait_for_frame(
         self,
@@ -258,7 +294,7 @@ class CameraService:
                 with self._condition:
                     self._process = None
                     self._condition.notify_all()
-                if process is not None and process.stdout is not None:
+                if process is not None and process.stdout is not None and hasattr(process.stdout, "close"):
                     process.stdout.close()
             if not self._stop.is_set():
                 self._stop.wait(delay)

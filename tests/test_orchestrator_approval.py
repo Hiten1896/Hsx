@@ -19,7 +19,6 @@ def test_model_history_gets_pause_marker_not_approval_payload(tmp_path, monkeypa
     monkeypatch.setattr(orchestrator, "system_body_context", lambda _target: "")
     tool = {
         "name": "system_execute",
-        "risk": "dangerous",
         "input_schema": {
             "type": "object",
             "properties": {"action": {"type": "string"}, "command": {"type": "string"}},

@@ -1,6 +1,17 @@
 import os
+import re
 import subprocess
 from pathlib import Path
+
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?im)^(\s*(?:[A-Z0-9_]*(?:API[_-]?KEY|BEARER[_-]?TOKEN|ACCESS[_-]?TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\s*[:=]\s*)).+$"
+)
+_BEARER_VALUE = re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]{8,}")
+
+
+def _redact_secrets(value: str) -> str:
+    value = _SECRET_ASSIGNMENT.sub(r"\1[REDACTED]", value)
+    return _BEARER_VALUE.sub(r"\1[REDACTED]", value)
 
 
 def _run_command(
@@ -34,16 +45,16 @@ def _run_command(
         return {
             "success": completed.returncode == 0,
             "returncode": completed.returncode,
-            "stdout": completed.stdout[:200000],
-            "stderr": completed.stderr[:200000],
+            "stdout": _redact_secrets(completed.stdout[:200000]),
+            "stderr": _redact_secrets(completed.stderr[:200000]),
             "elevated": elevated,
         }
     except subprocess.TimeoutExpired as error:
         return {
             "success": False,
             "returncode": None,
-            "stdout": (error.stdout or "")[:200000],
-            "stderr": (error.stderr or "")[:200000],
+            "stdout": _redact_secrets((error.stdout or "")[:200000]),
+            "stderr": _redact_secrets((error.stderr or "")[:200000]),
             "error": f"Command timed out after {timeout} seconds.",
         }
     except (OSError, ValueError) as error:
@@ -92,7 +103,7 @@ def _read_file(path: str, encoding: str = "utf-8", limit: int = 200000) -> dict:
     if not target.is_file():
         raise ValueError(f"Path is not a file: {path}")
     data = target.read_text(encoding=encoding, errors="replace")
-    payload = data[:limit]
+    payload = _redact_secrets(data[:limit])
     return {"success": True, "path": str(target), "content": payload, "truncated": len(data) > len(payload)}
 
 

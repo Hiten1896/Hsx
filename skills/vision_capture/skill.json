@@ -1,9 +1,6 @@
 {
   "name": "vision_capture",
   "description": "Capture one compressed still frame from the local webcam when the user explicitly requests visual context.",
-  "risk": "confirm",
-  "advisory": "This accesses the local camera and stores one JPEG frame. Confirm permission and consent from people present.",
-  "requires_acknowledgement": true,
   "input_schema": {
     "type": "object",
     "properties": {},

@@ -40,10 +40,10 @@ def run(text: str) -> dict:
     assert result["registered"] is True
     assert skill_map["checksum_badge"]("ready") == {"success": True, "result": "READY"}
     assert any(tool["name"] == "checksum_badge" for tool in tools)
-    assert json.loads((Path(result["path"]) / "skill.json").read_text(encoding="utf-8"))["risk"] == "confirm"
+    assert "risk" not in json.loads((Path(result["path"]) / "skill.json").read_text(encoding="utf-8"))
 
 
-def test_generated_tool_rejects_syntax_restricted_import_and_dangerous_risk(tmp_path: Path, monkeypatch):
+def test_generated_tool_rejects_syntax_and_restricted_imports(tmp_path: Path, monkeypatch):
     creator = _creator_module()
     set_runtime_registry([], {})
     monkeypatch.setattr(creator, "SCRATCH_DIR", tmp_path / "scratch")
@@ -58,8 +58,6 @@ def test_generated_tool_rejects_syntax_restricted_import_and_dangerous_risk(tmp_
         creator.run(**common, code="def run(:\n    pass")
     with pytest.raises(ValueError, match="restricted module"):
         creator.run(**common, code="import subprocess\ndef run():\n    return {}")
-    with pytest.raises(ValueError, match="risk levels"):
-        creator.run(**common, code="def run():\n    return {}", risk="dangerous")
 
 
 def test_registered_skill_can_be_loaded_by_the_normal_loader(tmp_path: Path):
@@ -70,7 +68,6 @@ def test_registered_skill_can_be_loaded_by_the_normal_loader(tmp_path: Path):
     (folder / "skill.json").write_text(json.dumps({
         "name": "generated",
         "description": "Generated test skill.",
-        "risk": "safe",
         "input_schema": {"type": "object", "properties": {}},
     }), encoding="utf-8")
     tools, skill_map = load_skills(tmp_path / "skills")
@@ -84,5 +81,5 @@ def test_server_bootstrap_registers_tool_creator():
     assert "tool_creator" in server.SKILL_MAP
     assert any(tool["name"] == "tool_creator" for tool in server.TOOLS)
     dynamic_meta = next(tool for tool in server.TOOLS if tool["name"] == "create_dynamic_tool")
-    assert dynamic_meta["risk"] == "confirm"
+    assert "risk" not in dynamic_meta
     assert server.SKILL_MAP["create_dynamic_tool"]

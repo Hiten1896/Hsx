@@ -128,7 +128,6 @@ class DynamicToolRegistry:
                 "name": name,
                 "description": description.strip(),
                 "operation": operation,
-                "risk": "safe",
                 "input_schema": input_schema,
             }
             all_tools = [*self._tools.values(), entry]
@@ -181,7 +180,6 @@ class DynamicToolRegistry:
                 "name": name,
                 "description": description,
                 "operation": operation,
-                "risk": "safe",
                 "input_schema": schema,
             }
             prepared.append((entry, runner))
@@ -204,8 +202,6 @@ def register_meta_tool(tools: list, skill_map: dict) -> None:
             "Register a small pure text utility from the vetted operations "
             "normalize_text, count_words, or sha256_text."
         ),
-        "risk": "confirm",
-        "requires_acknowledgement": True,
         "input_schema": {
             "type": "object",
             "properties": {

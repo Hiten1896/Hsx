@@ -13,12 +13,6 @@ def _read_skill(folder: Path) -> tuple[dict, object]:
     if not metadata_path.is_file() or not module_path.is_file():
         raise ValueError("Skill folder must contain skill.json and skill.py")
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    risk = metadata.get("risk", "confirm")
-    if risk not in {"safe", "confirm", "dangerous"}:
-        raise ValueError("risk must be safe, confirm, or dangerous")
-    advisory = metadata.get("advisory", "")
-    if not isinstance(advisory, str) or len(advisory) >= 300:
-        raise ValueError("advisory must be a string under 300 characters")
     spec = importlib.util.spec_from_file_location(
         f"hsx_skill_{metadata['name']}", module_path
     )
@@ -32,9 +26,6 @@ def _read_skill(folder: Path) -> tuple[dict, object]:
         "name": metadata["name"],
         "description": metadata["description"],
         "input_schema": metadata["input_schema"],
-        "risk": risk,
-        "advisory": advisory,
-        "requires_acknowledgement": metadata.get("requires_acknowledgement", False),
     }
     return tool, module.run
 

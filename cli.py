@@ -123,12 +123,21 @@ def _show_approval(job: dict) -> None:
         return
     summary = approval.get("summary") or approval_request.get("summary") or "run a tool"
     why = approval.get("why") or approval_request.get("why") or "This action needs your approval."
-    risk = (approval.get("risk") or approval_request.get("risk") or "UNKNOWN").upper()
-    suffix = " (cannot be undone)" if risk == "DANGEROUS" else ""
-    print(f"HSX wants to: {summary}")
-    print(f"Why: {why}")
-    print(f"Risk: {risk}{suffix}")
-    print("Reply: yes / no / details")
+    action_pattern = approval.get("action_pattern") or approval_request.get("action_pattern")
+    details = approval.get("details") or approval_request.get("details")
+    text = f"Hsx wants to: {summary}\nWhy: {why}"
+    if action_pattern:
+        text += f"\nPermission rule: {action_pattern}"
+    if details:
+        text += f"\nDetails: {details}"
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+
+        Console().print(Panel(text, title="Permission", border_style="yellow"))
+    except ImportError:
+        print(text)
+    print("Reply: Allow once / Always allow this / Deny / details")
 
 
 def _canonical_answer(answer: str) -> str:
@@ -137,13 +146,13 @@ def _canonical_answer(answer: str) -> str:
 
 def _approval_is_yes(answer: str) -> bool:
     normalized = _canonical_answer(answer)
-    yes_values = {"yes", "y", "i understand proceed", "i understand", "proceed", "approve", "ok"}
+    yes_values = {"yes", "y", "i understand proceed", "i understand", "proceed", "approve", "ok", "allow", "allow once", "always allow", "always allow this"}
     return normalized in yes_values or normalized.startswith("yes ") or normalized.startswith("i understand")
 
 
 def _approval_is_no(answer: str) -> bool:
     normalized = _canonical_answer(answer)
-    no_values = {"no", "n", "cancel", "cancelled", "stop"}
+    no_values = {"no", "n", "cancel", "cancelled", "stop", "deny", "not now"}
     return normalized in no_values or normalized.startswith("no ") or normalized.startswith("cancel ")
 
 

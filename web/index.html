@@ -14,6 +14,29 @@
     <script defer src="/web/chat.js"></script>
   </head>
   <body>
+    <svg class="activity-icon-sprite" aria-hidden="true" focusable="false">
+      <symbol id="activity-icon-terminal" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"></rect><path d="m7 8 4 4-4 4M13 16h4"></path></symbol>
+      <symbol id="activity-icon-pencil" viewBox="0 0 24 24"><path d="m14 5 5 5M4 20l4-.8L20 7a2.1 2.1 0 0 0-3-3L5 16l-1 4Z"></path></symbol>
+      <symbol id="activity-icon-book" viewBox="0 0 24 24"><path d="M12 6c-2-2-5-2-9-1v14c4-1 7-1 9 1 2-2 5-2 9-1V5c-4-1-7-1-9 1Z"></path><path d="M12 6v14"></path></symbol>
+      <symbol id="activity-icon-images" viewBox="0 0 24 24"><rect x="4" y="3" width="15" height="14" rx="2"></rect><path d="M4 14h2l3-4 3 3 2-2 5 5M8 7h.01M8 21h12a2 2 0 0 0 2-2V8"></path></symbol>
+      <symbol id="activity-icon-file-plus" viewBox="0 0 24 24"><path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7M13 3v6h6M13 3l6 6M17 15v7M13.5 18.5h7"></path></symbol>
+      <symbol id="activity-icon-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"></circle><path d="m16 16 5 5"></path></symbol>
+      <symbol id="activity-icon-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"></path></symbol>
+      <symbol id="activity-icon-camera" viewBox="0 0 24 24"><path d="M4 7h4l1.5-2h5L16 7h4a1 1 0 0 1 1 1v11H3V8a1 1 0 0 1 1-1Z"></path><circle cx="12" cy="13" r="3.5"></circle></symbol>
+      <symbol id="activity-icon-music" viewBox="0 0 24 24"><path d="M9 18V5l11-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="17" cy="16" r="3"></circle></symbol>
+      <symbol id="activity-icon-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 18v3h16v-3"></path></symbol>
+      <symbol id="activity-icon-list" viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"></path></symbol>
+      <symbol id="activity-icon-question" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M9.5 9a2.6 2.6 0 1 1 4.4 1.8c-1.2 1.1-1.9 1.5-1.9 3.2M12 17.5h.01"></path></symbol>
+      <symbol id="activity-icon-shield" viewBox="0 0 24 24"><path d="M12 3 20 6v5c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-3Z"></path><path d="m8.5 12 2.3 2.3 4.8-5"></path></symbol>
+      <symbol id="activity-icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></symbol>
+      <symbol id="activity-icon-package" viewBox="0 0 24 24"><path d="m12 3 9 5v8l-9 5-9-5V8l9-5Z"></path><path d="m3.5 8.5 8.5 5 8.5-5M12 13.5V21M8 5l9 5"></path></symbol>
+      <symbol id="activity-icon-palette" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18h1.5a2 2 0 0 0 1.2-3.6 1.5 1.5 0 0 1 .9-2.7H18a3 3 0 0 0 3-3 9 9 0 0 0-9-8.7Z"></path><path d="M7.5 11h.01M10 7.5h.01M15 8h.01M17 11h.01"></path></symbol>
+      <symbol id="activity-icon-brain" viewBox="0 0 24 24"><path d="M12 5a3 3 0 0 0-5.8 1.2A3.5 3.5 0 0 0 5 12a3.5 3.5 0 0 0 1.2 5.8A3 3 0 0 0 12 19M12 5a3 3 0 0 1 5.8 1.2A3.5 3.5 0 0 1 19 12a3.5 3.5 0 0 1-1.2 5.8A3 3 0 0 1 12 19M12 5v14M8 10h2M14 14h2"></path></symbol>
+      <symbol id="activity-icon-save" viewBox="0 0 24 24"><path d="M4 3h13l4 4v14H3V4a1 1 0 0 1 1-1Z"></path><path d="M7 3v6h9V3M7 21v-7h10v7"></path></symbol>
+      <symbol id="activity-icon-gear" viewBox="0 0 24 24"><path d="m10 3-.5 2.1a7 7 0 0 0-1.7 1L5.7 5.3 4 8.2l1.6 1.5a7 7 0 0 0 0 2L4 13.2l1.7 2.9 2.1-.8a7 7 0 0 0 1.7 1L10 18.5h4l.5-2.2a7 7 0 0 0 1.7-1l2.1.8 1.7-2.9-1.6-1.5a7 7 0 0 0 0-2L20 8.2l-1.7-2.9-2.1.8a7 7 0 0 0-1.7-1L14 3h-4Z" transform="translate(0 1)"></path><circle cx="12" cy="12" r="2.5"></circle></symbol>
+      <symbol id="activity-icon-spinner" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"></path></symbol>
+      <symbol id="activity-icon-chevron" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"></path></symbol>
+    </svg>
     <div class="app-shell">
       <aside id="app-sidebar" class="sidebar" aria-label="Workspace navigation">
         <a class="brand" href="/web/" aria-label="Hsx home">
@@ -129,11 +152,13 @@
           </section>
 
           <div class="composer-dock">
+            <div id="provider-notice" class="provider-notice" role="status" aria-live="polite" hidden></div>
             <div id="drop-hint" class="drop-hint" hidden>Drop files here to attach them</div>
             <div id="attachment-list" class="attachment-list" aria-live="polite"></div>
             <form id="composer-form" class="composer">
               <div class="composer-input-row">
                 <button id="attach-button" class="composer-icon-button attach-button" type="button" aria-label="Attach files" title="Attach files">＋</button>
+                <button id="composer-camera-button" class="composer-icon-button" type="button" aria-label="Turn camera on" title="Turn camera on" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5h11.5a2 2 0 0 1 2 2v1l3-2v7l-3-2v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"></path></svg></button>
                 <label class="sr-only" for="prompt-input">Message Hsx</label>
                 <textarea id="prompt-input" rows="1" placeholder="Type / for skills" autocomplete="off"></textarea>
                 <div class="composer-actions">
@@ -142,15 +167,6 @@
                   </button>
                   <span id="voice-privacy" class="sr-only">Voice audio is processed by your browser's speech service and is not stored by Hsx.</span>
                   <span id="voice-indicator" class="voice-indicator" aria-hidden="true" hidden><i></i><i></i><i></i></span>
-                  <div class="composer-options">
-                    <button id="composer-options-button" class="composer-icon-button" type="button" aria-label="More message options" aria-controls="composer-options-menu" aria-expanded="false" title="More options">
-                      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"></circle><circle cx="12" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle></svg>
-                    </button>
-                    <div id="composer-options-menu" class="composer-options-menu" role="menu" hidden>
-                      <button type="button" role="menuitem" data-composer-action="attach">Attach files</button>
-                      <button type="button" role="menuitem" data-composer-action="camera">Open host camera</button>
-                    </div>
-                  </div>
                   <button id="send-button" class="send-button" type="submit" aria-label="Send message" title="Send message" disabled>
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg>
                   </button>
@@ -233,6 +249,7 @@
             <button role="tab" id="settings-tab-models" aria-controls="settings-panel-models" aria-selected="false" tabindex="-1" data-settings-tab="models">Models</button>
             <button role="tab" id="settings-tab-camera" aria-controls="settings-panel-camera" aria-selected="false" tabindex="-1" data-settings-tab="camera">Camera</button>
             <button role="tab" id="settings-tab-privacy" aria-controls="settings-panel-privacy" aria-selected="false" tabindex="-1" data-settings-tab="privacy">Privacy</button>
+            <button role="tab" id="settings-tab-permissions" aria-controls="settings-panel-permissions" aria-selected="false" tabindex="-1" data-settings-tab="permissions">Permissions</button>
             <button role="tab" id="settings-tab-advanced" aria-controls="settings-panel-advanced" aria-selected="false" tabindex="-1" data-settings-tab="advanced">Advanced</button>
             <button role="tab" id="settings-tab-about" aria-controls="settings-panel-about" aria-selected="false" tabindex="-1" data-settings-tab="about">About</button>
           </nav>
@@ -269,6 +286,14 @@
               <label class="settings-check"><input id="file-contents-setting" type="checkbox"> Allow file contents in exports</label>
               <span id="feedback-count">0 feedback entries</span>
               <button id="delete-feedback-button" class="settings-action danger-action" type="button">Delete all feedback</button>
+            </section>
+            <section id="settings-panel-permissions" role="tabpanel" aria-labelledby="settings-tab-permissions" data-settings-panel="permissions" hidden>
+              <h3>Permissions</h3>
+              <p>Hsx asks only for actions listed here. Every decision is written to the audit log.</p>
+              <div id="permission-actions" class="permission-actions" aria-live="polite"><p>Loading permission policy…</p></div>
+              <h3>Always allow</h3>
+              <div id="always-allow-list" class="permission-actions" aria-live="polite"><p>No saved rules.</p></div>
+              <button id="reset-always-allow" class="settings-action" type="button">Reset always allow rules</button>
             </section>
             <section id="settings-panel-advanced" role="tabpanel" aria-labelledby="settings-tab-advanced" data-settings-panel="advanced" hidden>
               <h3>Advanced</h3>
@@ -317,8 +342,17 @@
       </article>
     </template>
     <template id="activity-template">
-      <div class="activity-card" role="status"><span class="activity-spinner"></span><span></span></div>
+      <section class="activity-trace" aria-label="Agent activity" aria-live="polite">
+        <div class="activity-thinking"><svg class="activity-icon activity-spinner" aria-hidden="true"><use href="#activity-icon-spinner"></use></svg><span>Thinking</span></div>
+        <button class="activity-group-summary" type="button" aria-expanded="false" hidden></button>
+        <div class="activity-steps"></div>
+        <button class="activity-show-steps" type="button" aria-expanded="true" hidden>Show fewer steps</button>
+      </section>
     </template>
+    <dialog id="activity-file-viewer" class="activity-file-viewer" aria-labelledby="activity-viewer-title">
+      <header><h2 id="activity-viewer-title"></h2><button id="activity-viewer-close" type="button" aria-label="Close file viewer">×</button></header>
+      <div id="activity-viewer-content"></div>
+    </dialog>
     <dialog id="feedback-dialog" class="feedback-dialog">
       <form method="dialog" id="feedback-form">
         <h2>Share feedback</h2>

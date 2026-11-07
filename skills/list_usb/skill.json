@@ -1,6 +1,9 @@
 {
   "name": "list_usb",
   "description": "List USB devices attached to the local machine running the HSX server.",
-  "risk": "safe",
-  "input_schema": {"type": "object", "properties": {}, "required": []}
+  "input_schema": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  }
 }

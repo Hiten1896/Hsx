@@ -1,10 +1,10 @@
-# Hsx UI snapshots
+# Rendered UI screenshots
 
-This folder stores the key screenshots and terminal captures used to review the web UI and terminal UX.
+The `after-*` PNGs were captured with Playwright against the rendered web app.
+They cover empty history, an open connections popover, 24 long chat titles, and
+a long conversation at 360, 768, and 1280 pixels where applicable.
 
-Files:
-- ui-360.svg
-- ui-1280.svg
-- terminal-ui.txt
-
-These are lightweight mockups intended to document the layout and approved visual language in the repository without depending on a full browser capture in CI.
+No `before-*` browser captures were present when this work started, and the
+layout changes were already in the shared worktree. These images therefore
+record the verified after state only; a reliable before state could not be
+reconstructed from the rendered app.

@@ -6,6 +6,7 @@ import time
 import uuid
 from collections.abc import Callable
 
+from agent.activity_trace import tool_end_event, tool_start_event
 from agent.ask_user import ApprovalRequest, AskUserRequest
 from agent.devices import system_body_context
 from agent.llm_client import call_llm
@@ -33,6 +34,10 @@ VISUAL_PROMPT = re.compile(
     r"check the (?:camera|webcam)|describe (?:the room|my surroundings|what the camera sees)|"
     r"what is (?:visible|in view|the camera showing)|"
     r"(?:take|capture|snap) (?:a )?(?:photo|picture|frame|snapshot))\b",
+    re.IGNORECASE,
+)
+WEB_SEARCH_PROMPT = re.compile(
+    r"\b(?:weather|news|latest|current|today|search (?:the )?web|look up|find online|what happened)\b",
     re.IGNORECASE,
 )
 
@@ -64,14 +69,18 @@ def _vision_approval(
     session_id: str,
     approvals: dict | None,
 ) -> tuple[bool, str]:
+    from agent.hardware.camera import CAMERA
+    from agent.tools.vision_capture import disabled_reason, enabled
+
+    if CAMERA.is_started():
+        return True, ""
+    if not enabled():
+        return False, disabled_reason()
+    status = CAMERA.health_check()
+    if not status.get("device_available") or status.get("last_error") == "ffmpeg is not installed.":
+        return False, disabled_reason()
     tool = {
         "name": "vision_capture",
-        "risk": "confirm",
-        "advisory": (
-            "This accesses the local camera and sends one still frame to the configured "
-            "Gemini provider for visual analysis."
-        ),
-        "requires_acknowledgement": True,
     }
     decision = POLICY.decide(
         tool,
@@ -81,9 +90,7 @@ def _vision_approval(
     )
     if decision.get("allowed"):
         return True, ""
-    if decision.get("status") == "dangerous_disabled":
-        return False, "Local camera capture is disabled by the host safety policy."
-    return False, "Local camera capture needs explicit confirmation before I can continue."
+    return False, "Starting the camera needs your permission before I can continue."
 
 
 def _finish_vision_notice(
@@ -103,6 +110,45 @@ def _text_from_response(response) -> str:
     if response is None:
         return "I’m ready to help with your local workspace."
     return "\n".join(block.text for block in response.content if getattr(block, "type", "") == "text")
+
+
+def _friendly_structured_answer(value: object) -> str:
+    """Keep tool payloads out of chat when a model echoes raw JSON."""
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except (json.JSONDecodeError, TypeError):
+        return str(value)
+    if isinstance(parsed, dict):
+        files = parsed.get("files") or parsed.get("results")
+        if isinstance(files, list):
+            names = [
+                str(item.get("name") or item.get("path") or item.get("filename") or "File")
+                if isinstance(item, dict) else str(item)
+                for item in files
+            ]
+            if names:
+                return "I found these files:\n" + "\n".join(f"• {name}" for name in names)
+            return "I couldn't find any matching files."
+        if parsed.get("success") is False:
+            return str(parsed.get("error") or parsed.get("message") or "I couldn't complete that request.")
+        return str(parsed.get("message") or "The request completed, but returned no readable details.")
+    if isinstance(parsed, list):
+        return "Here are the results:\n" + "\n".join(
+            f"• {item.get('name') or item.get('path') or 'Item'}" if isinstance(item, dict) else f"• {item}"
+            for item in parsed
+        )
+    return str(value)
+
+
+def _friendly_model_answer(answer: str) -> str:
+    stripped = answer.strip()
+    if not stripped.startswith(("{", "[")):
+        return answer
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return answer
+    return _friendly_structured_answer(parsed)
 
 
 def _resolve_uncertain(job_id: str, intent: str = "", *, succeeded: bool) -> None:
@@ -160,12 +206,26 @@ def run_agent(
     target_device: str = "client_browser",
     device_actions: list[dict] | None = None,
     on_text_delta: Callable[[str], None] | None = None,
+    on_provider_notice: Callable[[str], None] | None = None,
+    on_activity_event: Callable[[str, dict], None] | None = None,
     job_id: str = "",
     enable_planning: bool = True,
     track_intent: bool = True,
     cancel_event=None,
-    elevated_session: bool = False,
 ):
+    def emit_activity_start(tool_name: str, arguments: dict, call_id: str) -> dict:
+        event = tool_start_event(tool_name, arguments, call_id)
+        if on_activity_event is not None:
+            on_activity_event("tool_start", event)
+        return event
+
+    def emit_activity_end(start_event: dict, result: object, started_at: float, *, failed: bool = False) -> None:
+        if on_activity_event is not None:
+            on_activity_event(
+                "tool_end",
+                tool_end_event(start_event, result, (time.perf_counter() - started_at) * 1000, failed=failed),
+            )
+
     if target_device not in {"local_host", "client_browser"}:
         raise ValueError("target_device must be local_host or client_browser.")
     if POLICY.is_stopped():
@@ -173,6 +233,8 @@ def run_agent(
     uncertain = False
     complex_task = False
     vision_image_data = ""
+    vision_activity = None
+    vision_activity_started = 0.0
     if resume_tool_result:
         result = resume_tool_result.get("result")
         if result is None:
@@ -200,22 +262,38 @@ def run_agent(
 
             if not vision_enabled():
                 return _finish_vision_notice(
-                    "Local camera capture is disabled on this server.",
+                    "Local camera capture is disabled. Set HSX_ENABLE_VISION_CAPTURE=1 in .env to enable it.",
                     conversation_history,
                     session_id,
                 )
             approved, notice = _vision_approval(session_id, approvals)
             if not approved:
                 return _finish_vision_notice(notice, conversation_history, session_id)
-            frame_path = capture_frame()
-            with frame_path.open("rb") as frame:
-                vision_image_data = base64.b64encode(frame.read()).decode("ascii")
+            vision_activity_started = time.perf_counter()
+            vision_activity = emit_activity_start(
+                "vision_capture", {}, f"vision-{uuid.uuid4().hex}"
+            )
+            try:
+                frame_path = capture_frame()
+                with frame_path.open("rb") as frame:
+                    vision_image_data = base64.b64encode(frame.read()).decode("ascii")
+            except (OSError, RuntimeError, ValueError) as error:
+                emit_activity_end(
+                    vision_activity,
+                    {"success": False, "error": str(error)},
+                    vision_activity_started,
+                    failed=True,
+                )
+                raise
         if tools:
             prediction_started = time.perf_counter()
             predicted_tool, confidence = INTENT_ROUTER.predict_with_confidence(user_input)
             inference_ms = (time.perf_counter() - prediction_started) * 1000
         else:
             predicted_tool, confidence, inference_ms = "", 0.0, 0.0
+        tool_names = {item.get("name") for item in tools}
+        if "web_search" in tool_names and WEB_SEARCH_PROMPT.search(user_input):
+            predicted_tool, confidence = "web_search", 1.0
         uncertain = bool(tools and 0.4 <= confidence <= 0.6)
         complex_task = bool(
             enable_planning
@@ -241,11 +319,9 @@ def run_agent(
         directly_routable = bool(
             tool
             and predicted_tool in skill_map
-            and tool.get("risk", "confirm") == "safe"
-            and not tool.get("requires_acknowledgement", False)
-            and not str(tool.get("advisory", "")).strip()
-            and not schema.get("required", [])
+            and (not schema.get("required", []) or predicted_tool == "web_search")
         )
+        direct_arguments = {"query": user_input.strip()} if predicted_tool == "web_search" else {}
         direct = (
             confidence >= INTENT_CONFIDENCE_THRESHOLD
             and directly_routable
@@ -265,6 +341,10 @@ def run_agent(
                 "direct" if direct else "llm",
             )
         if complex_task:
+            planning_started = time.perf_counter()
+            planning_activity = emit_activity_start(
+                "task_plan", {"query": user_input}, f"plan-{uuid.uuid4().hex}"
+            )
             try:
                 plan = plan_task(
                     user_input,
@@ -274,6 +354,7 @@ def run_agent(
                             [],
                             "You are the HSX Planner specialist.",
                             sensitive=sensitive,
+                            on_provider_notice=on_provider_notice,
                             job_id=job_id,
                             prefer_cloud=True,
                             disable_panel=True,
@@ -281,8 +362,14 @@ def run_agent(
                     ),
                 )
             except (OSError, RuntimeError, TypeError, ValueError) as error:
+                emit_activity_end(planning_activity, {"success": False, "error": str(error)}, planning_started, failed=True)
                 LOGGER.warning("Could not create a task plan; falling back to agent loop: %s", error)
             else:
+                emit_activity_end(
+                    planning_activity,
+                    {"success": True, "message": f"Planned {len(plan.steps)} steps."},
+                    planning_started,
+                )
                 def execute_step(step: PlanStep, index: int, total: int) -> str:
                     if cancel_event is not None and cancel_event.is_set():
                         return "This run was stopped."
@@ -299,6 +386,7 @@ def run_agent(
                                 [],
                                 role,
                                 sensitive=False,
+                                on_provider_notice=on_provider_notice,
                                 job_id=job_id,
                                 prefer_cloud=True,
                                 disable_panel=True,
@@ -340,11 +428,11 @@ def run_agent(
                             target_device=target_device,
                             device_actions=device_actions,
                             on_text_delta=on_text_delta,
+                            on_activity_event=on_activity_event,
                             job_id=job_id,
                             enable_planning=False,
                             track_intent=False,
                             cancel_event=cancel_event,
-                            elevated_session=elevated_session,
                         )
                     except AskUserRequest as question:
                         plan_context = (
@@ -389,6 +477,7 @@ def run_agent(
                         [],
                         "You are reflecting on one failed task step. Return only a replacement instruction.",
                         sensitive=sensitive,
+                        on_provider_notice=on_provider_notice,
                         job_id=job_id,
                         prefer_cloud=True,
                         disable_panel=True,
@@ -428,11 +517,13 @@ def run_agent(
                     "type": "tool_use",
                     "id": tool_call_id,
                     "name": predicted_tool,
-                    "input": {},
+                    "input": direct_arguments,
                 }],
             })
-            decision = POLICY.decide(tool, {}, session_id, (approvals or {}).get(predicted_tool))
+            decision = POLICY.decide(tool, direct_arguments, session_id, (approvals or {}).get(predicted_tool))
             if not decision["allowed"]:
+                activity_start = emit_activity_start(predicted_tool, direct_arguments, tool_call_id)
+                activity_start["icon"] = "shield"
                 ROUTER_LOGGER.log_tool_prediction(
                     session_id, job_id, predicted_tool, tool_call_id
                 )
@@ -440,26 +531,41 @@ def run_agent(
                     session_id, job_id, predicted_tool, tool_call_id, 0, "denied"
                 )
                 if decision.get("status") == "waiting_approval":
+                    if on_activity_event is not None:
+                        on_activity_event("tool_end", {
+                            **activity_start,
+                            "status": "waiting",
+                            "duration_ms": 0,
+                            "output": "Waiting for approval.",
+                        })
                     paused = {"type": "text", "text": "Paused: waiting for user approval."}
                     conversation_history[-1]["content"].append(paused)
                     raise ApprovalRequest(
                         predicted_tool,
-                        {},
+                        direct_arguments,
                         decision["approval_request"],
                         _serializable_history(conversation_history),
                         tool_call_id,
                     )
+                if on_activity_event is not None:
+                    on_activity_event("tool_end", {
+                        **activity_start,
+                        "status": "failed",
+                        "duration_ms": 0,
+                        "output": "Blocked by the host safety policy.",
+                    })
                 answer = "That action is blocked by the host safety policy."
                 conversation_history.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
                 return answer, conversation_history
             ROUTER_LOGGER.log_tool_prediction(
                 session_id, job_id, predicted_tool, tool_call_id
             )
+            activity_start = emit_activity_start(predicted_tool, direct_arguments, tool_call_id)
             started = time.perf_counter()
             try:
                 if cancel_event is not None and cancel_event.is_set():
                     return "This run was stopped.", conversation_history
-                result = skill_map[predicted_tool]()
+                result = skill_map[predicted_tool](**direct_arguments)
             except AskUserRequest as question:
                 ROUTER_LOGGER.log_tool_execution(
                     session_id,
@@ -469,6 +575,13 @@ def run_agent(
                     (time.perf_counter() - started) * 1000,
                     "needs_input",
                 )
+                if on_activity_event is not None:
+                    on_activity_event("tool_end", {
+                        **activity_start,
+                        "status": "waiting",
+                        "duration_ms": round((time.perf_counter() - started) * 1000),
+                        "output": "Waiting for your answer.",
+                    })
                 question.checkpoint = _serializable_history(conversation_history)
                 question.tool_call_id = tool_call_id
                 raise
@@ -477,6 +590,7 @@ def run_agent(
                 status = "failed"
             else:
                 status = "succeeded"
+            emit_activity_end(activity_start, result, started, failed=status == "failed")
             ROUTER_LOGGER.log_tool_execution(
                 session_id,
                 job_id,
@@ -497,7 +611,7 @@ def run_agent(
                     "content": json.dumps(result, ensure_ascii=False),
                 }],
             })
-            answer = json.dumps(result, ensure_ascii=False, indent=2)
+            answer = _friendly_structured_answer(result)
             conversation_history.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
             MEMORY.record_message(session_id, "assistant", answer)
             return answer, conversation_history
@@ -574,18 +688,36 @@ def run_agent(
                     ],
                 },
             ]
-        response = call_llm(
-            request_history,
-            tools,
-            memory_context,
-            sensitive=sensitive,
-            target_device=target_device,
-            body_context=body_context,
-            on_text_delta=on_text_delta,
-            job_id=job_id,
-            prefer_cloud=uncertain,
-            required_provider="gemini" if vision_image_data else "",
-        )
+        try:
+            response = call_llm(
+                request_history,
+                tools,
+                memory_context,
+                sensitive=sensitive,
+                target_device=target_device,
+                body_context=body_context,
+                on_text_delta=on_text_delta if not tools else None,
+                on_provider_notice=on_provider_notice,
+                job_id=job_id,
+                prefer_cloud=uncertain,
+                required_provider="gemini" if vision_image_data else "",
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            if vision_activity is not None:
+                emit_activity_end(
+                    vision_activity,
+                    {"success": False, "error": str(error)},
+                    vision_activity_started,
+                    failed=True,
+                )
+                vision_activity = None
+            raise
+        if vision_activity is not None:
+            emit_activity_end(
+                vision_activity,
+                {"success": True, "path": str(frame_path)},
+                vision_activity_started,
+            )
         if response is None:
             answer = _local_response(user_input, conversation_history)
             if track_intent:
@@ -595,7 +727,9 @@ def run_agent(
         tool_calls = [block for block in blocks if getattr(block, "type", "") == "tool_use"]
         if not tool_calls:
             conversation_history.append({"role": "assistant", "content": to_plain_data(blocks)})
-            answer = _text_from_response(response)
+            answer = _friendly_model_answer(_text_from_response(response))
+            if tools and on_text_delta is not None and answer:
+                on_text_delta(answer)
             MEMORY.record_message(session_id, "assistant", answer)
             if cache_enabled:
                 try:
@@ -605,6 +739,13 @@ def run_agent(
             if track_intent:
                 _resolve_uncertain(job_id, resolved_tool, succeeded=True)
             return answer, conversation_history
+        if on_activity_event is not None:
+            narration = "\n".join(
+                block.text for block in blocks
+                if getattr(block, "type", "") == "text" and getattr(block, "text", "").strip()
+            )
+            if narration:
+                on_activity_event("activity_narration", {"text": narration[:1000]})
         conversation_history.append({"role": "assistant", "content": to_plain_data(blocks)})
         results = []
         for call_index, call in enumerate(tool_calls):
@@ -613,27 +754,29 @@ def run_agent(
             ROUTER_LOGGER.log_tool_prediction(session_id, job_id, call.name, call.id)
             skill = next((tool for tool in tools if tool["name"] == call.name), None)
             if skill is None:
+                activity_start = emit_activity_start(call.name, dict(call.input), call.id)
+                emit_activity_end(activity_start, {"success": False, "error": "Unknown skill."}, time.perf_counter(), failed=True)
                 ROUTER_LOGGER.log_tool_execution(session_id, job_id, call.name, call.id, 0, "unknown_tool")
                 results.append({"type": "tool_result", "tool_use_id": call.id, "content": json.dumps({"success": False, "error": "Unknown skill."})})
                 continue
-            if elevated_session and call.name in {"system_execute", "shell"}:
-                decision = POLICY.decide(
-                    skill,
-                    call.input,
-                    session_id,
-                    True,
-                    approver="session_permission",
-                )
-            else:
-                decision = POLICY.decide(
-                    skill,
-                    call.input,
-                    session_id,
-                    (approvals or {}).get(call.name),
-                )
+            decision = POLICY.decide(
+                skill,
+                call.input,
+                session_id,
+                (approvals or {}).get(call.name),
+            )
             if not decision["allowed"]:
+                activity_start = emit_activity_start(call.name, dict(call.input), call.id)
+                activity_start["icon"] = "shield"
                 ROUTER_LOGGER.log_tool_execution(session_id, job_id, call.name, call.id, 0, "denied")
                 if decision.get("status") == "waiting_approval":
+                    if on_activity_event is not None:
+                        on_activity_event("tool_end", {
+                            **activity_start,
+                            "status": "waiting",
+                            "duration_ms": 0,
+                            "output": "Waiting for approval.",
+                        })
                     content = conversation_history[-1].get("content", [])
                     content.append({"type": "text", "text": "Paused: waiting for user approval."})
                     pending_results = list(results)
@@ -657,6 +800,13 @@ def run_agent(
                         _serializable_history(conversation_history),
                         call.id,
                     )
+                if on_activity_event is not None:
+                    on_activity_event("tool_end", {
+                        **activity_start,
+                        "status": "failed",
+                        "duration_ms": 0,
+                        "output": "Blocked by the host safety policy.",
+                    })
                 results.append({
                     "type": "tool_result",
                     "tool_use_id": call.id,
@@ -666,15 +816,21 @@ def run_agent(
                     }),
                 })
                 continue
+            activity_start = emit_activity_start(call.name, dict(call.input), call.id)
             started = time.perf_counter()
             try:
                 tool_input = dict(call.input)
-                if call.name in {"system_execute", "shell"} and elevated_session:
-                    tool_input["_approved_elevation"] = True
                 if call.name in {"audio_play", "camera_record"}:
                     tool_input["target_device"] = target_device
                 result = skill_map[call.name](**tool_input)
             except AskUserRequest as question:
+                if on_activity_event is not None:
+                    on_activity_event("tool_end", {
+                        **activity_start,
+                        "status": "waiting",
+                        "duration_ms": round((time.perf_counter() - started) * 1000),
+                        "output": "Waiting for your answer.",
+                    })
                 ROUTER_LOGGER.log_tool_execution(
                     session_id, job_id, call.name, call.id, (time.perf_counter() - started) * 1000, "needs_input"
                 )
@@ -685,7 +841,9 @@ def run_agent(
                 ROUTER_LOGGER.log_tool_execution(
                     session_id, job_id, call.name, call.id, (time.perf_counter() - started) * 1000, "failed"
                 )
-                if isinstance(error, PermissionError) and call.name in {"system_execute", "shell"} and not elevated_session:
+                result = {"success": False, "error": str(error)}
+                if isinstance(error, PermissionError) and call.name in {"system_execute", "shell"}:
+                    emit_activity_end(activity_start, result, started, failed=True)
                     _raise_permission_request(
                         call, results, tool_calls, call_index, conversation_history, error
                     )
@@ -696,7 +854,7 @@ def run_agent(
                         "success": False,
                         "error": str(error),
                     })
-                result = {"success": False, "error": str(error)}
+                emit_activity_end(activity_start, result, started, failed=True)
             else:
                 ROUTER_LOGGER.log_tool_execution(
                     session_id, job_id, call.name, call.id, (time.perf_counter() - started) * 1000, "succeeded"
@@ -714,11 +872,11 @@ def run_agent(
                             "pid": result.get("pid"),
                         }
                     )
+                emit_activity_end(activity_start, result, started)
             if (
                 isinstance(result, dict)
                 and call.name in {"system_execute", "shell"}
                 and (call.name == "shell" or call.input.get("action") == "exec")
-                and not elevated_session
                 and _permission_denied_result(result)
             ):
                 _raise_permission_request(
@@ -766,10 +924,10 @@ def _raise_permission_request(
     classification = classify_action(call.name, call.input)
     permission = {
         "request_type": "permission_request",
-        "summary": "Retry this command with non-interactive elevated permission?",
-        "why": "The operating system denied this command. Approval allows one non-interactive sudo attempt; Hsx will never request or store your OS password.",
-        "risk": "PRIVILEGED",
-        "details": classification.get("details", "")[:500],
+        "summary": "Hsx wants to retry this command with administrator permission.",
+        "why": "The operating system denied the command. Approval allows one non-interactive sudo attempt; Hsx will never request or store your OS password.",
+        "action_pattern": classification,
+        "details": str(call.input.get("command", ""))[:500],
     }
     pending_results = list(results)
     pending_results.extend(

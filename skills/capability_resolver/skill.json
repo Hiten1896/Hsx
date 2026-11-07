@@ -1,0 +1,27 @@
+{
+  "name": "capability_resolver",
+  "description": "Install one allowlisted pinned package into the Hsx project environment after the owner approves the plan. Never uses sudo or system packages.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "package": {
+        "type": "string",
+        "enum": [
+          "yt-dlp",
+          "pillow",
+          "pdfplumber",
+          "reportlab",
+          "openpyxl",
+          "pillow-heif"
+        ]
+      },
+      "capability": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "package",
+      "capability"
+    ]
+  }
+}

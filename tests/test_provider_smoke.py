@@ -17,10 +17,20 @@ class _FakeProviderHandler(BaseHTTPRequestHandler):
         payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         assert_payload_valid(self.provider, payload)
         type(self).requests.append(payload)
+        if self.provider == "gemini" and len(type(self).requests) > 1:
+            parts = [
+                part
+                for content in payload["contents"]
+                for part in content["parts"]
+                if "functionCall" in part
+            ]
+            assert parts
+            assert all(part.get("thoughtSignature") == "required-signature" for part in parts)
         if len(type(self).requests) == 1:
             if self.provider == "gemini":
                 body = {"candidates": [{"content": {"parts": [{
-                    "functionCall": {"name": "echo", "args": {"value": "one"}}
+                    "functionCall": {"name": "echo", "args": {"value": "one"}, "id": "call-1"},
+                    "thoughtSignature": "required-signature",
                 }]}}]}
             else:
                 body = {"choices": [{"message": {"content": None, "tool_calls": [{
@@ -60,7 +70,7 @@ def test_real_orchestrator_four_turn_provider_smoke(provider_kind, monkeypatch):
             provider = OpenAICompatibleProvider("groq", "test", "model", f"http://127.0.0.1:{server.server_port}")
         monkeypatch.setattr(llm_client, "default_router", lambda: type("Router", (), {"generate": provider.generate})())
         history = []
-        tools = [{"name": "echo", "description": "Echo a value.", "risk": "safe", "input_schema": {
+        tools = [{"name": "echo", "description": "Echo a value.", "input_schema": {
             "type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]
         }}]
         answers = []
@@ -126,7 +136,7 @@ def test_system_info_tool_call_returns_live_tool_output(provider_kind, monkeypat
         })())
         monkeypatch.setattr(orchestrator.MEMORY, "prompt_context", lambda _prompt: "")
         monkeypatch.setattr(orchestrator.MEMORY, "record_message", lambda *_args: None)
-        tools = [{"name": "system_info", "description": "Get current machine specs.", "risk": "safe",
+        tools = [{"name": "system_info", "description": "Get current machine specs.",
                   "input_schema": {"type": "object", "properties": {}, "required": []}}]
         answer, history = orchestrator.run_agent(
             "What are this machine's specs?", [], tools,
@@ -235,15 +245,15 @@ def test_file_creation_conversation_uses_native_tool_result_roles(provider_kind,
             lambda: type("Router", (), {"generate": provider.generate})(),
         )
         tools = [
-            {"name": "ask_user", "description": "Ask a question.", "risk": "safe", "input_schema": {
+            {"name": "ask_user", "description": "Ask a question.", "input_schema": {
                 "type": "object", "properties": {"question": {"type": "string"}}, "required": ["question"]
             }},
-            {"name": "create_text_file", "description": "Create a workspace text file.", "risk": "safe", "input_schema": {
+            {"name": "create_text_file", "description": "Create a workspace text file.", "input_schema": {
                 "type": "object",
                 "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
                 "required": ["path", "content"],
             }},
-            {"name": "compress_files", "description": "Create an archive.", "risk": "safe", "input_schema": {
+            {"name": "compress_files", "description": "Create an archive.", "input_schema": {
                 "type": "object",
                 "properties": {"filenames": {"type": "array"}},
                 "required": ["filenames"],

@@ -171,8 +171,10 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert '<h1 id="greeting-title" aria-busy="false">Good evening, Sir</h1>' in html
     assert 'placeholder="Type / for skills"' in html
     assert 'id="voice-button"' in html
-    assert 'id="composer-options-button"' in html
+    assert 'id="composer-camera-button"' in html
+    assert 'id="composer-options-button"' not in html
     assert 'id="voice-indicator"' in html
+    assert 'id="composer-options-menu"' not in html
     assert 'class="message-author"' not in html
     assert 'id="composer-form"' in html
     assert '<p class="privacy-note">Made by HS</p>' in html
@@ -310,6 +312,9 @@ def test_camera_is_lazy_and_run_state_resets_after_failure_or_stop():
     assert "elements.cameraView.addEventListener('click', toggleCamera)" in script
     assert "elements.cameraView.addEventListener('keydown'" in script
     assert "elements.send.disabled = isBusy;" not in script
+    assert "elements.prompt.dispatchEvent(new Event('input', { bubbles: true }))" in script
+    assert "elements.send.hidden = submitting" in script
+    assert "composer-camera-button" in script
     assert "if (activeChatController === controller)" in script
     stop_handler = script[script.index("async function stopTask()"):]
     assert "setBusy(false);" in stop_handler

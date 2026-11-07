@@ -39,6 +39,13 @@ def test_router_falls_back_to_next_provider(caplog):
     assert "LLM provider primary failed: primary unavailable" in caplog.text
 
 
+def test_router_clears_transient_notice_before_fallback_answer():
+    events = list(LLMRouter([FailingProvider(), WorkingProvider()]).generate(LLMRequest([])))
+    assert [event.type for event in events] == [
+        "provider_notice", "provider_notice_clear", "text_delta", "stop",
+    ]
+
+
 @pytest.mark.parametrize("status", [400, 500, 503])
 def test_gemini_client_errors_always_fall_back_to_groq(status):
     class FailedGemini:

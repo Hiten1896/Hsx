@@ -1,5 +1,7 @@
 import base64
 import binascii
+import difflib
+import io
 import json
 import logging
 import mimetypes
@@ -11,6 +13,7 @@ import sqlite3
 import threading
 import time
 import copy
+import uuid
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,6 +23,7 @@ from api.chat import ChatStreamRegistry
 from api.devices import resolve_target_device
 from api.files import resolve_output
 from api.jobs import ask_job_payload
+from agent.activity_trace import redact_activity_text, redact_activity_value
 from agent.ask_user import ApprovalRequest, AskUserJobs, AskUserRequest
 from agent.jobs import JobQueue
 from agent.approval import ApprovalGuard
@@ -27,7 +31,7 @@ from agent.devices import DeviceRegistry, system_body_state
 from agent.feedback import FeedbackStore
 from agent.conversations import ConversationStore
 from agent.hardware import AUDIO_ALERTS, CAMERA, MOTION_MONITOR
-from agent.hardware.camera import MAX_FRAME_AGE_SECONDS
+from agent.hardware.camera import MAX_FRAME_AGE_SECONDS, camera_session_owner
 from agent.llm.router import default_router
 from agent.llm.types import LLMRequest
 from agent.llm_client import PROVIDER_BANDIT, call_llm, record_provider_feedback
@@ -85,8 +89,6 @@ SESSION_HISTORIES = {}
 SESSION_LAST_JOBS = {}
 SESSION_LOCKS = {}
 SESSION_LOCKS_GUARD = threading.Lock()
-SESSION_PRIVILEGE_GRANTS: dict[str, float] = {}
-SESSION_PRIVILEGE_GRANTS_LOCK = threading.Lock()
 RUN_CANCEL_EVENTS: dict[str, threading.Event] = {}
 CHAT_STREAMS = ChatStreamRegistry()
 MEMORY = MemoryManager(MEMORY_DB)
@@ -109,23 +111,16 @@ FEEDBACK_STORE = FeedbackStore(DATA_DIR / "feedback.db")
 CONVERSATIONS = ConversationStore(DATA_DIR / "conversations.db")
 _RESOURCE_ALERT_LOCK = threading.Lock()
 _RESOURCE_ALERT_STATE = {"cpu": False, "memory": False, "disk": False}
+_ACTIVITY_IMAGE_LOCK = threading.Lock()
+_ACTIVITY_IMAGE_PATHS: dict[str, Path] = {}
+_ACTIVITY_THUMBNAILS: dict[tuple[str, int, int], bytes] = {}
+_ACTIVITY_RETRY_LOCK = threading.Lock()
+_ACTIVITY_RETRY_CALLS: dict[str, dict] = {}
+_ACTIVITY_FILE_TOOLS = {
+    "compress_files", "create_text_file", "make_csv", "make_docx", "make_markdown",
+    "make_website", "report", "run_code", "shell", "system_execute", "video_edit",
+}
 MESH_GATEWAY = MeshGateway.from_environment()
-
-
-def _grant_session_privileges(session_id: str) -> None:
-    with SESSION_PRIVILEGE_GRANTS_LOCK:
-        SESSION_PRIVILEGE_GRANTS[session_id] = time.monotonic() + 8 * 60 * 60
-
-
-def _session_privileges_granted(session_id: str) -> bool:
-    with SESSION_PRIVILEGE_GRANTS_LOCK:
-        expires_at = SESSION_PRIVILEGE_GRANTS.get(session_id, 0)
-        if expires_at <= time.monotonic():
-            SESSION_PRIVILEGE_GRANTS.pop(session_id, None)
-            return False
-        return True
-
-
 def _hardware_audio_alert(*, succeeded: bool, message: str = "") -> None:
     try:
         if succeeded:
@@ -139,6 +134,234 @@ def _hardware_audio_alert(*, succeeded: bool, message: str = "") -> None:
 def _emit_chat_event(job_id: str, event: str, payload: dict) -> None:
     CHAT_STREAMS.emit(job_id, event, payload)
 
+
+def _activity_resolve_path(raw_path: str) -> Path | None:
+    candidate = Path(raw_path).expanduser()
+    if candidate.is_absolute():
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            return None
+        allowed_roots = (WORKSPACE.root, DATA_DIR.resolve())
+        return resolved if any(resolved == root or root in resolved.parents for root in allowed_roots) else None
+    for resolver in (WORKSPACE.resolve_read, WORKSPACE.resolve_write):
+        try:
+            resolved = resolver(raw_path)
+        except (OSError, ValueError):
+            continue
+        if resolved.is_file():
+            return resolved
+    return None
+
+
+def _activity_snapshot(path: Path | None) -> dict | None:
+    if path is None or not path.is_file():
+        return None
+    try:
+        size = path.stat().st_size
+        if size > 512 * 1024:
+            return {"path": path, "binary": True, "size": size, "text": ""}
+        data = path.read_bytes()
+    except OSError:
+        LOGGER.exception("Could not read a file for the activity trace.")
+        return None
+    try:
+        if b"\x00" in data:
+            raise UnicodeDecodeError("utf-8", data, 0, 1, "binary content")
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return {"path": path, "binary": True, "size": len(data), "text": ""}
+    return {"path": path, "binary": False, "size": len(data), "text": text}
+
+
+def _activity_diff(before: dict | None, after: dict | None, path: str) -> dict | None:
+    if after is None:
+        return None
+    before_text = before.get("text", "") if before and not before.get("binary") else ""
+    after_text = after.get("text", "")
+    if (before and before.get("binary")) or after.get("binary"):
+        size = after.get("size", 0)
+        return {
+            "path": path,
+            "added": 0,
+            "removed": 0,
+            "binary": True,
+            "size_bytes": size,
+            "hunks": [],
+        }
+    before_lines = before_text.splitlines()
+    after_lines = after_text.splitlines()
+    diff_lines = list(difflib.unified_diff(
+        before_lines,
+        after_lines,
+        fromfile=path if before else "/dev/null",
+        tofile=path,
+        n=3,
+        lineterm="",
+    ))
+    hunks = []
+    current = None
+    old_line = new_line = 0
+    total_added = total_removed = total_lines = 0
+    for line in diff_lines:
+        if line.startswith("@@"):
+            match = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+            if not match:
+                continue
+            old_line, new_line = map(int, match.groups())
+            current = {"header": line[:500], "lines": []}
+            hunks.append(current)
+            continue
+        if line.startswith(("--- ", "+++ ")) or current is None:
+            continue
+        prefix = line[:1]
+        text = redact_activity_text(line[1:] if prefix in {" ", "+", "-"} else line, 2000)
+        record = {"kind": {" ": "context", "+": "added", "-": "removed"}.get(prefix, "context"), "text": text}
+        if prefix == " ":
+            record.update({"old_line": old_line, "new_line": new_line})
+            old_line += 1
+            new_line += 1
+        elif prefix == "-":
+            record["old_line"] = old_line
+            old_line += 1
+        elif prefix == "+":
+            record["new_line"] = new_line
+            new_line += 1
+        total_lines += 1
+        if prefix == "+":
+            total_added += 1
+        elif prefix == "-":
+            total_removed += 1
+        if total_lines <= 1000:
+            current["lines"].append(record)
+    return {
+        "path": path,
+        "added": total_added,
+        "removed": total_removed,
+        "hunks": hunks,
+        "truncated": total_lines > 1000,
+    }
+
+
+def _persist_activity_event(task_dir: str, event: str, payload: dict) -> None:
+    if not task_dir:
+        return
+    try:
+        directory = (WORK_DIR / task_dir).resolve()
+        if WORK_DIR.resolve() not in directory.parents:
+            raise ValueError("Activity trace path must remain inside the task workspace.")
+        trace_path = directory / "activity-trace.jsonl"
+        if trace_path.exists() and trace_path.stat().st_size > 1_000_000:
+            LOGGER.warning("Activity trace reached its 1 MB storage cap.")
+            return
+        with trace_path.open("a", encoding="utf-8") as trace:
+            trace.write(json.dumps({"event": event, "data": payload}, ensure_ascii=False) + "\n")
+    except (OSError, ValueError):
+        LOGGER.exception("Could not persist the activity trace.")
+
+
+def _register_activity_images(paths: list[str]) -> list[dict]:
+    registered = []
+    for raw_path in paths:
+        path = _activity_resolve_path(raw_path)
+        if path is None:
+            continue
+        image_id = uuid.uuid4().hex
+        with _ACTIVITY_IMAGE_LOCK:
+            if len(_ACTIVITY_IMAGE_PATHS) >= 256:
+                oldest = next(iter(_ACTIVITY_IMAGE_PATHS))
+                _ACTIVITY_IMAGE_PATHS.pop(oldest)
+            _ACTIVITY_IMAGE_PATHS[image_id] = path
+        try:
+            display_path = path.relative_to(WORKSPACE.root).as_posix()
+        except ValueError:
+            display_path = path.name
+        registered.append({"id": image_id, "path": redact_activity_text(display_path, 500)})
+    return registered
+
+
+def _activity_display_path(raw_path: str) -> str:
+    path = _activity_resolve_path(raw_path)
+    if path is None:
+        return ""
+    try:
+        return path.relative_to(WORKSPACE.root).as_posix()
+    except ValueError:
+        return ""
+
+
+def _retry_activity_tool(job_id: str, call_id: str) -> tuple[dict, int]:
+    with _ACTIVITY_RETRY_LOCK:
+        retry = _ACTIVITY_RETRY_CALLS.get(call_id)
+    if not retry or retry.get("job_id") != job_id or time.time() - retry.get("created_at", 0) > 3600:
+        return {"error": "This failed step is no longer available to retry."}, 404
+    job = ASK_JOBS.get(job_id)
+    if job is None or job.get("session_id") != retry["session_id"]:
+        return {"error": "This failed step is no longer available to retry."}, 404
+    tool_name = retry["tool"]
+    tool = next((item for item in TOOLS if item.get("name") == tool_name), None)
+    runner = SKILL_MAP.get(tool_name)
+    if tool is None or runner is None:
+        return {"error": "The original tool is no longer available."}, 404
+    arguments = dict(retry["arguments"])
+    decision = POLICY.decide(tool, arguments, retry["session_id"])
+    if not decision.get("allowed"):
+        return {
+            "error": (
+                "This step needs approval. Submit the request again to use the normal approval flow."
+                if decision.get("status") == "waiting_approval"
+                else "This step is blocked by the host safety policy."
+            ),
+            "status": decision.get("status", "blocked"),
+        }, 403
+    start = retry["start"]
+    raw_before = start.get("file_path") or next(
+        (arguments.get(key) for key in ("path", "filename", "file") if isinstance(arguments.get(key), str)),
+        "",
+    )
+    before_path = _activity_resolve_path(raw_before) if raw_before else None
+    before = _activity_snapshot(before_path)
+    ROUTER_LOGGER.log_tool_prediction(retry["session_id"], job_id, tool_name, call_id)
+    started = time.perf_counter()
+    POLICY.audit_event("activity_step_retry", retry["session_id"], job_id, tool_name)
+    try:
+        if tool_name in {"audio_play", "camera_record"}:
+            arguments["target_device"] = retry["target_device"]
+        result = runner(**arguments)
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        result = {"success": False, "error": str(error)}
+    duration_ms = (time.perf_counter() - started) * 1000
+    failed = isinstance(result, dict) and result.get("success") is False
+    ROUTER_LOGGER.log_tool_execution(
+        retry["session_id"], job_id, tool_name, call_id, duration_ms, "failed" if failed else "succeeded"
+    )
+    activity = tool_end_event(start, result, duration_ms, failed=failed)
+    raw_after = next((path for path in _result_paths_for_activity(result)), "") if isinstance(result, dict) else ""
+    after_path = _activity_resolve_path(raw_after or raw_before) if raw_after or raw_before else None
+    after = _activity_snapshot(after_path)
+    if tool_name in _ACTIVITY_FILE_TOOLS and after_path is not None:
+        relative_path = _activity_display_path(str(after_path)) or after_path.name
+        diff = _activity_diff(before, after, relative_path)
+        if diff is not None:
+            activity["diff"] = diff
+            activity["file_path"] = relative_path
+            if before is None and diff["added"]:
+                activity.update({"icon": "file-plus", "present": "Creating", "past": "Created"})
+    activity["images"] = _register_activity_images(activity.get("images", []))
+    safe_activity = redact_activity_value(activity)
+    _persist_activity_event(retry.get("task_dir", ""), "tool_end", safe_activity)
+    with _ACTIVITY_RETRY_LOCK:
+        _ACTIVITY_RETRY_CALLS.pop(call_id, None)
+    return {"activity": safe_activity, "status": "failed" if failed else "completed"}, 200
+
+
+def _result_paths_for_activity(result: dict) -> list[str]:
+    values = []
+    for key in ("path", "output_path", "file", "filename"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            values.append(value.strip())
+    return values
 
 
 def _job_error(error: Exception) -> str:
@@ -298,9 +521,16 @@ def _is_user_upload_path(raw_path: str) -> bool:
 
 def _camera_status_payload() -> dict:
     status = CAMERA.health_check()
+    from agent.tools.vision_capture import disabled_reason, enabled
+
+    snapshot_available = CAMERA.is_started() or (
+        enabled() and bool(status.get("device_available")) and shutil.which("ffmpeg") is not None
+    )
     host = system_info()
     return {
         **status,
+        "snapshot_available": snapshot_available,
+        "snapshot_reason": "" if snapshot_available else disabled_reason(),
         "host": {
             "hostname": host["hostname"],
             "hardware": host["cpu"]["model"],
@@ -390,7 +620,6 @@ def _resume_ask_job(job_id: str) -> None:
                 target_device=job.get("target_device", "client_browser"),
                 device_actions=device_actions,
                 job_id=job_id,
-                elevated_session=_session_privileges_granted(job["session_id"]),
             )
     except ApprovalRequest as approval:
         updated = ASK_JOBS.pause_approval(
@@ -414,7 +643,7 @@ def _resume_ask_job(job_id: str) -> None:
         permission_request = approval.approval_request.get("request_type") == "permission_request"
         POLICY.audit_event(
             "permission_requested" if permission_request else "approval_requested",
-            job["session_id"], job_id, approval.approval_request["risk"],
+            job["session_id"], job_id, approval.approval_request.get("action_pattern", "permission"),
         )
         NOTIFIER.notify(
             "needs_approval",
@@ -478,8 +707,6 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
     tool_name = str(approval.get("tool", ""))
     arguments = approval.get("arguments")
     permission_request = approval.get("request_type") == "permission_request"
-    if approved and approval.get("grant_scope") == "session":
-        _grant_session_privileges(job["session_id"])
     if not isinstance(arguments, dict) or tool_name not in SKILL_MAP:
         _fail_job(job_id, job, RuntimeError("The stored approval request is invalid."), started_at=started_at)
         return
@@ -492,7 +719,7 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
         skill,
         arguments,
         job["session_id"],
-        approved=approved,
+        approved="always_allow" if approved and approval.get("grant_scope") == "always" else approved,
         approver="user",
     )
     result: dict
@@ -541,7 +768,6 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
                 target_device=job.get("target_device", "local_host"),
                 device_actions=device_actions,
                 job_id=job_id,
-                elevated_session=_session_privileges_granted(job["session_id"]),
             )
     except ApprovalRequest as next_approval:
         updated = ASK_JOBS.pause_approval(
@@ -567,7 +793,7 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
             "permission_requested" if request_type == "permission_request" else "approval_requested",
             job["session_id"],
             job_id,
-            next_approval.approval_request["risk"],
+            next_approval.approval_request.get("action_pattern", "permission"),
         )
         NOTIFIER.notify(
             "needs_approval",
@@ -644,6 +870,8 @@ def _run_chat_job(
     target_device: str = "client_browser",
     on_text_delta: Callable[[str], None] | None = None,
     cancel_event: threading.Event | None = None,
+    on_provider_notice: Callable[[str], None] | None = None,
+    on_activity_event: Callable[[str, dict], None] | None = None,
 ) -> None:
     job = ASK_JOBS.get(job_id)
     if job is None or job["state"] != "running":
@@ -652,6 +880,66 @@ def _run_chat_job(
     started_at = time.perf_counter()
     POLICY.audit_event("job_started", job["session_id"], job_id, "running")
     device_actions = list(job.get("device_actions") or [])
+    activity_snapshots = {}
+    activity_calls = {}
+
+    def emit_activity(event: str, payload: dict) -> None:
+        call_id = str(payload.get("tool_call_id", ""))
+        if event == "tool_start":
+            arguments = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+            if len(json.dumps(arguments, ensure_ascii=False)) <= 65536:
+                activity_calls[call_id] = {
+                    "tool": payload.get("tool", ""),
+                    "arguments": copy.deepcopy(arguments),
+                    "start": copy.deepcopy(payload),
+                    "session_id": job["session_id"],
+                    "target_device": job.get("target_device", "client_browser"),
+                    "task_dir": job.get("task_dir", ""),
+                }
+            raw_path = payload.get("file_path") or next(
+                (arguments.get(key) for key in ("path", "filename", "file") if isinstance(arguments.get(key), str)),
+                "",
+            )
+            path = _activity_resolve_path(raw_path) if raw_path else None
+            activity_snapshots[call_id] = _activity_snapshot(path)
+            if path is not None:
+                payload["file_path"] = _activity_display_path(str(path))
+        elif event == "tool_end":
+            arguments = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+            raw_path = payload.get("file_path") or next(
+                (arguments.get(key) for key in ("path", "filename", "file") if isinstance(arguments.get(key), str)),
+                "",
+            )
+            after_path = _activity_resolve_path(raw_path) if raw_path else None
+            after = _activity_snapshot(after_path)
+            before = activity_snapshots.pop(call_id, None)
+            if payload.get("tool") in _ACTIVITY_FILE_TOOLS and after_path is not None:
+                relative_path = _activity_display_path(str(after_path)) or after_path.name
+                diff = _activity_diff(before, after, relative_path)
+                if diff is not None:
+                    payload["diff"] = diff
+                    payload["file_path"] = relative_path
+                    if before is None and diff["added"]:
+                        payload.update({"icon": "file-plus", "present": "Creating", "past": "Created"})
+            payload["images"] = _register_activity_images(
+                payload.get("images", []) if isinstance(payload.get("images"), list) else []
+            )
+            if payload.get("status") == "failed" and call_id in activity_calls:
+                retry_call = {
+                    **activity_calls[call_id],
+                    "job_id": job_id,
+                    "created_at": time.time(),
+                }
+                with _ACTIVITY_RETRY_LOCK:
+                    _ACTIVITY_RETRY_CALLS[call_id] = retry_call
+                    while len(_ACTIVITY_RETRY_CALLS) > 100:
+                        _ACTIVITY_RETRY_CALLS.pop(next(iter(_ACTIVITY_RETRY_CALLS)))
+        elif event == "activity_narration":
+            payload = {"text": redact_activity_text(str(payload.get("text", "")), 1000)}
+        safe_payload = redact_activity_value(payload, limit=2000)
+        _persist_activity_event(job.get("task_dir", ""), event, safe_payload)
+        _emit_chat_event(job_id, event, safe_payload)
+
     try:
         with lock, task_output_scope(WORKSPACE, job["request"], job["task_dir"]):
             history = copy.deepcopy(SESSION_HISTORIES.get(job["session_id"], []))
@@ -666,9 +954,10 @@ def _run_chat_job(
                 target_device=job.get("target_device", target_device),
                 device_actions=device_actions,
                 on_text_delta=on_text_delta,
+                on_provider_notice=on_provider_notice,
+                on_activity_event=emit_activity if on_activity_event is not None else None,
                 job_id=job_id,
                 cancel_event=cancel_event,
-                elevated_session=_session_privileges_granted(job["session_id"]),
             )
     except ApprovalRequest as approval:
         updated = ASK_JOBS.pause_approval(
@@ -698,7 +987,7 @@ def _run_chat_job(
             else "approval_requested",
             job["session_id"],
             job_id,
-            approval.approval_request["risk"],
+            approval.approval_request.get("action_pattern", "permission"),
         )
         NOTIFIER.notify(
             "needs_approval",
@@ -838,6 +1127,15 @@ class HsxHandler(BaseHTTPRequestHandler):
             return
 
     def _stream_camera(self) -> None:
+        query = parse_qs(urlsplit(self.path).query)
+        try:
+            owner = camera_session_owner(str(query.get("session_id", [""])[0]))
+        except ValueError:
+            self._json({"error": "Turn on the camera in this browser session first."}, 403)
+            return
+        if not CAMERA.has_owner(owner):
+            self._json({"error": "Turn on the camera in this browser session first."}, 403)
+            return
         frame = CAMERA.latest_frame()
         if frame is None:
             frame = CAMERA.wait_for_frame(-1, timeout=5.0)
@@ -935,6 +1233,8 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"skills": [tool["name"] for tool in TOOLS]})
         elif path == "/api/policy/status":
             self._json({"stopped": POLICY.is_stopped()})
+        elif path == "/api/permissions":
+            self._json(POLICY.permission_list())
         elif path == "/api/runs/status":
             run_id = str(parse_qs(urlsplit(self.path).query).get("run_id", [""])[0])
             event = RUN_CANCEL_EVENTS.get(run_id)
@@ -1011,6 +1311,51 @@ class HsxHandler(BaseHTTPRequestHandler):
                 self._json({"error": str(error)}, 400)
                 return
             self._json({"content": content})
+        elif path == "/api/activity/image":
+            image_id = query.get("id", [""])[0]
+            with _ACTIVITY_IMAGE_LOCK:
+                image_path = _ACTIVITY_IMAGE_PATHS.get(image_id)
+            safe_path = _activity_resolve_path(str(image_path)) if image_path else None
+            if safe_path is None:
+                self._json({"error": "Activity image is unavailable."}, 404)
+                return
+            if query.get("thumbnail", ["1"])[0] == "0":
+                self._serve_file(safe_path, inline=True)
+                return
+            if safe_path.stat().st_size > 20 * 1024 * 1024:
+                self._json({"error": "Activity image exceeds the preview size limit."}, 413)
+                return
+            cache_key = (image_id, safe_path.stat().st_mtime_ns, safe_path.stat().st_size)
+            with _ACTIVITY_IMAGE_LOCK:
+                thumbnail = _ACTIVITY_THUMBNAILS.get(cache_key)
+            if thumbnail is None:
+                try:
+                    from PIL import Image
+
+                    with Image.open(safe_path) as image:
+                        image.thumbnail((256, 256))
+                        image.convert("RGB").save(
+                            (buffer := io.BytesIO()),
+                            format="JPEG",
+                            quality=76,
+                            optimize=True,
+                        )
+                    thumbnail = buffer.getvalue()
+                except (ImportError, OSError, ValueError) as error:
+                    self._json({"error": f"Image preview is unavailable: {error}"}, 415)
+                    return
+                with _ACTIVITY_IMAGE_LOCK:
+                    if len(_ACTIVITY_THUMBNAILS) >= 256:
+                        _ACTIVITY_THUMBNAILS.pop(next(iter(_ACTIVITY_THUMBNAILS)))
+                    _ACTIVITY_THUMBNAILS[cache_key] = thumbnail
+            self.send_response(200)
+            self._security_headers()
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Cache-Control", "private, no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Length", str(len(thumbnail)))
+            self.end_headers()
+            self.wfile.write(thumbnail)
         elif path == "/api/files":
             try:
                 files = workspace_search(
@@ -1103,11 +1448,55 @@ class HsxHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/mesh/tasks":
             path = "/api/chat/stream"
-        if path == "/api/camera/start":
-            started = CAMERA.start()
+        if path == "/api/activity/retry":
+            payload = self._body()
+            try:
+                result, status = _retry_activity_tool(
+                    str(payload.get("job_id", "")),
+                    str(payload.get("tool_call_id", "")),
+                )
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
+                self._json({"error": f"Could not retry the failed step: {error}"}, 500)
+                return
+            self._json(result, status)
+        elif path == "/api/permissions":
+            payload = self._body()
+            try:
+                if payload.get("reset_always_allow"):
+                    result = POLICY.reset_always_allow()
+                elif payload.get("remove_always_allow"):
+                    result = POLICY.remove_always_allow(str(payload["remove_always_allow"]))
+                else:
+                    action = str(payload.get("action", ""))
+                    if action not in POLICY.permission_list()["ask_first"] and action not in {
+                        "delete_owner_files", "overwrite_owner_files", "sudo", "system_services",
+                        "shutdown_reboot", "pipe_to_shell", "read_secrets", "camera_start",
+                        "microphone_start", "install_packages", "external_services",
+                    }:
+                        self._json({"error": "Unknown permission action."}, 400)
+                        return
+                    result = POLICY.update_permission(action, bool(payload.get("enabled")))
+            except (OSError, ValueError) as error:
+                self._json({"error": str(error)}, 400)
+                return
+            self._json(result)
+        elif path == "/api/camera/start":
+            try:
+                payload = self._body()
+                owner = camera_session_owner(payload.get("session_id", "") if isinstance(payload, dict) else "")
+            except (json.JSONDecodeError, ValueError):
+                self._json({"error": "A valid session_id is required to consent to camera use."}, 400)
+                return
+            started = CAMERA.acquire(owner)
             self._json({"started": started, **_camera_status_payload()}, 202)
         elif path == "/api/camera/stop":
-            CAMERA.stop()
+            try:
+                payload = self._body()
+                owner = camera_session_owner(payload.get("session_id", "") if isinstance(payload, dict) else "")
+            except (json.JSONDecodeError, ValueError):
+                self._json({"error": "A valid session_id is required to stop this camera session."}, 400)
+                return
+            CAMERA.release(owner)
             self._json({"stopped": True, **_camera_status_payload()})
         elif path == "/api/conversations":
             payload = self._body()
@@ -1507,6 +1896,10 @@ class HsxHandler(BaseHTTPRequestHandler):
                     target_device,
                     lambda text: _emit_chat_event(job["id"], "text_delta", {"text": text}),
                     cancel_event,
+                    lambda message: _emit_chat_event(
+                        job["id"], "provider_notice", {"message": message}
+                    ),
+                    lambda event, data: _emit_chat_event(job["id"], event, data),
                 ),
                 daemon=True,
             ).start()

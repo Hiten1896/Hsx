@@ -187,8 +187,11 @@ def test_chat_stream_forwards_model_text_deltas(tmp_path: Path, monkeypatch):
 
     observed_targets = []
 
-    def fake_run_chat_job(job_id, approvals, sensitive, target_device, on_text_delta, cancel_event=None):
-        del cancel_event
+    def fake_run_chat_job(
+        job_id, approvals, sensitive, target_device, on_text_delta, cancel_event=None, on_provider_notice=None,
+        on_activity_event=None,
+    ):
+        del cancel_event, on_activity_event
         observed_targets.append(target_device)
         on_text_delta("Streaming ")
         on_text_delta("answer")

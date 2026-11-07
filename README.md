@@ -85,15 +85,14 @@ Loopback-only local API
 
 The model can propose a tool call, but the tool implementation and policy layer decide
 whether that call is available, requires confirmation, or must be denied. Host-level
-operations are further separated behind the policy broker and the operating-system
+operations are governed by the editable action policy and the operating-system
 permissions of the Hsx service account.
 
-Autonomy is controlled by `HSX_AUTONOMY=auto|ask|strict` (default `auto`). SAFE
-actions run with audit logging, NORMAL actions run silently in `auto` and `strict`
-but ask in `ask`, DANGEROUS actions always require approval, and BLOCKED actions
-never run. Approval requests persist across restarts and are resumed from the stored
-tool call. See [docs/approvals.md](docs/approvals.md) for action tiers and response
-handling.
+Hsx uses one editable permission rule in `config/permissions.yaml`. Actions listed
+under `ask_first` show a plain-English approval card; other actions run silently
+and are audit-logged. Always-allow patterns can be managed in Settings > Permissions.
+Hard-denied secret exposure and security-control changes cannot be approved. Pending
+approvals persist across restarts. See [docs/approvals.md](docs/approvals.md).
 
 ## Open Hsx from your phone or laptop
 
@@ -226,7 +225,7 @@ Copy `.env.example` to `.env` and fill only the settings you need. Important gro
 | Mesh | `HSX_MESH_HOST`, `HSX_MESH_PORT`, `HSX_MESH_TOKEN`, `HSX_MESH_TLS_CERT`, `HSX_MESH_TLS_KEY` | Optional private-LAN HTTPS node API |
 | Owner approval | `HSX_OWNER_PIN` | Approval for privileged actions |
 | Workspace | `HSX_WORKSPACE`, `HSX_WORK_DIR` | Source files and generated deliverables |
-| Execution | `HSX_SANDBOX`, `HSX_ALLOW_DANGEROUS`, `HSX_ALLOW_SYSTEM_CONTROL` | Code isolation and administrative controls |
+| Execution | `HSX_SANDBOX` | Code isolation; action approvals are configured in `config/permissions.yaml` |
 | Voice | `HSX_ENABLE_VOICE_LISTENER`, `HSX_VOICE_WAKE_PHRASE`, `HSX_VOICE_MODEL_PATH` | Opt-in local microphone input |
 | Hardware | `HSX_ENABLE_CAMERA_STREAM`, `HSX_ENABLE_MOTION_MONITOR`, `HSX_ENABLE_VISION_CAPTURE`, `HSX_ENABLE_AUDIO_ALERTS`, `HSX_ENABLE_VOICE_ALERTS` | Opt-in camera, motion, and speaker services |
 | Notifications | `HSX_VAPID_*`, `HSX_NOTIFY_*`, `TELEGRAM_*` | Web Push, in-app, and Telegram routing |
@@ -242,18 +241,13 @@ endpoint, Tailscale/serve state, disk headroom, and clock synchronization.
 ### Headless Debian hardware (optional)
 
 Grant the HSX service account only the necessary `video` and/or `audio` device
-permissions. When the web server starts, its standalone camera service begins
-capturing `/dev/video0` at 640x480 and 15 fps, independent of chat jobs. The
-dashboard uses the loopback-only `GET /api/camera/stream` MJPEG endpoint; the
-service keeps only the latest bounded JPEG frame in memory and returns 503 while
-the camera or FFmpeg is unavailable. `HSX_CAMERA_DEVICE` defaults to `/dev/video0`.
-Enable either
-`HSX_ENABLE_CAMERA_STREAM=1` with a private-network `HSX_RTSP_URL`, or
-`HSX_ENABLE_MOTION_MONITOR=1`; these two camera daemons are mutually exclusive by
-default because many webcams cannot be opened by both at once. The FFmpeg publisher
-pushes to an already-running RTSP server (for example, MediaMTX); FFmpeg itself does
-not host the RTSP endpoint. These optional direct-device modes take precedence over
-the dashboard capture process to avoid competing webcam handles. Motion snapshots are bounded to 500 files under
+permissions. The web camera toggle starts one `CameraService` for `/dev/video0` at
+640x480 and 15 fps. Its bounded latest JPEG frame feeds the dashboard stream,
+agent snapshots, and motion detection; no consumer opens the device again.
+`HSX_CAMERA_DEVICE` defaults to `/dev/video0`. Chat-triggered camera starts ask
+for permission; snapshots reuse an already-running web camera without asking.
+When the camera is off, a chat snapshot requires `HSX_ENABLE_VISION_CAPTURE=1` in
+`.env`, captures one frame, then stops the service. Motion snapshots are bounded to 500 files under
 `data/snapshots/motion/`, with event metadata in `data/motion_events.json`.
 
 Install `ffmpeg` or `fswebcam` for still captures. Set
@@ -334,8 +328,9 @@ bounded question in the web interface instead of guessing.
 
 - The primary API accepts requests without bearer authentication. Keep the service
   bound to a trusted network.
-- Skills have policy tiers such as safe, confirm, and dangerous. Decisions are recorded
-  in an append-only audit log.
+- Tool actions are checked against `config/permissions.yaml`. Unlisted actions run
+  without a prompt and are audit-logged; listed actions ask once. Hard denies cannot
+  be overridden. The Settings > Permissions panel edits the list and saved exceptions.
 - `POST /api/stop` cancels one active run. The Settings emergency stop pauses every
   run until a user resumes the service.
 - Owner-sensitive actions require the separate owner approval flow, with rate limiting
@@ -436,13 +431,13 @@ skills/example/
 └── skill.py
 ```
 
-The metadata declares the skill name, description, arguments, risk tier, and related
+The metadata declares the skill name, description, arguments, and related
 policy information. The implementation exposes `run(**kwargs) -> dict`. The loader
 validates metadata and imports skills at startup.
 
 The `tool_creator` skill can generate a temporary skill when an approved request needs a
-missing capability. Generated code is checked for syntax, imports, paths, filesystem
-writes, and risk metadata. It is placed in controlled scratch storage by default;
+missing capability. Generated code is checked for syntax, imports, paths, and filesystem
+writes. It is placed in controlled scratch storage by default;
 permanent promotion requires an explicit request and owner approval.
 
 The separate `create_dynamic_tool` meta-tool registers declarations backed only by

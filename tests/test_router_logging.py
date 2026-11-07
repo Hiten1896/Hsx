@@ -42,7 +42,7 @@ def test_router_logs_predicted_tool_and_execution_time(tmp_path, monkeypatch):
     answer, _ = orchestrator.run_agent(
         "Find news.",
         [],
-        [{"name": "lookup", "risk": "low"}],
+        [{"name": "lookup"}],
         {"lookup": lookup},
         session_id="test-session",
         job_id="test-job",

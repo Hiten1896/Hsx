@@ -15,13 +15,12 @@ class PolicyError(ValueError):
 
 @dataclass(frozen=True)
 class ActionPolicy:
-    tier: str
+    permission: str | None
     constraints: dict[str, Any]
 
 
 @dataclass(frozen=True)
 class Policy:
-    autonomy: str
     actions: dict[str, ActionPolicy]
 
     @classmethod
@@ -32,9 +31,8 @@ class Policy:
             raise PolicyError("Policy file is unavailable or invalid.") from exc
         if not isinstance(data, dict):
             raise PolicyError("Policy must be a mapping.")
-        autonomy = data.get("autonomy", "shadow")
-        if autonomy not in {"shadow", "assisted", "auto"}:
-            raise PolicyError("Policy autonomy must be shadow, assisted, or auto.")
+        if set(data) != {"actions"}:
+            raise PolicyError("Policy must contain only the action allowlist.")
         raw_actions = data.get("actions")
         if not isinstance(raw_actions, dict) or not raw_actions:
             raise PolicyError("Policy must define actions.")
@@ -42,14 +40,16 @@ class Policy:
         for name, raw in raw_actions.items():
             if not isinstance(name, str) or not isinstance(raw, dict):
                 raise PolicyError("Each action policy must be a mapping.")
-            tier = raw.get("tier")
-            if tier not in {"auto", "approve", "deny"}:
-                raise PolicyError(f"Invalid tier for action {name}.")
+            if set(raw) - {"permission", "constraints"}:
+                raise PolicyError(f"Action policy for {name} has an unsupported field.")
+            permission = raw.get("permission")
+            if permission is not None and (not isinstance(permission, str) or not permission):
+                raise PolicyError(f"Permission for action {name} must be a non-empty action name.")
             constraints = raw.get("constraints", {})
             if not isinstance(constraints, dict):
                 raise PolicyError(f"Constraints for action {name} must be a mapping.")
-            actions[name] = ActionPolicy(tier=tier, constraints=constraints)
-        return cls(autonomy=autonomy, actions=actions)
+            actions[name] = ActionPolicy(permission=permission, constraints=constraints)
+        return cls(actions=actions)
 
     def action(self, name: str) -> ActionPolicy:
         try:

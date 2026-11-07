@@ -7,6 +7,8 @@ import socket
 from pathlib import Path
 from typing import Any
 
+from agent.autonomy import needs_permission
+
 from .audit import AuditWriter
 from .executors import Executor
 from .interfaces import SystemInterface, default_hsx_uid, default_system
@@ -33,7 +35,6 @@ class Broker:
         request_id = request.get("id", "") if isinstance(request, dict) else ""
         action = request.get("action", "") if isinstance(request, dict) else ""
         args = request.get("args", {}) if isinstance(request, dict) else {}
-        tier = "deny"
         decision = "deny"
         try:
             if self.expected_uid is not None and peer_uid != self.expected_uid:
@@ -41,18 +42,13 @@ class Broker:
             action, args = validate_request(request)
             policy = Policy.load(self.policy_path)
             action_policy = policy.action(action)
-            tier = action_policy.tier
-            effective_tier = self._effective_tier(action, args, action_policy.tier, action_policy.constraints)
-            self._check_constraints(action, args, action_policy.constraints, allow_non_hsx_service=action == "service")
-            tier = effective_tier
-            if effective_tier == "deny":
-                raise PermissionError("Action is denied by policy.")
-            if effective_tier == "approve":
+            self._check_constraints(action, args, action_policy.constraints)
+            outside_service_allowlist = action == "service" and not self._matches_any(
+                args["unit"], action_policy.constraints.get("allowed_units", ["hsx-*"])
+            )
+            if (action_policy.permission and needs_permission(action_policy.permission)) or outside_service_allowlist:
                 decision = "approval_required"
                 result = "owner approval required"
-            elif policy.autonomy == "shadow" and action not in {"system_stats", "network_status", "tailscale_status", "journal_read"}:
-                decision = "would_run"
-                result = "shadow mode"
             else:
                 decision = "allow"
                 result = self.executor.execute(action, args)
@@ -63,29 +59,20 @@ class Broker:
             request_id=request_id,
             action=action,
             args=args if isinstance(args, dict) else {},
-            tier=tier,
             decision=response["decision"],
             result=response.get("result", response.get("error", "")),
         )
         return response
 
     @staticmethod
-    def _effective_tier(
-        action: str, args: dict[str, Any], tier: str, constraints: dict[str, Any]
-    ) -> str:
-        if action == "service" and tier == "auto" and not any(
-            args["unit"].startswith(prefix.rstrip("*")) for prefix in constraints.get("allowed_units", ["hsx-*"])
-        ):
-            return "approve"
-        return tier
+    def _matches_any(value: str, patterns: list[str]) -> bool:
+        return any(value.startswith(prefix.rstrip("*")) for prefix in patterns)
 
     @staticmethod
     def _check_constraints(
         action: str,
         args: dict[str, Any],
         constraints: dict[str, Any],
-        *,
-        allow_non_hsx_service: bool = False,
     ) -> None:
         if action == "service" and args["operation"] not in {"start", "stop", "restart", "status"}:
             raise PermissionError("Service operation is not allowed.")
@@ -95,18 +82,10 @@ class Broker:
             args["name"].startswith(prefix.rstrip("*")) for prefix in constraints.get("allowed_names", ["hsx-*"])
         ):
             raise PermissionError("Timer is outside policy.")
-        if action == "service" and not allow_non_hsx_service and not any(
-            args["unit"].startswith(prefix.rstrip("*")) for prefix in constraints.get("allowed_units", ["hsx-*"])
-        ):
-            raise PermissionError("Unit is outside policy.")
         if action == "journal_read" and not any(
             args["unit"].startswith(prefix.rstrip("*")) for prefix in constraints.get("allowed_units", ["hsx-*"])
         ):
             raise PermissionError("Unit is outside policy.")
-        if action == "schedule_timer" and not any(
-            args["name"].startswith(prefix.rstrip("*")) for prefix in constraints.get("allowed_names", ["hsx-*"])
-        ):
-            raise PermissionError("Timer is outside policy.")
         if action == "disk_cleanup" and args["target"] not in constraints.get(
             "allowed_targets", ["apt-cache", "old-logs", "outputs"]
         ):

@@ -9,6 +9,7 @@ from typing import Any
 
 from agent.llm.router import default_router
 from agent.llm.types import LLMRequest, to_plain_data
+from agent.ml.storage import atomic_write_json
 from agent.router import LLM_TELEMETRY
 from config import DATA_DIR
 
@@ -47,13 +48,7 @@ class ProviderBandit:
         })
 
     def _save(self) -> None:
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
-        temporary_path.write_text(
-            json.dumps(self._state, ensure_ascii=False, sort_keys=True),
-            encoding="utf-8",
-        )
-        temporary_path.replace(self.state_path)
+        atomic_write_json(self.state_path, self._state)
 
     def rank(self, providers: list[Any], *, prefer_cloud: bool = False) -> list[Any]:
         with self._lock:
@@ -202,6 +197,7 @@ def call_llm(
     target_device: str = "client_browser",
     body_context: str = "",
     on_text_delta: Callable[[str], None] | None = None,
+    on_provider_notice: Callable[[str], None] | None = None,
     job_id: str = "",
     prefer_cloud: bool = False,
     disable_panel: bool = False,
@@ -215,8 +211,14 @@ def call_llm(
     )
     system = (
         "You are Hsx, a concise and capable shared-workspace agent. "
-        "Only call a tool when the request requires file generation, file reading, "
-        "system facts, or code execution. Otherwise answer directly. Tolerate informal language and typos. "
+        "Use registered tools whenever they can answer a request better than guessing. "
+        "Actions are governed by one code-classified rule: ask for permission only when the action is listed in the user's editable permissions policy; audit all decisions. Never infer authorization from a model label. "
+        "For current events, weather, or online research, use web_search when it is registered. "
+        "For questions about your abilities, answer only from the tools and live setup facts available in this request. "
+        "Never claim an ability is unavailable when a matching registered tool exists. "
+        "When a requested ability has no loaded tool, check whether an existing setting is missing; if an allowlisted package recipe exists, call capability_resolver to show an approval plan; otherwise offer create_dynamic_tool in the sandbox. After an approved install, continue the original request with the new tool without asking the user to repeat it. "
+        "If the tool reports missing setup, state the exact setting needed in plain language. "
+        "Tolerate informal language and typos. "
         "For CPU, memory, disk, OS, uptime, hostname, local date/time, network, or USB facts, "
         "prefer the direct system_info, disk_usage, network_status, list_usb, and list_serial_ports tools; "
         "machine facts must come only from tool results; do not infer or invent values. "
@@ -226,10 +228,12 @@ def call_llm(
         "ask only for missing information, once, and never more than three questions for one task. "
         "If the user gives file content and a name, do not ask for them again; create the file with create_text_file. "
         "Search and read shared files through workspace tools. Write deliverables inside the shared workspace, "
-        "prefer Hsx Work task folders unless the user gives another workspace path; never delete or overwrite a file. "
-        "Never modify the owner's source files. "
+        "prefer Hsx Work task folders unless the user gives another workspace path. Ask before deleting or overwriting owner files as required by the permissions policy. "
+        "When the camera is already on in the web UI, use its shared CameraService frames for snapshots; do not open the camera device independently. Starting camera or microphone capture from chat requires permission. "
         "When a requested capability is missing, use the confirmed tool_creator skill to generate and validate a narrowly scoped tool. "
-        "Remain provider-agnostic. Never mention provider names, API keys, or key configuration to the user. "
+        "Remain provider-agnostic. Never expose credential values. Be truthful about which setup setting is missing. "
+        "Speak as Hsx, the user's assistant running on hsx-server with a shared workspace, camera, and Tailscale web UI. "
+        "Never say 'I'm just an AI', 'as a language model', or 'I don't have access to'. "
         "Respond in clean natural language without debug chatter, internal execution details, or status banners. "
         f"Route media actions to the {target_device} device. "
         f"{body_context} "
@@ -312,6 +316,12 @@ def call_llm(
                 blocks.append(NormalizedBlock(
                     type="text", text=event.text, provider_meta=event.provider_meta or {}, part=event.raw_part
                 ))
+            elif event.type == "provider_notice":
+                if on_provider_notice is not None:
+                    on_provider_notice(event.text)
+            elif event.type == "provider_notice_clear":
+                if on_provider_notice is not None:
+                    on_provider_notice("")
             elif event.type == "tool_call":
                 blocks.append(
                     NormalizedBlock(

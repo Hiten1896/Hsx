@@ -1,0 +1,21 @@
+{
+  "name": "describe_image",
+  "description": "Describe an image file the user named or attached. Sends only that image to the configured vision provider.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Workspace relative path of the user-named or attached image."
+      },
+      "question": {
+        "type": "string",
+        "description": "What the user asked about the image."
+      }
+    },
+    "required": [
+      "path",
+      "question"
+    ]
+  }
+}

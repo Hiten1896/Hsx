@@ -24,7 +24,11 @@
     "stop": "/api/stop",
     "policy_status": "/api/policy/status",
     "emergency_stop": "/api/emergency-stop",
-    "resume": "/api/resume"
+    "resume": "/api/resume",
+    "permissions": "/api/permissions",
+    "activity_retry": "/api/activity/retry"
   },
-  "stream_events": ["job", "text_delta", "done", "error"]
+  "stream_events": [
+    "job", "text_delta", "done", "error", "tool_start", "tool_end", "activity_narration", "provider_notice"
+  ]
 }

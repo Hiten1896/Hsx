@@ -1,40 +1,11 @@
-# Autonomy and approvals
+# Permissions
 
-Hsx classifies actions in code before execution. The model's tool description or
-requested risk label does not override the policy. `HSX_AUTONOMY` accepts
-`auto`, `ask`, or `strict`; the default is `auto`.
+Hsx uses one permission rule. `config/permissions.yaml` lists action patterns that ask first. Actions outside that list run silently and receive an audit entry. The rule is editable in Settings > Permissions.
 
-| Tier | Examples | `auto` | `ask` | `strict` |
-| --- | --- | --- | --- | --- |
-| SAFE | Read-only system facts, workspace reads/search, creating a new file in the workspace | Run and audit | Run and audit | Run and audit |
-| NORMAL | Workspace writes, package installs in the venv, normal outbound HTTP, restarting `hsx` | Run and audit | Ask first | Run and audit |
-| DANGEROUS | Deletion/overwrite, `sudo`, system settings, `/etc`, SSH/firewall/Tailscale/Samba changes, secrets, camera/microphone, reboot/shutdown | Ask every time | Ask every time | Ask every time |
-| BLOCKED | Exposing tokens/secrets, disabling the audit log, removing the approval system | Never run | Never run | Never run |
+The default list asks before deleting or overwriting owner files, using sudo/root, editing `/etc` or system services, shutting down or rebooting, piping `curl` or `wget` into a shell, reading `.env` or secret files, starting the camera or microphone from chat, installing packages, or sending data to services other than the configured LLM.
 
-Set the mode in `.env`, for example `HSX_AUTONOMY=ask`. Commands are parsed and
-paths are resolved before classification. Unclear shell syntax is treated
-conservatively. Workspace paths are checked after symlink resolution. The
-`system_info`, `disk_usage`, `network_status`, and `list_usb` tools inspect the
-machine running the server; they do not dispatch work to a mesh node. Use
-`create_text_file` for a new workspace file; a name collision gets a numeric
-suffix rather than overwriting the existing file.
+The code parses tool names, commands, paths, environment expansions, encoded shell commands, and symlinks to choose an action pattern. It does not trust a model label. The root broker uses the same `needs_permission()` categories and has a separate action allowlist; it no longer has a shadow/autonomy mode or tier labels. Always-allow patterns are stored in the same YAML file and can be removed or reset from Settings. Every decision and settings change is appended to `logs/audit.jsonl` without storing argument values.
 
-## Approval flow
+Hsx always denies attempts to expose API keys or bearer tokens, disable the audit log, or remove the permission system. Approval cannot override those denies. Pending approvals are stored, survive restarts, and expire with an explanatory note.
 
-When approval is required, Hsx stores the action, arguments, provider-safe
-conversation checkpoint, approval ID, and expiry in the SQLite job database.
-The CLI and browser render a human-readable summary, reason, risk level, and
-optional redacted details. Raw approval payloads, choices, and advisory fields
-are not sent to the model or rendered to users.
-
-Reply with `yes`, `y`, `ok`, `proceed`, `approve`, `i understand`, or a close
-spelling; reply with `no`, `n`, `cancel`, or `stop` to decline. The next message
-for a session with a pending approval is handled as the answer first. An
-unrecognized response leaves the action pending and repeats the summary.
-Approvals expire after 24 hours; expired actions are not executed. Pending
-approvals survive server restarts, and the stored tool call is resumed rather
-than replaying the original prompt.
-
-The audit log records the action tier, decision, and approver without storing
-argument values. Provider failures are shown in plain English; provider response
-bodies are restricted to server logs and `HSX_DEBUG=1`.
+Turning on the camera in the web UI grants snapshot consent only to that browser session. Its camera lease is released when the UI turns it off, hides the tab, or reaches its five-minute limit. A chat request from a different session still needs approval.
