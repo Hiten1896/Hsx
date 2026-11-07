@@ -51,7 +51,7 @@ def test_approval_unknown_answer_reminds_and_keeps_pending(tmp_path):
     updated, decision = jobs.answer_approval(job["id"], job["approval_id"], "details please")
     assert decision is None
     assert updated["state"] == "waiting_for_approval"
-    assert updated["error"] == "Choose Allow once, Always allow this, or Deny for: run rm old-draft.txt"
+    assert updated["error"] == "Choose Allow once or Not now for: run rm old-draft.txt"
 
 
 def test_approval_yes_and_no_resolve_once(tmp_path):
@@ -68,15 +68,16 @@ def test_approval_yes_and_no_resolve_once(tmp_path):
     assert jobs.get(no_job["id"])["answers"] == ["cancel"]
 
 
-def test_always_choice_is_persisted_on_approval(tmp_path):
+def test_always_choice_does_not_grant_persistent_approval(tmp_path):
     jobs = AskUserJobs(tmp_path / "jobs.db")
     job = _pending(jobs)
 
     updated, decision = jobs.answer_approval(job["id"], job["approval_id"], "always_allow")
 
-    assert decision is True
-    assert updated["state"] == "running"
-    assert updated["approval"]["grant_scope"] == "always"
+    assert decision is None
+    assert updated["state"] == "waiting_for_approval"
+    assert "Choose Allow once or Not now" in updated["error"]
+    assert "grant_scope" not in updated["approval"]
 
 
 def test_permission_request_state_is_public_and_uses_the_approval_id(tmp_path):

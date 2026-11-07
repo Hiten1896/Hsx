@@ -2,4 +2,4 @@
 matplotlib
 moviepy
 # Optional downloader for the consent-gated download_media skill.
-yt-dlp
+yt-dlp==2026.10.26

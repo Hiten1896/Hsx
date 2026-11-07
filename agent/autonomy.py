@@ -191,13 +191,12 @@ def parse_approval_choice(answer: str) -> str | None:
     if not normalized:
         return None
     choices = {
-        "always allow": "always", "always allow this": "always", "allow always": "always", "always": "always",
         "accept once": "once", "allow": "once", "yes": "once", "y": "once", "ok": "once", "proceed": "once", "approve": "once", "i understand proceed": "once",
         "reject": "reject", "deny": "reject", "no": "reject", "n": "reject", "cancel": "reject", "stop": "reject", "not now": "reject",
     }
     if normalized in choices:
         return choices[normalized]
-    for candidate in ("accept once", "always allow this", "reject", "proceed", "cancel"):
+    for candidate in ("accept once", "reject", "proceed", "cancel"):
         if difflib.SequenceMatcher(None, normalized, candidate).ratio() >= 0.8:
-            return {"accept once": "once", "always allow this": "always", "reject": "reject", "proceed": "once", "cancel": "reject"}[candidate]
+            return {"accept once": "once", "reject": "reject", "proceed": "once", "cancel": "reject"}[candidate]
     return None

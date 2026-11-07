@@ -17,8 +17,9 @@ def test_approval_card_is_human_readable_and_contains_no_payload_json(capsys):
     output = capsys.readouterr().out
     assert "Hsx wants to:" in output
     assert "delete 3 files" in output
-    assert "Permission rule: delete_owner_files" in output
-    assert "Reply: Allow once / Always allow this / Deny / details" in output
+    assert "Permission rule:" not in output
+    assert "Possible consequence:" in output
+    assert "Reply: Allow once / Not now / details" in output
     assert "waiting_approval" not in output
     assert "{" not in output and "}" not in output
 
@@ -70,8 +71,9 @@ def test_show_approval_handles_flat_waiting_approval_response(capsys):
         "allowed": False,
     })
     output = capsys.readouterr().out
-    assert "I need your permission to run the tool 'create_text_file'" in output
-    assert "Would you like to proceed? (Yes/No)" in output
+    assert "Hsx wants to run create_text_file." in output
+    assert "Possible consequence:" in output
+    assert "Reply: Allow once / Not now / details" in output
     assert "waiting_approval" not in output
     assert "{" not in output and "}" not in output
 

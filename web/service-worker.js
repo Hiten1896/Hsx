@@ -1,7 +1,7 @@
-const CACHE_NAME = 'hsx-shell-v15';
+const CACHE_NAME = 'hsx-shell-v16';
 const SHELL = [
   '/web/',
-  '/web/chat.css?v=15',
+  '/web/chat.css?v=16',
   '/web/chat.js',
   '/web/design-tokens.json',
   '/web/api-contract.json',

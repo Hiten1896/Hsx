@@ -8,6 +8,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 User=hsx
+SupplementaryGroups=audio
 WorkingDirectory=/opt/hsx
 EnvironmentFile=/opt/hsx/.env
 EnvironmentFile=-/etc/hsx/secrets.env

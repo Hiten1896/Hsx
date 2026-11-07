@@ -54,4 +54,4 @@ def test_approval_answer_normalizes_typos():
     assert parse_approval_answer("Y!") is True
     assert parse_approval_answer("cnacel") is False
     assert parse_approval_answer("not yet") is None
-    assert parse_approval_choice("Always allow this") == "always"
+    assert parse_approval_choice("Always allow this") is None

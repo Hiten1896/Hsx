@@ -149,13 +149,74 @@ function renderMarkdown(text, container) {
   if (window.marked && window.DOMPurify) {
     const html = window.marked.parse(source, { breaks: true, gfm: true });
     container.innerHTML = window.DOMPurify.sanitize(html);
+    decorateMarkdownCodeBlocks(container);
     container.querySelectorAll('a[href]').forEach((link) => {
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
     });
   } else {
-    container.textContent = source;
+    renderMarkdownFallback(source, container);
   }
+}
+
+function renderMarkdownFallback(source, container) {
+  const fencedBlocks = /```([^\r\n`]*)\r?\n([\s\S]*?)```/g;
+  let cursor = 0;
+  let match;
+  while ((match = fencedBlocks.exec(source))) {
+    if (match.index > cursor) {
+      container.append(document.createTextNode(source.slice(cursor, match.index)));
+    }
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    const language = match[1].trim().split(/\s+/, 1)[0].replace(/[^a-zA-Z0-9_+-]/g, '');
+    if (language) code.classList.add(`language-${language}`);
+    code.textContent = match[2].replace(/\n$/, '');
+    pre.append(code);
+    container.append(pre);
+    cursor = fencedBlocks.lastIndex;
+  }
+  if (cursor < source.length) container.append(document.createTextNode(source.slice(cursor)));
+  if (cursor === 0) container.textContent = source;
+  else decorateMarkdownCodeBlocks(container);
+}
+
+function decorateMarkdownCodeBlocks(container) {
+  container.querySelectorAll('pre').forEach((pre) => {
+    if (pre.parentElement?.classList.contains('markdown-code-block')) return;
+    const code = pre.querySelector('code');
+    if (!code) return;
+    const languageClass = [...code.classList].find((name) => name.startsWith('language-'));
+    const language = languageClass ? languageClass.slice('language-'.length) : 'code';
+    const wrapper = document.createElement('section');
+    wrapper.className = 'markdown-code-block';
+    const header = document.createElement('header');
+    header.className = 'markdown-code-header';
+    const label = document.createElement('span');
+    label.textContent = language;
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'markdown-code-copy';
+    copy.setAttribute('aria-label', 'Copy code');
+    copy.title = 'Copy code';
+    copy.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"></rect><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"></path></svg>';
+    copy.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(code.textContent || '');
+        copy.title = 'Copied';
+        copy.setAttribute('aria-label', 'Code copied');
+      } catch {
+        copy.title = 'Copy unavailable';
+      }
+      window.setTimeout(() => {
+        copy.title = 'Copy code';
+        copy.setAttribute('aria-label', 'Copy code');
+      }, 1400);
+    });
+    header.append(label, copy);
+    pre.replaceWith(wrapper);
+    wrapper.append(header, pre);
+  });
 }
 
 function scrollToLatest() {
@@ -675,18 +736,6 @@ function appendActivity(label) {
   const fragment = elements.activityTemplate.content.cloneNode(true);
   const activity = fragment.querySelector('.activity-trace');
   activity.querySelector('.activity-thinking span').textContent = label.replace(/…$/, '');
-  activity.addEventListener('click', (event) => {
-    if (event.target.closest('.activity-file-target')) return;
-    const toggle = event.target.closest('.activity-row-toggle');
-    if (!toggle) return;
-    event.preventDefault();
-    const step = toggle.closest('.activity-step');
-    const details = step?.querySelector('.activity-details');
-    if (step && details) {
-      const expanded = details.hidden;
-      queueMicrotask(() => toggleActivityDetails(step, toggle, details, expanded));
-    }
-  }, true);
   const summary = activity.querySelector('.activity-group-summary');
   summary.addEventListener('click', () => {
     activity.dataset.groupsExpanded = String(summary.getAttribute('aria-expanded') !== 'true');
@@ -758,6 +807,7 @@ function toggleActivityDetails(step, toggle, details, expanded = !details.hidden
   details.hidden = !expanded;
   toggle.setAttribute('aria-expanded', String(expanded));
   step.dataset.expanded = String(expanded);
+  step.classList.toggle('collapsed', !expanded);
 }
 
 function getArtifactIcon(type) {
@@ -1073,6 +1123,39 @@ function appendActivityImages(details, images) {
   details.append(gallery);
 }
 
+function appendActivityArtifact(trace, data) {
+  if (data.artifact !== true || !data.file_path || !trace) return;
+  const steps = trace.querySelector('.activity-steps');
+  if (steps.querySelector(`[data-tool-call-id="${CSS.escape(String(data.tool_call_id || ''))}"].activity-artifact-card`)) return;
+  const path = String(data.file_path);
+  const name = path.replace(/\\/g, '/').split('/').pop() || 'Generated file';
+  const type = name.includes('.') ? name.split('.').pop().toUpperCase() : 'FILE';
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'activity-artifact-card';
+  card.dataset.toolCallId = String(data.tool_call_id || '');
+  card.setAttribute('aria-label', `Open generated ${type} file ${name}`);
+  const icon = document.createElement('span');
+  icon.className = 'activity-artifact-icon';
+  icon.append(activityIcon('file-plus'));
+  const label = document.createElement('span');
+  label.className = 'activity-artifact-label';
+  const title = document.createElement('strong');
+  title.textContent = name;
+  const subtitle = document.createElement('small');
+  subtitle.textContent = 'Generated file';
+  label.append(title, subtitle);
+  const typeChip = document.createElement('span');
+  typeChip.className = 'activity-artifact-type';
+  typeChip.textContent = type;
+  const time = document.createElement('time');
+  time.dateTime = new Date().toISOString();
+  time.textContent = 'Just now';
+  card.append(icon, label, typeChip, time);
+  card.addEventListener('click', () => openActivityFileViewer(path, '', /\.(?:png|jpe?g|gif|webp|bmp)$/i.test(name)));
+  steps.append(card);
+}
+
 function appendCapabilityCards(details, groups) {
   if (!Array.isArray(groups)) return;
   const cards = document.createElement('div');
@@ -1152,8 +1235,8 @@ function renderActivityEvent(trace, event, data) {
     toggle.setAttribute('aria-expanded', 'false');
     const icon = activityIcon(data.icon);
     icon.classList.add('activity-step-icon');
-    const verb = document.createElement('span');
-    verb.className = 'activity-verb';
+    const toolLabel = document.createElement('span');
+    toolLabel.className = 'activity-verb';
     const target = document.createElement('span');
     target.className = 'activity-target-chip';
     target.addEventListener('click', (event) => {
@@ -1168,27 +1251,44 @@ function renderActivityEvent(trace, event, data) {
       event.stopPropagation();
       openActivityFileViewer(target.dataset.filePath);
     });
-    const spinner = activityIcon('spinner', 'activity-running-spinner');
+    const statusIcon = activityIcon('spinner', 'activity-status-icon');
     const metadata = document.createElement('span');
     metadata.className = 'activity-metadata';
     const changes = document.createElement('span');
     changes.className = 'activity-change-count';
     const chevron = activityIcon('chevron', 'activity-chevron');
-    toggle.append(icon, verb, target, spinner, metadata, changes, chevron);
+    toggle.append(icon, toolLabel, target, statusIcon, metadata, changes, chevron);
     const details = document.createElement('div');
     details.className = 'activity-details';
     details.hidden = true;
+    step.classList.add('collapsed');
     step.append(toggle, details);
+    toggle.addEventListener('click', (event) => {
+      if (event.target.closest('.activity-file-target')) return;
+      toggleActivityDetails(step, toggle, details, details.hidden);
+    });
     steps.append(step);
   }
   const toggle = step.querySelector('.activity-row-toggle');
   const details = step.querySelector('.activity-details');
   const currentExpanded = toggle.getAttribute('aria-expanded') === 'true';
-  step.dataset.status = data.status || (event === 'tool_start' ? 'running' : 'completed');
+  const requestedStatus = String(data.status || (event === 'tool_start' ? 'running' : 'completed')).toLowerCase();
+  const status = event === 'tool_end' && requestedStatus === 'running' ? 'completed' : requestedStatus;
+  const isRunning = event === 'tool_start' && status === 'running';
+  step.dataset.status = status;
   step.dataset.past = data.past || '';
-  toggle.setAttribute('aria-label', `${event === 'tool_start' ? data.present : data.past} ${data.target || data.tool || ''}`);
+  const stateLabel = isRunning
+    ? data.present || 'Running'
+    : status === 'failed'
+      ? 'Failed'
+      : status === 'cancelled' || status === 'canceled'
+        ? 'Cancelled'
+        : status === 'waiting' || status === 'waiting_approval'
+          ? 'Waiting for approval'
+          : data.past || 'Completed';
+  toggle.setAttribute('aria-label', `${stateLabel} ${data.target || data.tool || ''}`);
   step.querySelector('.activity-step-icon use').setAttribute('href', `#activity-icon-${data.icon || 'gear'}`);
-  step.querySelector('.activity-verb').textContent = event === 'tool_start' ? data.present || 'Working' : data.status === 'failed' ? 'Failed' : data.past || 'Completed';
+  step.querySelector('.activity-verb').textContent = `Tool: ${data.tool || 'unknown'}`;
   const target = step.querySelector('.activity-target-chip');
   target.textContent = data.target || data.tool || 'request';
   target.dataset.filePath = data.file_path || '';
@@ -1205,7 +1305,17 @@ function renderActivityEvent(trace, event, data) {
     target.removeAttribute('tabindex');
     target.removeAttribute('aria-label');
   }
-  step.querySelector('.activity-running-spinner').hidden = event !== 'tool_start';
+  const statusIcon = step.querySelector('.activity-status-icon');
+  const statusSymbol = isRunning
+    ? 'spinner'
+    : status === 'waiting' || status === 'waiting_approval'
+      ? 'shield'
+      : status === 'failed' || status === 'cancelled' || status === 'canceled'
+        ? 'x'
+        : 'check';
+  statusIcon.querySelector('use').setAttribute('href', `#activity-icon-${statusSymbol}`);
+  statusIcon.dataset.state = isRunning ? 'running' : status;
+  statusIcon.classList.toggle('is-running', isRunning);
   const diff = data.diff;
   step.querySelector('.activity-metadata').textContent = event === 'tool_start'
     ? ''
@@ -1221,7 +1331,7 @@ function renderActivityEvent(trace, event, data) {
     removed.textContent = `-${diff.removed || 0}`;
     changeCount.append(added, document.createTextNode(' '), removed);
   }
-  step.classList.toggle('is-failed', step.dataset.status === 'failed');
+  step.classList.toggle('is-failed', status === 'failed');
   if (event === 'tool_end') {
     details.replaceChildren();
     if (diff) {
@@ -1231,9 +1341,6 @@ function renderActivityEvent(trace, event, data) {
       command.className = 'activity-command';
       command.textContent = data.details?.command || data.target || '';
       details.append(command);
-      appendActionButton(details, 'Copy command', async () => {
-        await navigator.clipboard.writeText(command.textContent);
-      });
       const exit = document.createElement('p');
       exit.textContent = `Exit status: ${data.details?.exit_status ?? (data.status === 'failed' ? 'failed' : 'unknown')}`;
       details.append(exit);
@@ -1272,10 +1379,11 @@ function renderActivityEvent(trace, event, data) {
       link.addEventListener('click', () => openActivityFileViewer(data.file_path));
       details.append(link);
     }
-    if (step.dataset.status === 'failed') {
+    if (status === 'failed') {
       appendActionButton(details, 'Retry step', () => retryActivityStep(data, trace));
     }
-    toggleActivityDetails(step, toggle, details, step.dataset.status === 'failed' || step.dataset.status === 'waiting' || currentExpanded);
+    toggleActivityDetails(step, toggle, details, currentExpanded);
+    appendActivityArtifact(trace, data);
   }
   updateActivityGrouping(trace);
 }
@@ -1444,80 +1552,6 @@ async function refreshFeedbackSettings() {
     document.getElementById('feedback-storage-note').textContent = settings.storage;
   } catch {
     document.getElementById('feedback-count').textContent = 'Feedback settings unavailable';
-  }
-}
-
-const permissionActionLabels = {
-  delete_owner_files: 'Delete owner files',
-  overwrite_owner_files: 'Overwrite owner files',
-  sudo: 'Use sudo or root',
-  system_services: 'Edit system services or /etc',
-  shutdown_reboot: 'Shut down or reboot',
-  pipe_to_shell: 'Pipe curl or wget into a shell',
-  read_secrets: 'Read .env or secret files',
-  camera_start: 'Start the camera from chat',
-  microphone_start: 'Start the microphone from chat',
-  install_packages: 'Install packages into the Hsx environment',
-  external_services: 'Send data to services outside the configured LLM',
-};
-
-async function refreshPermissionSettings() {
-  const actions = document.getElementById('permission-actions');
-  const saved = document.getElementById('always-allow-list');
-  try {
-    const response = await apiFetch(apiContract.endpoints.permissions);
-    if (!response.ok) throw new Error('Permission settings are unavailable.');
-    const policy = await response.json();
-    actions.replaceChildren();
-    Object.entries(permissionActionLabels).forEach(([name, label]) => {
-      const row = document.createElement('label');
-      row.className = 'settings-check permission-action-row';
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.checked = policy.ask_first.includes(name);
-      checkbox.addEventListener('change', async () => {
-        checkbox.disabled = true;
-        try {
-          await apiFetch(apiContract.endpoints.permissions, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: name, enabled: checkbox.checked }),
-          });
-          await refreshPermissionSettings();
-        } catch {
-          checkbox.checked = !checkbox.checked;
-        }
-      });
-      row.append(checkbox, document.createTextNode(label));
-      actions.append(row);
-    });
-    saved.replaceChildren();
-    if (!policy.always_allow.length) {
-      const empty = document.createElement('p');
-      empty.textContent = 'No saved rules.';
-      saved.append(empty);
-    }
-    policy.always_allow.forEach((pattern) => {
-      const row = document.createElement('div');
-      row.className = 'permission-action-row';
-      const label = document.createElement('span');
-      label.textContent = pattern;
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'settings-action';
-      remove.textContent = 'Remove';
-      remove.setAttribute('aria-label', `Remove always allow rule: ${pattern}`);
-      remove.addEventListener('click', async () => {
-        await apiFetch(apiContract.endpoints.permissions, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ remove_always_allow: pattern }),
-        });
-        await refreshPermissionSettings();
-      });
-      row.append(label, remove);
-      saved.append(row);
-    });
-  } catch {
-    actions.textContent = 'Permission policy is unavailable.';
   }
 }
 
@@ -1819,11 +1853,17 @@ function appendApprovalCard(job) {
   card.setAttribute('aria-label', 'Hsx action approval');
   const title = document.createElement('h3');
   title.id = 'permission-dialog-title';
-  title.textContent = isPermissionRequest ? 'Permission needed' : approval.request_type === 'package_install' ? 'Hsx can add this ability' : 'Hsx wants to:';
+  title.textContent = isPermissionRequest
+    ? 'Permission needed'
+    : approval.request_type === 'package_install'
+      ? 'Hsx can add this ability'
+      : approval.request_type === 'tool_consent'
+        ? 'Review before Hsx acts'
+        : 'Hsx wants to:';
   const summary = document.createElement('p');
   summary.textContent = approval.summary || 'Run a tool';
   const why = document.createElement('p');
-  why.textContent = `Why: ${approval.why || 'This action needs your approval.'}`;
+  why.textContent = `${approval.request_type === 'tool_consent' ? 'Possible consequence' : 'Why'}: ${approval.why || 'This action needs your approval.'}`;
   const policyNote = document.createElement('p');
   policyNote.textContent = isPermissionRequest
     ? 'Elevated execution is limited to a non-interactive sudo attempt. Your OS password is never requested or stored.'
@@ -1840,9 +1880,6 @@ function appendApprovalCard(job) {
     [approval.request_type === 'package_install' ? 'Allow' : 'Allow once', 'accept_once'],
     [approval.request_type === 'package_install' ? 'Not now' : 'Deny', 'reject'],
   ];
-  if (approval.request_type !== 'firmware_flash') {
-    choices.splice(1, 0, ['Always allow this', 'always_allow']);
-  }
   for (const [label, answer] of choices) {
     const button = document.createElement('button');
     button.type = 'button';
@@ -3387,7 +3424,6 @@ async function initialize() {
   document.querySelectorAll('[data-settings-tab]').forEach((tab) => {
     tab.addEventListener('click', () => {
       selectSettingsTab(tab.dataset.settingsTab);
-      if (tab.dataset.settingsTab === 'permissions') refreshPermissionSettings();
     });
     tab.addEventListener('keydown', (event) => {
       const tabs = [...document.querySelectorAll('[data-settings-tab]')];
@@ -3401,13 +3437,6 @@ async function initialize() {
       event.preventDefault();
       selectSettingsTab(tabs[next].dataset.settingsTab, true);
     });
-  });
-  document.getElementById('reset-always-allow').addEventListener('click', async () => {
-    await apiFetch(apiContract.endpoints.permissions, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reset_always_allow: true }),
-    });
-    await refreshPermissionSettings();
   });
   document.getElementById('theme-setting').addEventListener('change', (event) => {
     safeStorageSet('localStorage', 'hsx-theme', event.target.value);

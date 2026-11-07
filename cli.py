@@ -258,13 +258,10 @@ def _show_approval(job: dict) -> None:
     direct_details = job.get("details")
     raw_waiting_approval = direct_status == "waiting_approval" or approval_request.get("status") == "waiting_approval"
     if raw_waiting_approval:
-        tool_name = (
-            approval_request.get("tool")
-            or approval.get("tool")
-            or direct_tool
-            or "tool"
-        )
-        print(f"HSX > I need your permission to run the tool '{tool_name}'. Would you like to proceed? (Yes/No)")
+        tool_name = approval_request.get("tool") or approval.get("tool") or direct_tool or "tool"
+        why = approval_request.get("why") or approval.get("why") or "This action needs your approval."
+        print(f"Hsx wants to run {tool_name}.")
+        print(f"Possible consequence: {why}")
         details = (
             approval_request.get("details")
             or approval.get("details")
@@ -272,14 +269,12 @@ def _show_approval(job: dict) -> None:
         )
         if details:
             print(f"Details: {details}")
+        print("Reply: Allow once / Not now / details")
         return
     summary = approval.get("summary") or approval_request.get("summary") or "run a tool"
     why = approval.get("why") or approval_request.get("why") or "This action needs your approval."
-    action_pattern = approval.get("action_pattern") or approval_request.get("action_pattern")
     details = approval.get("details") or approval_request.get("details")
-    text = f"Hsx wants to: {summary}\nWhy: {why}"
-    if action_pattern:
-        text += f"\nPermission rule: {action_pattern}"
+    text = f"Hsx wants to: {summary}\nPossible consequence: {why}"
     if details:
         text += f"\nDetails: {details}"
     try:
@@ -289,7 +284,7 @@ def _show_approval(job: dict) -> None:
         Console().print(Panel(text, title="Permission", border_style="yellow"))
     except ImportError:
         print(text)
-    print("Reply: Allow once / Always allow this / Deny / details")
+    print("Reply: Allow once / Not now / details")
 
 
 def _canonical_answer(answer: str) -> str:
@@ -298,7 +293,7 @@ def _canonical_answer(answer: str) -> str:
 
 def _approval_is_yes(answer: str) -> bool:
     normalized = _canonical_answer(answer)
-    yes_values = {"yes", "y", "i understand proceed", "i understand", "proceed", "approve", "ok", "allow", "allow once", "always allow", "always allow this"}
+    yes_values = {"yes", "y", "i understand proceed", "i understand", "proceed", "approve", "ok", "allow", "allow once"}
     return normalized in yes_values or normalized.startswith("yes ") or normalized.startswith("i understand")
 
 

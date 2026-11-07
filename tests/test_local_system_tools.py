@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -6,15 +7,28 @@ from agent import system_tools
 
 
 def test_system_info_reports_local_machine(monkeypatch):
+    calls = []
+
+    def fake_disk_usage(path):
+        calls.append(Path(path))
+        if Path(path) == system_tools.WORKSPACE_DIR:
+            return SimpleNamespace(total=400, used=100, free=300)
+        return SimpleNamespace(total=33, used=10, free=23)
+
     monkeypatch.setattr(
         system_tools.psutil, "cpu_count", lambda logical=True: 2 if logical else 1
     )
+    monkeypatch.setattr(system_tools.psutil, "disk_usage", fake_disk_usage)
     info = system_tools.system_info()
     assert info["hostname"]
     assert info["cpu"]["logical_cores"] == 2
     assert info["memory"]["total_bytes"] > 0
     assert info["os"]["system"]
     assert info["local_time"]
+    assert info["disk"]["total_bytes"] == 400
+    assert info["disk"]["free_bytes"] == 300
+    assert info["system_disk"]["total_bytes"] == 33
+    assert system_tools.WORKSPACE_DIR in calls
 
 
 def test_create_text_file_uses_numeric_suffix_and_stays_in_workspace(tmp_path, monkeypatch):

@@ -412,16 +412,29 @@ def test_gemini_rejects_oversized_or_invalid_image_payloads():
         })
 
 
-def test_visual_orchestrator_uses_ephemeral_image_and_requires_approval(tmp_path, monkeypatch):
+def test_visual_orchestrator_uses_live_frame_after_approval(tmp_path, monkeypatch):
+    import os
+    import shutil
+
     from agent import orchestrator
+    from agent.hardware.camera import CAMERA
+    from agent.notifier import NOTIFIER
     from agent.llm_client import NormalizedBlock, NormalizedResponse
 
-    frame = tmp_path / "latest.jpg"
-    frame.write_bytes(b"\xff\xd8frame\xff\xd9")
+    jpeg = b"\xff\xd8frame\xff\xd9"
+    events = []
     monkeypatch.setenv("HSX_ENABLE_VISION_CAPTURE", "1")
-    monkeypatch.setattr(orchestrator.CAMERA if hasattr(orchestrator, "CAMERA") else vision_capture.CAMERA, "health_check", lambda: {"device_available": True})
-    monkeypatch.setattr(vision_capture, "capture_frame", lambda: frame)
+    monkeypatch.setattr(shutil, "which", lambda _name: "ffmpeg")
+    monkeypatch.setattr(os.path, "exists", lambda _path: True)
+    monkeypatch.setattr(CAMERA, "health_check", lambda: {"device_available": True, "running": True})
+    monkeypatch.setattr(CAMERA, "has_owner", lambda _owner: False)
+    monkeypatch.setattr(CAMERA, "latest_frame", lambda: None)
+    monkeypatch.setattr(CAMERA, "acquire", lambda _owner: True)
+    monkeypatch.setattr(CAMERA, "wait_for_frame", lambda *_args, **_kwargs: CameraFrame(1, jpeg, monotonic()))
+    monkeypatch.setattr(CAMERA, "release", lambda _owner: None)
+    monkeypatch.setattr(NOTIFIER, "broadcast_event", lambda *args: None)
     monkeypatch.setattr(orchestrator.POLICY, "decide", lambda *args: {"allowed": True})
+    monkeypatch.setattr(orchestrator.POLICY, "audit_event", lambda *args: None)
     monkeypatch.setattr(orchestrator.MEMORY, "prompt_context", lambda _: "")
     monkeypatch.setattr(orchestrator.MEMORY, "record_message", lambda *args: None)
     monkeypatch.setattr(orchestrator.EXPERIENCE_MEMORY, "prompt_context", lambda _: "")
@@ -443,9 +456,12 @@ def test_visual_orchestrator_uses_ephemeral_image_and_requires_approval(tmp_path
         history,
         [],
         {},
+        on_activity_event=lambda event_type, payload: events.append((event_type, payload)),
     )
 
-    assert answer == "A desk is visible."
+    assert answer.startswith("A desk is visible.")
+    assert any(event == "camera_state" and payload["active"] for event, payload in events)
+    assert any(event == "camera_snapshot" for event, _payload in events)
     assert captured["kwargs"]["required_provider"] == "gemini"
     assert any(block.get("type") == "image" for block in captured["history"][-1]["content"])
     assert all(
@@ -456,20 +472,38 @@ def test_visual_orchestrator_uses_ephemeral_image_and_requires_approval(tmp_path
     )
 
 
-def test_visual_orchestrator_does_not_capture_without_policy_approval(monkeypatch):
-    from agent import orchestrator
+def test_camera_start_pauses_for_approval_without_opening_camera(monkeypatch):
+    import os
+    import shutil
 
-    captured = []
+    from agent.ask_user import ApprovalRequest
+    from agent import orchestrator
+    from agent.hardware.camera import CAMERA
+
     monkeypatch.setenv("HSX_ENABLE_VISION_CAPTURE", "1")
-    monkeypatch.setattr(vision_capture.CAMERA, "health_check", lambda: {"device_available": True})
-    monkeypatch.setattr(vision_capture, "capture_frame", lambda: captured.append(True))
-    monkeypatch.setattr(orchestrator.POLICY, "decide", lambda *args: {"allowed": False})
+    monkeypatch.setattr(shutil, "which", lambda _name: "ffmpeg")
+    monkeypatch.setattr(os.path, "exists", lambda _path: True)
+    monkeypatch.setattr(CAMERA, "health_check", lambda: {"device_available": True})
+    opened = []
+    monkeypatch.setattr(CAMERA, "acquire", lambda _owner: opened.append(True))
+    monkeypatch.setattr(
+        orchestrator.POLICY,
+        "decide",
+        lambda *args: {
+            "allowed": False,
+            "status": "waiting_approval",
+            "approval_request": {"request_type": "tool_consent", "why": "Camera access requires approval."},
+        },
+    )
     monkeypatch.setattr(orchestrator.MEMORY, "record_message", lambda *args: None)
 
-    answer, _ = orchestrator.run_agent("What do you see?", [], [], {})
+    with pytest.raises(ApprovalRequest) as paused:
+        orchestrator.run_agent("What do you see?", [], [], {})
 
-    assert "permission" in answer
-    assert captured == []
+    assert paused.value.tool == "vision_capture"
+    assert paused.value.approval_request["request_type"] == "tool_consent"
+    assert "camera" in paused.value.approval_request["why"].lower()
+    assert opened == []
 
 
 def test_anomaly_monitor_emits_audio_callback_for_detected_anomaly():

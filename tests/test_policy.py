@@ -1,48 +1,43 @@
 import json
 
 import pytest
-import yaml
 
 from agent.autonomy import classify_action
-from agent.hardware.camera import camera_session_owner
 from agent.policy import PolicyEngine
 
 
 def _policy(tmp_path):
-    permissions = tmp_path / "permissions.yaml"
-    permissions.write_text("ask_first:\n  - install_packages\n  - camera_start\n  - system_services\nalways_allow: []\n", encoding="utf-8")
-    return PolicyEngine(tmp_path / "audit.jsonl", permission_path=permissions), permissions
+    return PolicyEngine(tmp_path / "audit.jsonl")
 
 
 def test_silent_run_and_approval_run_are_audited(tmp_path):
-    policy, _ = _policy(tmp_path)
-    assert policy.decide({"name": "system_info"}, {}, "s")["allowed"]
+    policy = _policy(tmp_path)
+    result = policy.decide({"name": "system_info"}, {}, "s")
+    assert result["status"] == "waiting_approval"
+    assert result["approval_request"]["request_type"] == "tool_consent"
+    assert "Possible consequence:" in result["approval_request"]["why"]
+    assert policy.decide({"name": "system_info"}, {}, "s", True)["allowed"]
     result = policy.decide({"name": "camera_snapshot"}, {}, "s")
     assert result["status"] == "waiting_approval"
-    assert "Hsx wants to:" in result["approval_request"]["summary"]
+    assert "camera" in result["approval_request"]["summary"]
+    assert "camera feed" in result["approval_request"]["why"]
     assert policy.decide({"name": "camera_snapshot"}, {}, "s", True)["allowed"]
     events = [json.loads(line) for line in (tmp_path / "audit.jsonl").read_text().splitlines()]
-    assert [event["decision"] for event in events] == ["allowed", "ask", "approved"]
+    assert [event["decision"] for event in events] == ["ask", "approved", "ask", "approved"]
     assert all("tier" not in event for event in events)
 
 
-def test_deny_always_allow_restart_and_policy_edit(tmp_path):
-    policy, permissions = _policy(tmp_path)
+def test_approval_is_one_time_and_ignores_legacy_persistent_grants(tmp_path):
+    policy = _policy(tmp_path)
     skill, args = {"name": "capability_resolver"}, {"package": "yt-dlp"}
     assert policy.decide(skill, args, "s", False)["status"] == "cancelled"
-    assert policy.decide(skill, args, "s", "always_allow")["status"] == "always_allowed"
-    reopened = PolicyEngine(tmp_path / "audit.jsonl", permission_path=permissions)
-    assert reopened.decide(skill, args, "s")["status"] == "always_allowed"
-    assert "install_packages" in reopened.permission_list()["always_allow"]
-    reopened.update_permission("camera_start", False)
-    assert "camera_start" not in yaml.safe_load(permissions.read_text())["ask_first"]
-    reopened.remove_always_allow("install_packages")
-    reopened.reset_always_allow()
-    assert reopened.permission_list()["always_allow"] == []
+    assert policy.decide(skill, args, "s", "always_allow")["status"] == "waiting_approval"
+    assert policy.decide(skill, args, "s", True)["status"] == "approved"
+    assert policy.decide(skill, args, "s")["status"] == "waiting_approval"
 
 
 def test_package_install_approval_is_a_plain_vetted_plan(tmp_path):
-    policy, _ = _policy(tmp_path)
+    policy = _policy(tmp_path)
 
     decision = policy.decide(
         {"name": "capability_resolver"},
@@ -61,7 +56,7 @@ def test_package_install_approval_is_a_plain_vetted_plan(tmp_path):
 
 
 def test_esptool_install_uses_the_same_explicit_approval_card(tmp_path):
-    policy, _ = _policy(tmp_path)
+    policy = _policy(tmp_path)
 
     decision = policy.decide(
         {"name": "capability_resolver"},
@@ -77,12 +72,8 @@ def test_esptool_install_uses_the_same_explicit_approval_card(tmp_path):
     assert "No sudo" in request["details"]
 
 
-def test_firmware_flash_requires_fresh_approval_even_with_saved_allow(tmp_path):
-    policy, permissions = _policy(tmp_path)
-    permissions.write_text(
-        "ask_first: []\nalways_allow: []\n",
-        encoding="utf-8",
-    )
+def test_firmware_flash_requires_explicit_one_time_approval(tmp_path):
+    policy = _policy(tmp_path)
     skill = {"name": "system_execute"}
     arguments = {
         "action": "exec",
@@ -93,20 +84,15 @@ def test_firmware_flash_requires_fresh_approval_even_with_saved_allow(tmp_path):
     assert pending["status"] == "waiting_approval"
     assert pending["approval_request"]["request_type"] == "firmware_flash"
 
-    approved = policy.decide(skill, arguments, "esp32-session", "always_allow")
+    legacy_grant = policy.decide(skill, arguments, "esp32-session", "always_allow")
+    assert legacy_grant["status"] == "waiting_approval"
+    approved = policy.decide(skill, arguments, "esp32-session", True)
     assert approved == {"allowed": True, "status": "approved"}
-    assert policy.permission_list()["always_allow"] == []
-
-    permissions.write_text(
-        "ask_first: []\nalways_allow:\n  - firmware_flash\n",
-        encoding="utf-8",
-    )
-    still_pending = policy.decide(skill, arguments, "esp32-session")
-    assert still_pending["status"] == "waiting_approval"
+    assert policy.decide(skill, arguments, "esp32-session")["status"] == "waiting_approval"
 
 
 def test_hard_deny_cannot_be_approved_and_audit_does_not_leak_values(tmp_path):
-    policy, _ = _policy(tmp_path)
+    policy = _policy(tmp_path)
     result = policy.decide(
         {"name": "system_execute"},
         {"action": "exec", "command": "echo API_KEY=abc123"},
@@ -118,20 +104,9 @@ def test_hard_deny_cannot_be_approved_and_audit_does_not_leak_values(tmp_path):
     assert '"hard_deny"' in serialized
 
 
-def test_always_allow_pattern_is_action_specific(tmp_path):
-    policy, permissions = _policy(tmp_path)
-    permissions.write_text("ask_first:\n  - camera_*\nalways_allow:\n  - camera_start\n", encoding="utf-8")
-    assert policy.decide({"name": "camera_snapshot"}, {}, "s")["status"] == "always_allowed"
-    assert policy.decide({"name": "music_play"}, {"query": "song"}, "s")["status"] == "allowed"
-
-
-def test_web_camera_consent_applies_only_to_its_browser_session(tmp_path, monkeypatch):
-    policy, _ = _policy(tmp_path)
-    owner = camera_session_owner("browser-one")
-    monkeypatch.setattr("agent.hardware.camera.CAMERA.has_owner", lambda candidate: candidate == owner)
-
-    assert policy.decide({"name": "camera_snapshot"}, {}, "browser-one")["allowed"]
-    assert policy.decide({"name": "camera_snapshot"}, {}, "browser-two")["status"] == "waiting_approval"
+def test_ask_user_is_exempt_from_action_approval(tmp_path):
+    policy = _policy(tmp_path)
+    assert policy.decide({"name": "ask_user"}, {"question": "Which file?"}, "s")["allowed"]
 
 
 def test_command_classification_handles_quoted_and_base64_commands():

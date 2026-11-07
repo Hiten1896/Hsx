@@ -8,7 +8,7 @@
     <title>Hsx — Workspace</title>
     <link rel="icon" type="image/svg+xml" href="/web/favicon.svg">
     <link rel="manifest" href="/web/manifest.webmanifest">
-    <link rel="stylesheet" href="/web/chat.css?v=15">
+    <link rel="stylesheet" href="/web/chat.css?v=16">
     <script defer src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
     <script defer src="/web/chat.js"></script>
@@ -35,6 +35,8 @@
       <symbol id="activity-icon-save" viewBox="0 0 24 24"><path d="M4 3h13l4 4v14H3V4a1 1 0 0 1 1-1Z"></path><path d="M7 3v6h9V3M7 21v-7h10v7"></path></symbol>
       <symbol id="activity-icon-gear" viewBox="0 0 24 24"><path d="m10 3-.5 2.1a7 7 0 0 0-1.7 1L5.7 5.3 4 8.2l1.6 1.5a7 7 0 0 0 0 2L4 13.2l1.7 2.9 2.1-.8a7 7 0 0 0 1.7 1L10 18.5h4l.5-2.2a7 7 0 0 0 1.7-1l2.1.8 1.7-2.9-1.6-1.5a7 7 0 0 0 0-2L20 8.2l-1.7-2.9-2.1.8a7 7 0 0 0-1.7-1L14 3h-4Z" transform="translate(0 1)"></path><circle cx="12" cy="12" r="2.5"></circle></symbol>
       <symbol id="activity-icon-spinner" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"></path></symbol>
+      <symbol id="activity-icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"></path></symbol>
+      <symbol id="activity-icon-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"></path></symbol>
       <symbol id="activity-icon-chevron" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"></path></symbol>
     </svg>
     <div class="app-shell">
@@ -284,11 +286,8 @@
             </section>
             <section id="settings-panel-permissions" role="tabpanel" aria-labelledby="settings-tab-permissions" data-settings-panel="permissions" hidden>
               <h3>Permissions</h3>
-              <p>Hsx asks only for actions listed here. Every decision is written to the audit log.</p>
-              <div id="permission-actions" class="permission-actions" aria-live="polite"><p>Loading permission policy…</p></div>
-              <h3>Always allow</h3>
-              <div id="always-allow-list" class="permission-actions" aria-live="polite"><p>No saved rules.</p></div>
-              <button id="reset-always-allow" class="settings-action" type="button">Reset always allow rules</button>
+              <p>Hsx asks you to approve each tool action and explains what it will do and what could happen. Approval applies once to that action; persistent “always allow” rules are disabled.</p>
+              <p>Some actions are blocked by non-overridable safeguards and cannot be enabled from this setting.</p>
             </section>
             <section id="settings-panel-advanced" role="tabpanel" aria-labelledby="settings-tab-advanced" data-settings-panel="advanced" hidden>
               <h3>Advanced</h3>

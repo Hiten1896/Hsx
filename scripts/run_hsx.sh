@@ -18,4 +18,10 @@ fi
 
 cd "${REPO_ROOT}"
 source "${VENV_ACTIVATE}"
+if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+  USER_RUNTIME_DIR="/run/user/$(id -u)"
+  if [[ -d "${USER_RUNTIME_DIR}" ]]; then
+    export XDG_RUNTIME_DIR="${USER_RUNTIME_DIR}"
+  fi
+fi
 exec python main.py

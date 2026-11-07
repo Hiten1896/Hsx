@@ -209,6 +209,7 @@ def test_agent_overrides_media_tool_target_with_request_context(monkeypatch):
         [],
         [{"name": "audio_play"}],
         {"audio_play": fake_audio},
+        approvals={"audio_play": True},
         target_device="local_host",
         device_actions=actions,
     )

@@ -791,7 +791,7 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
         skill,
         arguments,
         job["session_id"],
-        approved="always_allow" if approved and approval.get("grant_scope") == "always" else approved,
+        approved=approved,
         approver="user",
     )
     result: dict
@@ -836,6 +836,7 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
                 TOOLS,
                 SKILL_MAP,
                 session_id=job["session_id"],
+                approvals={"vision_capture": approved} if tool_name == "vision_capture" else None,
                 sensitive=job.get("sensitive", False),
                 resume_tool_result={"tool_call_id": job["tool_call_id"], "result": result},
                 target_device=job.get("target_device", "local_host"),
@@ -1377,7 +1378,10 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif path == "/api/policy/status":
             self._json({"stopped": POLICY.is_stopped()})
         elif path == "/api/permissions":
-            self._json(POLICY.permission_list())
+            self._json({
+                "mode": "always_ask",
+                "message": "Hsx asks for one-time approval before every tool action and explains its likely consequence.",
+            })
         elif path == "/api/runs/status":
             run_id = str(parse_qs(urlsplit(self.path).query).get("run_id", [""])[0])
             event = RUN_CANCEL_EVENTS.get(run_id)
@@ -1646,26 +1650,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                 return
             self._json(result, status)
         elif path == "/api/permissions":
-            payload = self._body()
-            try:
-                if payload.get("reset_always_allow"):
-                    result = POLICY.reset_always_allow()
-                elif payload.get("remove_always_allow"):
-                    result = POLICY.remove_always_allow(str(payload["remove_always_allow"]))
-                else:
-                    action = str(payload.get("action", ""))
-                    if action not in POLICY.permission_list()["ask_first"] and action not in {
-                        "delete_owner_files", "overwrite_owner_files", "sudo", "system_services",
-                        "shutdown_reboot", "pipe_to_shell", "read_secrets", "camera_start",
-                        "microphone_start", "install_packages", "external_services",
-                    }:
-                        self._json({"error": "Unknown permission action."}, 400)
-                        return
-                    result = POLICY.update_permission(action, bool(payload.get("enabled")))
-            except (OSError, ValueError) as error:
-                self._json({"error": str(error)}, 400)
-                return
-            self._json(result)
+            self._json({"error": "Persistent permission rules are disabled; Hsx requests one-time approval for each action."}, 410)
         elif path == "/api/camera/start":
             try:
                 payload = self._body()

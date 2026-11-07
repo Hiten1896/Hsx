@@ -8,6 +8,17 @@ installing the agent and creating the `hsx` user. The broker socket is
 
 On Debian/Ubuntu, install Python 3.11+, create a dedicated `hsx` user, create `/opt/hsx/venv`, and install `requirements.txt`. The server binds to loopback by default. Keep it there and use Tailscale Serve for remote browser access; add the exact Tailscale HTTPS origin to `HSX_ALLOWED_ORIGINS`. Browser requests from other origins are rejected, and requests without an `Origin` header require the bearer token in `/opt/hsx/data/auth.token` (unless `HSX_AUTH_TOKEN` is configured). Do not publish the server directly to the public internet. Set `HSX_OWNER_PIN` during setup, or securely capture the generated owner PIN from the first startup. The PIN hash is stored outside the workspace and is required for self-improvement approval and promotion. Install Docker for the `run_code` sandbox; Docker is the only strong isolation mode.
 
+For host audio playback, install the reviewed OS packages listed in
+`deploy/audio-packages.txt` with administrator approval (for example,
+`xargs -r sudo apt-get install -y < deploy/audio-packages.txt`) and install
+`requirements-media.txt` in the Hsx virtual environment for `yt-dlp`. Add the
+`hsx` service account to the `audio` group when using ALSA. The service unit
+includes that supplementary group; `run_hsx.sh` sets `XDG_RUNTIME_DIR` to
+`/run/user/<uid>` only when that runtime directory exists. Host playback
+reports unavailable if `mpv` or an active PulseAudio sink / ALSA sound card
+cannot be found; installing a package does not prove that speakers are
+connected or audible.
+
 Set `HSX_WORKSPACE=/home/hsxshare` and `HSX_WORK_DIR=Hsx Work` in `/opt/hsx/.env`. Create `Hsx Work` from the Samba owner account before starting Hsx so that it retains the intended ownership. Grant `hsx` read/traverse ACLs on the share and write ACLs only on `Hsx Work` (the README includes example `setfacl` commands). Verify with `getfacl`; do not solve write failures by granting the agent write access to the share root.
 
 Install `deploy/hsx.service` with systemd. To enable Web Push, run `sudo sh deploy/generate-vapid.sh` after installing the requirements. This creates `/etc/hsx/secrets.env` with VAPID keys and `root:hsx` ownership, mode `0640`; the service loads it as an optional environment file. Keep Hsx bound to loopback. Brave requires **Use Google Services for push messaging** to receive Web Push; Chrome and Edge work by default.

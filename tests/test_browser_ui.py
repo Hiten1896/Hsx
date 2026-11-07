@@ -187,6 +187,23 @@ class BrowserFakeHandler(server.HsxHandler):
                 ("job", {"id": "activity-failure-job", "state": "done", "result": "The step failed."}),
                 ("done", {}),
             ]
+        elif payload.get("message") == "activity approval":
+            events = [
+                ("message_start", {"run_id": "activity-approval-run"}),
+                ("tool_start", {
+                    "tool_call_id": "approval-step", "tool": "shell", "icon": "terminal",
+                    "present": "Running", "past": "Ran", "target": "python install.py", "status": "running",
+                }),
+                ("tool_end", {
+                    "tool_call_id": "approval-step", "tool": "shell", "icon": "terminal",
+                    "present": "Running", "past": "Ran", "target": "python install.py",
+                    "status": "waiting_approval", "duration_ms": 5, "output": "Approval required.",
+                    "details": {"command": "python install.py", "output_lines": [], "arguments": {}},
+                }),
+                ("text_delta", {"text": "Waiting for your approval."}),
+                ("job", {"id": "activity-approval-job", "state": "done", "result": "Waiting for your approval."}),
+                ("done", {}),
+            ]
         elif payload.get("message") == "activity binary":
             events = [
                 ("message_start", {"run_id": "activity-binary-run"}),
@@ -204,6 +221,34 @@ class BrowserFakeHandler(server.HsxHandler):
                 }),
                 ("text_delta", {"text": "Binary file ready."}),
                 ("job", {"id": "activity-binary-job", "state": "done", "result": "Binary file ready."}),
+                ("done", {}),
+            ]
+        elif payload.get("message") == "generated artifact":
+            events = [
+                ("message_start", {"run_id": "generated-artifact-run"}),
+                ("tool_start", {
+                    "tool_call_id": "artifact-step", "tool": "make_docx", "icon": "file-plus",
+                    "present": "Creating", "past": "Created", "target": "brief.docx",
+                    "file_path": "Hsx Work/brief.docx", "status": "running",
+                }),
+                ("tool_end", {
+                    "tool_call_id": "artifact-step", "tool": "make_docx", "icon": "file-plus",
+                    "present": "Creating", "past": "Created", "target": "brief.docx",
+                    "file_path": "Hsx Work/brief.docx", "status": "completed", "artifact": True,
+                    "duration_ms": 10, "details": {"arguments": {}},
+                }),
+                ("text_delta", {"text": "Your brief is ready."}),
+                ("job", {"id": "generated-artifact-job", "state": "done", "result": "Your brief is ready."}),
+                ("done", {}),
+            ]
+        elif payload.get("message") == "code answer":
+            events = [
+                ("message_start", {"run_id": "code-answer-run"}),
+                ("text_delta", {"text": "Run this script:\n\n```powershell\nWrite-Output 'Hello, Hsx'\n```"}),
+                ("job", {
+                    "id": "code-answer-job", "state": "done",
+                    "result": "Run this script:\n\n```powershell\nWrite-Output 'Hello, Hsx'\n```",
+                }),
                 ("done", {}),
             ]
         elif payload.get("message") == "camera inline":
@@ -640,7 +685,7 @@ def test_browser_package_resolver_shows_one_plain_approval_plan(browser_app, bro
     assert "virtual environment only" in card.locator("pre").inner_text()
     assert "No sudo" in card.locator("pre").inner_text()
     assert card.get_by_role("button", name="Allow", exact=True).is_visible()
-    assert card.get_by_role("button", name="Always allow this").is_visible()
+    assert card.get_by_role("button", name="Always allow this").count() == 0
     assert card.get_by_role("button", name="Not now").is_visible()
     assert not card.inner_text().lstrip().startswith("{")
 
@@ -1034,11 +1079,15 @@ def test_browser_activity_trace_diff_images_grouping_and_failure(browser_app, br
     assert trace.locator(".activity-step").count() == 7
     first = trace.locator(".activity-step").first
     assert first.locator(".activity-details").is_hidden()
+    assert first.locator(".activity-row-toggle").get_attribute("aria-expanded") == "false"
+    assert first.locator(".activity-verb").inner_text() == "Tool: create_text_file"
+    assert first.locator(".activity-status-icon use").get_attribute("href") == "#activity-icon-check"
+    assert first.locator(".activity-status-icon").evaluate("el => getComputedStyle(el).animationName") == "none"
     assert first.locator(".activity-target-chip").get_attribute("title").startswith("Hsx Work/")
     assert first.locator(".activity-target-chip").evaluate("el => getComputedStyle(el).textOverflow") == "ellipsis"
     first.locator(".activity-target-chip").click()
     page.locator("#activity-file-viewer[open]").wait_for()
-    assert page.locator("#activity-viewer-title").inner_text() == "Hsx Work/report.txt"
+    assert page.locator("#activity-viewer-title").inner_text() == "report.txt"
     page.locator("#activity-viewer-close").click()
     first.locator(".activity-verb").click()
     assert first.locator(".activity-row-toggle").get_attribute("aria-expanded") == "true", first.inner_html()
@@ -1056,6 +1105,11 @@ def test_browser_activity_trace_diff_images_grouping_and_failure(browser_app, br
     page.locator("#activity-file-viewer[open]").wait_for()
     assert page.locator("#activity-viewer-title").inner_text() == "image-0.png"
     page.locator("#activity-viewer-close").click()
+    first.locator(".activity-chevron").click()
+    assert first.locator(".activity-row-toggle").get_attribute("aria-expanded") == "false"
+    assert first.locator(".activity-details").is_hidden()
+    first.locator(".activity-chevron").click()
+    assert first.locator(".activity-details").is_visible()
     for width in (360, 768, 1280):
         page.set_viewport_size({"width": width, "height": 900})
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -1070,7 +1124,8 @@ def test_browser_activity_trace_diff_images_grouping_and_failure(browser_app, br
         "activity-icon-terminal", "activity-icon-pencil", "activity-icon-book", "activity-icon-images",
         "activity-icon-file-plus", "activity-icon-search", "activity-icon-globe", "activity-icon-camera",
         "activity-icon-music", "activity-icon-download", "activity-icon-list", "activity-icon-question",
-        "activity-icon-shield", "activity-icon-clock", "activity-icon-package", "activity-icon-palette",
+        "activity-icon-shield", "activity-icon-check", "activity-icon-x", "activity-icon-clock",
+        "activity-icon-package", "activity-icon-palette",
         "activity-icon-brain", "activity-icon-save", "activity-icon-gear",
     } <= set(icon_ids)
 
@@ -1078,8 +1133,18 @@ def test_browser_activity_trace_diff_images_grouping_and_failure(browser_app, br
     page.locator("#send-button").click()
     failed = page.locator(".activity-step.is-failed").last
     failed.wait_for()
-    assert failed.locator(".activity-row-toggle").get_attribute("aria-expanded") == "true"
+    assert failed.locator(".activity-row-toggle").get_attribute("aria-expanded") == "false"
+    assert failed.locator(".activity-status-icon use").get_attribute("href") == "#activity-icon-x"
+    failed.locator(".activity-row-toggle").click()
     assert failed.get_by_role("button", name="Retry step").is_visible()
+
+    page.locator("#prompt-input").fill("activity approval")
+    page.locator("#send-button").click()
+    approval = page.locator(".activity-step").last
+    approval.wait_for()
+    assert approval.locator(".activity-status-icon use").get_attribute("href") == "#activity-icon-shield"
+    assert approval.locator(".activity-status-icon").evaluate("el => getComputedStyle(el).animationName") == "none"
+    assert approval.locator(".activity-details").is_hidden()
 
 
 def test_browser_activity_binary_file_opens_in_the_file_viewer(browser_app, browser_page):
@@ -1098,6 +1163,31 @@ def test_browser_activity_binary_file_opens_in_the_file_viewer(browser_app, brow
     card.get_by_role("button", name="Open").click()
     page.locator("#activity-file-viewer[open]").wait_for()
     assert page.get_by_role("link", name="Open binary file in a new tab").is_visible()
+
+
+def test_browser_generated_artifact_is_shown_inline_and_code_blocks_have_copy(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    page.set_default_timeout(5000)
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.locator("#prompt-input").fill("generated artifact")
+    page.locator("#send-button").click()
+    trace = page.locator(".activity-trace").last
+    artifact = trace.locator(".activity-artifact-card")
+    artifact.wait_for()
+    assert artifact.is_visible()
+    assert artifact.locator("strong").inner_text() == "brief.docx"
+    assert artifact.locator(".activity-artifact-type").inner_text() == "DOCX"
+    assert trace.locator(".activity-step .activity-details").is_hidden()
+
+    page.locator("#send-button:not([hidden])").wait_for()
+    page.locator("#prompt-input").fill("code answer")
+    page.locator("#send-button").click()
+    code_block = page.locator(".message-card[data-role='assistant'] .markdown-code-block").last
+    code_block.wait_for()
+    assert code_block.locator(".markdown-code-header span").inner_text() == "powershell"
+    assert code_block.locator(".markdown-code-copy").get_attribute("aria-label") == "Copy code"
 
 
 def test_browser_capabilities_render_as_grouped_cards(browser_app, browser_page):
@@ -1127,10 +1217,9 @@ def test_browser_empty_history_and_permissions_settings(browser_app, browser_pag
     page.locator("#settings-tab-permissions").click()
     panel = page.locator("#settings-panel-permissions")
     assert panel.is_visible()
-    checkboxes = panel.locator(".permission-action-row input[type=checkbox]")
-    checkboxes.first.wait_for()
-    assert checkboxes.count() == 11
-    assert page.get_by_role("heading", name="Always allow").is_visible()
+    assert page.get_by_text("Approval applies once to that action", exact=False).is_visible()
+    assert panel.locator(".permission-action-row input[type=checkbox]").count() == 0
+    assert page.get_by_text("persistent “always allow” rules are disabled.", exact=False).is_visible()
 
 
 def test_browser_stop_is_per_run_and_next_message_succeeds(browser_app, browser_page):

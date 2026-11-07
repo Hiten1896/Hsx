@@ -1,0 +1,3 @@
+mpv
+alsa-utils
+pulseaudio-utils

@@ -315,8 +315,6 @@ def run_agent(
             import shutil
             import threading
 
-            POLICY.audit_event("camera_access", session_id, job_id, "approved")
-
             if not shutil.which("ffmpeg"):
                 return _finish_vision_notice(
                     "The camera cannot start because ffmpeg is not installed on this host. Please install ffmpeg to enable camera streaming.",
@@ -330,12 +328,52 @@ def run_agent(
                     session_id,
                 )
 
-            try:
-                owner = camera_session_owner(session_id)
-                CAMERA.acquire(owner)
-            except Exception:
-                owner = ""
+            camera_tool = {"name": "vision_capture"}
+            decision = POLICY.decide(
+                camera_tool,
+                {},
+                session_id,
+                (approvals or {}).get("vision_capture"),
+            )
+            if not decision.get("allowed"):
+                if decision.get("status") == "cancelled":
+                    return _finish_vision_notice(
+                        "I won't start the camera. No camera access was used.",
+                        conversation_history,
+                        session_id,
+                    )
+                raise ApprovalRequest(
+                    "vision_capture",
+                    {},
+                    decision["approval_request"],
+                    _serializable_history(conversation_history),
+                    f"camera-{uuid.uuid4().hex}",
+                )
+
+            owner = camera_session_owner(session_id)
+            had_owner = CAMERA.has_owner(owner)
+            had_chat_owner = CAMERA.has_owner("chat-active")
+            previous_frame = CAMERA.latest_frame()
+            CAMERA.acquire(owner)
             CAMERA.acquire("chat-active")
+            frame = CAMERA.wait_for_frame(
+                previous_frame.version if previous_frame else -1,
+                timeout=5.0,
+            )
+            if frame is None:
+                status = CAMERA.health_check()
+                if not had_owner:
+                    CAMERA.release(owner)
+                if not had_chat_owner:
+                    CAMERA.release("chat-active")
+                reason = status.get("last_error") or "No fresh frame arrived within 5 seconds."
+                return _finish_vision_notice(
+                    f"The camera did not start: {reason}",
+                    conversation_history,
+                    session_id,
+                )
+
+            POLICY.audit_event("camera_access", session_id, job_id, "started")
 
             def _auto_stop_camera():
                 time.sleep(300)
@@ -353,8 +391,7 @@ def run_agent(
 
             is_describe = bool(_vision_request(user_input) or re.search(r"\b(?:what do you see|describe|show (?:me )?(?:the )?room)\b", user_input, re.I))
             if is_describe:
-                frame = CAMERA.wait_for_frame(-1, timeout=3.0) or CAMERA.latest_frame()
-                if frame and frame.data:
+                if frame.data:
                     if on_activity_event is not None:
                         on_activity_event(
                             "camera_snapshot",
@@ -372,12 +409,11 @@ def run_agent(
                         on_provider_notice=on_provider_notice,
                         job_id=job_id,
                         prefer_cloud=True,
+                        required_provider="gemini",
                         disable_panel=True,
                     )
                     description = _response_text(vision_resp)
                     answer = f"{description}\n\nThe live camera feed is active on your screen."
-                else:
-                    answer = "I've started the camera. The live feed is now visible in the camera card on all open tabs."
             else:
                 answer = "I've started the camera. The live feed is now visible in the camera card on all open tabs."
 

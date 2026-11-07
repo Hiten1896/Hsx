@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 
 from agent.skill_loader import runtime_tool_registry
 from config import (
@@ -104,12 +105,22 @@ def _audio_items() -> list[dict[str, str]]:
             "works now",
             "The chat can play user-selected audio after a browser gesture.",
         ))
-    if importlib.util.find_spec("sounddevice") is None:
+    try:
+        player = shutil.which("mpv")
+        if not player:
+            raise RuntimeError("mpv is not installed.")
+        from skills.audio_play.skill import host_audio_backend
+
+        backend, _device = host_audio_backend()
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        items.append(_item("Host audio output", "needs setup", str(error)))
+    else:
         items.append(_item(
             "Host audio output",
-            "needs setup",
-            "Install the optional audio dependencies to check for a host output device.",
+            "works now",
+            f"mpv and a {backend} output route are available.",
         ))
+    if importlib.util.find_spec("sounddevice") is None:
         items.append(_item(
             "Host microphone",
             "needs setup",

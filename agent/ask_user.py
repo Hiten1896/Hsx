@@ -515,7 +515,7 @@ class AskUserJobs:
         self.expire()
         answer = answer.strip()
         if not answer or len(answer) > 4000:
-            raise ValueError("Choose accept once, accept for this session, or reject.")
+            raise ValueError("Choose Allow once or Not now.")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT * FROM ask_jobs WHERE id = ?", (job_id,)).fetchone()
@@ -529,7 +529,7 @@ class AskUserJobs:
             now = self._now().isoformat()
             if decision is None:
                 reminder = (
-                    "Choose Allow once, Always allow this, or Deny for: "
+                    "Choose Allow once or Not now for: "
                     f"{approval.get('summary', 'this action')}"
                 )
                 connection.execute(
@@ -537,8 +537,6 @@ class AskUserJobs:
                     (reminder, now, job_id),
                 )
             else:
-                if choice == "always":
-                    approval["grant_scope"] = "always"
                 answers = json.loads(row["answers"])
                 answers.append(answer)
                 connection.execute(

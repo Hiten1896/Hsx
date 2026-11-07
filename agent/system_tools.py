@@ -26,7 +26,8 @@ def _cpu_model() -> str:
 
 def system_info() -> dict:
     memory = psutil.virtual_memory()
-    disk = psutil.disk_usage(os.path.abspath(os.sep))
+    workspace_disk = psutil.disk_usage(WORKSPACE_DIR)
+    system_disk = psutil.disk_usage(os.path.abspath(os.sep))
     now = datetime.now().astimezone()
     return {
         "hostname": socket.gethostname(),
@@ -40,7 +41,16 @@ def system_info() -> dict:
         },
         "memory": {"total_bytes": memory.total, "free_bytes": memory.available,
                    "available_bytes": memory.available},
-        "disk": {"path": os.path.abspath(os.sep), "total_bytes": disk.total, "free_bytes": disk.free},
+        "disk": {
+            "path": str(WORKSPACE_DIR),
+            "total_bytes": workspace_disk.total,
+            "free_bytes": workspace_disk.free,
+        },
+        "system_disk": {
+            "path": os.path.abspath(os.sep),
+            "total_bytes": system_disk.total,
+            "free_bytes": system_disk.free,
+        },
         "os": {"system": platform.system(), "release": platform.release(), "version": platform.version()},
         "uptime_seconds": max(0, int(datetime.now().timestamp() - psutil.boot_time())),
         "local_time": now.isoformat(timespec="seconds"),
@@ -90,7 +100,7 @@ def list_serial_ports() -> dict:
 
 
 def disk_usage() -> dict:
-    path = Path(os.path.abspath(os.sep))
+    path = WORKSPACE_DIR
     usage = shutil.disk_usage(path)
     return {
         "path": str(path),

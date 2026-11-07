@@ -241,7 +241,7 @@ def test_phase6_deployment_health_and_rotation_configuration():
     assert "MemoryMax=" in service
     assert "copytruncate" in rotation
     assert "health endpoint" in check_script and "/healthz" in check_script
-    assert "hsx-shell-v15" in service_worker
+    assert "hsx-shell-v16" in service_worker
 
 
 def test_notification_sse_resumes_from_last_event_id_and_sends_heartbeat(monkeypatch):
