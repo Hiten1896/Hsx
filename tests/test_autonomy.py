@@ -12,6 +12,15 @@ def test_shell_classification_detects_base64_pipe_to_shell():
     assert classify_action("system_execute", {"action": "exec", "command": "echo ZWNobyAkeA== | base64 -d | bash"}) == "pipe_to_shell"
 
 
+@pytest.mark.parametrize("command", [
+    "esptool --port /dev/ttyUSB0 write-flash 0x0 firmware.bin",
+    "python -m esptool --port COM5 write_flash 0x0 firmware.bin",
+    r"C:\Hsx\.venv\Scripts\python.exe -m esptool --port COM5 erase-flash",
+])
+def test_esp_firmware_write_commands_are_classified_for_confirmation(command):
+    assert classify_action("system_execute", {"action": "exec", "command": command}) == "firmware_flash"
+
+
 def test_shell_classification_detects_secret_reads_and_privileged_commands():
     assert classify_action("system_execute", {"action": "read_file", "path": "/home/hsxshare/.env"}) == "read_secrets"
     assert classify_action("system_execute", {"action": "exec", "command": "sudo systemctl restart hsx"}) == "sudo"

@@ -8,6 +8,7 @@ from agent.policy import POLICY
 IMPORT_NAMES = {
     "yt-dlp": "yt_dlp", "pillow": "PIL", "pdfplumber": "pdfplumber",
     "reportlab": "reportlab", "openpyxl": "openpyxl", "pillow-heif": "pillow_heif",
+    "esptool": "esptool",
 }
 
 

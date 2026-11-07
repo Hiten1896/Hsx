@@ -297,6 +297,23 @@ class BrowserFakeHandler(server.HsxHandler):
                 }),
                 ("done", {}),
             ]
+        elif payload.get("message") == "firmware approval":
+            events = [
+                ("message_start", {"run_id": "firmware-approval-run"}),
+                ("job", {
+                    "id": "firmware-approval-job",
+                    "state": "waiting_for_approval",
+                    "approval_id": "firmware-approval",
+                    "approval": {
+                        "request_type": "firmware_flash",
+                        "action_pattern": "firmware_flash",
+                        "summary": "Hsx wants to write firmware to the connected ESP device.",
+                        "why": "Writing firmware changes the selected device and can erase or replace its current program.",
+                        "details": "python -m esptool --port COM5 write-flash 0x0 firmware.bin",
+                    },
+                }),
+                ("done", {}),
+            ]
         else:
             events = [
                 ("message_start", {"run_id": "browser-fake-run"}),
@@ -618,6 +635,7 @@ def test_browser_package_resolver_shows_one_plain_approval_plan(browser_app, bro
     assert card.get_by_role("heading", name="Hsx can add this ability").is_visible()
     assert "install yt-dlp==2026.10.26" in card.inner_text()
     assert "about 20 MB" in card.inner_text()
+    assert "Permission rule:" not in card.inner_text()
     card.get_by_text("Details").click()
     assert "virtual environment only" in card.locator("pre").inner_text()
     assert "No sudo" in card.locator("pre").inner_text()
@@ -625,6 +643,22 @@ def test_browser_package_resolver_shows_one_plain_approval_plan(browser_app, bro
     assert card.get_by_role("button", name="Always allow this").is_visible()
     assert card.get_by_role("button", name="Not now").is_visible()
     assert not card.inner_text().lstrip().startswith("{")
+
+
+def test_browser_firmware_flash_approval_is_always_one_time(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    page.set_default_timeout(5000)
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.locator("#prompt-input").fill("firmware approval")
+    page.locator("#send-button").click()
+
+    card = page.locator(".approval-card")
+    card.wait_for()
+    assert card.get_by_role("button", name="Allow once").is_visible()
+    assert card.get_by_role("button", name="Deny").is_visible()
+    assert card.get_by_role("button", name="Always allow this").count() == 0
 
 
 def test_advanced_settings_update_music_engine_uses_resolver_approval(browser_app, browser_page):

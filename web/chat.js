@@ -1827,7 +1827,7 @@ function appendApprovalCard(job) {
   const policyNote = document.createElement('p');
   policyNote.textContent = isPermissionRequest
     ? 'Elevated execution is limited to a non-interactive sudo attempt. Your OS password is never requested or stored.'
-    : approval.action_pattern ? `Permission rule: ${approval.action_pattern}` : '';
+    : '';
   const details = document.createElement('details');
   const detailsSummary = document.createElement('summary');
   detailsSummary.textContent = 'Details';
@@ -1838,9 +1838,11 @@ function appendApprovalCard(job) {
   actions.className = 'approval-actions';
   const choices = [
     [approval.request_type === 'package_install' ? 'Allow' : 'Allow once', 'accept_once'],
-    ['Always allow this', 'always_allow'],
     [approval.request_type === 'package_install' ? 'Not now' : 'Deny', 'reject'],
   ];
+  if (approval.request_type !== 'firmware_flash') {
+    choices.splice(1, 0, ['Always allow this', 'always_allow']);
+  }
   for (const [label, answer] of choices) {
     const button = document.createElement('button');
     button.type = 'button';

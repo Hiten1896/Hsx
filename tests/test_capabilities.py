@@ -91,6 +91,10 @@ def test_personal_voice_prompt_is_used_with_fake_provider(monkeypatch, tmp_path)
     assert "Speak as Hsx" in prompt
     assert "Never say 'I'm just an AI'" in prompt
     assert "Never claim an ability is unavailable when a matching registered tool exists." in prompt
+    assert "you MUST use ask_user before giving a final answer" in prompt
+    assert "do not replace the question card with a refusal" in prompt
+    assert "Do not narrate internal policy, allowlists, or safety rules" in prompt
+    assert "continue the original task without asking the user to repeat it" in prompt
     assert "capabilities" in captured["request"].tools[0]["name"]
     assert response.content[0].text == "I am Hsx, your workspace assistant."
 

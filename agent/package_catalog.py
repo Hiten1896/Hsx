@@ -7,4 +7,5 @@ PACKAGE_CATALOG = {
     "reportlab": {"version": "5.1.0", "size_mb": 25, "purpose": "PDF document creation"},
     "openpyxl": {"version": "3.1.5", "size_mb": 5, "purpose": "spreadsheet editing"},
     "pillow-heif": {"version": "1.1.1", "size_mb": 4, "purpose": "HEIC image conversion"},
+    "esptool": {"version": "5.6.0", "size_mb": 30, "purpose": "Espressif ESP32 serial flashing and device inspection"},
 }

@@ -9,5 +9,6 @@ ask_first:
   - camera_start
   - microphone_start
   - install_packages
+  - firmware_flash
   - external_services
 always_allow: []

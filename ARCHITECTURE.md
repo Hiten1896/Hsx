@@ -54,10 +54,13 @@ orchestrator context; raw sensor streams stay local and ephemeral by default.
 - Discover serial candidates under `/dev/ttyACM*` and `/dev/ttyUSB*`, report stable
   device identity and availability, and handle device disconnects without blocking HSX.
 - Build firmware in a per-job staging directory using explicitly installed
-  `arduino-cli` or `esptool`. Do not install packages or fetch board cores automatically
-  as a side effect of a build request.
-- Flash only a selected, detected device and a reviewed build artifact. Require policy
-  authorization and explicit confirmation for every flash operation, and audit the
+  `arduino-cli` or `esptool`. Hsx may offer the reviewed, pinned `esptool` Python package
+  through the normal permission card and install it only in its project virtual
+  environment. Never fetch board cores or install host packages as an implicit side
+  effect of a build request.
+- Flash only a selected, detected device and a reviewed build artifact. Require a
+  fresh explicit confirmation for every flash operation (saved always-allow rules do
+  not apply), and audit the
   chosen device, tool, artifact hash, result, and requester.
 - Grant the service account access only to configured serial devices through a dedicated
   device group or narrowly scoped udev rules. Do not solve access failures with root,

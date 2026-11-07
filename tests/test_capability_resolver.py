@@ -69,3 +69,29 @@ def test_resolver_installs_pinned_package_into_active_venv_and_self_tests(monkey
     assert result["success"] is True
     assert result["capability"] == "play authorized audio"
     assert [event[-1] for event in events] == ["started", "self_test_passed"]
+
+
+def test_esptool_is_a_pinned_recipe_and_import_is_verified(monkeypatch):
+    calls = []
+    imports = []
+    monkeypatch.setattr(resolver.sys, "prefix", "C:\\Hsx\\.venv")
+    monkeypatch.setattr(resolver.sys, "base_prefix", "C:\\Python312")
+    monkeypatch.setattr(resolver.sys, "executable", "C:\\Hsx\\.venv\\Scripts\\python.exe")
+    monkeypatch.setattr(
+        resolver.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append((command, kwargs))
+        or SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(
+        resolver.importlib,
+        "import_module",
+        lambda name: imports.append(name) or SimpleNamespace(),
+    )
+
+    result = resolver.run("esptool", "inspect and flash an ESP32-S3")
+
+    assert "esptool==5.6.0" in calls[0][0]
+    assert imports == ["esptool"]
+    assert result["success"] is True
+    assert result["capability"] == "inspect and flash an ESP32-S3"

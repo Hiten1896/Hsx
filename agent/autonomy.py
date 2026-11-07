@@ -117,7 +117,14 @@ def classify_action(tool_name: str, arguments: dict) -> str:
                 tokens = shlex.split(command, posix=os.name != "nt")
             except ValueError:
                 tokens = [command]
-            executable = Path(tokens[0]).name.casefold() if tokens else ""
+            normalized_tokens = [
+                token.replace("\\", "/").rsplit("/", 1)[-1].removesuffix(".exe").casefold()
+                for token in tokens
+            ]
+            executable = normalized_tokens[0] if normalized_tokens else ""
+            flash_operations = {"write-flash", "write_flash", "write-flash-data", "erase-flash", "erase_flash", "erase-region"}
+            if "esptool" in normalized_tokens and flash_operations.intersection(normalized_tokens):
+                return "firmware_flash"
             if _SECRET_READ.search(lowered):
                 return "read_secrets"
             if _PIPE_TO_SHELL.search(inspected_command):

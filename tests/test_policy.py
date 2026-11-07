@@ -60,6 +60,51 @@ def test_package_install_approval_is_a_plain_vetted_plan(tmp_path):
     assert "raw" not in str(request).casefold()
 
 
+def test_esptool_install_uses_the_same_explicit_approval_card(tmp_path):
+    policy, _ = _policy(tmp_path)
+
+    decision = policy.decide(
+        {"name": "capability_resolver"},
+        {"package": "esptool", "capability": "inspect an ESP32-S3"},
+        "esp32-session",
+    )
+
+    request = decision["approval_request"]
+    assert decision["status"] == "waiting_approval"
+    assert request["request_type"] == "package_install"
+    assert "esptool==5.6.0" in request["summary"]
+    assert "virtual environment only" in request["details"]
+    assert "No sudo" in request["details"]
+
+
+def test_firmware_flash_requires_fresh_approval_even_with_saved_allow(tmp_path):
+    policy, permissions = _policy(tmp_path)
+    permissions.write_text(
+        "ask_first: []\nalways_allow: []\n",
+        encoding="utf-8",
+    )
+    skill = {"name": "system_execute"}
+    arguments = {
+        "action": "exec",
+        "command": "python -m esptool --port COM5 write-flash 0x0 firmware.bin",
+    }
+
+    pending = policy.decide(skill, arguments, "esp32-session")
+    assert pending["status"] == "waiting_approval"
+    assert pending["approval_request"]["request_type"] == "firmware_flash"
+
+    approved = policy.decide(skill, arguments, "esp32-session", "always_allow")
+    assert approved == {"allowed": True, "status": "approved"}
+    assert policy.permission_list()["always_allow"] == []
+
+    permissions.write_text(
+        "ask_first: []\nalways_allow:\n  - firmware_flash\n",
+        encoding="utf-8",
+    )
+    still_pending = policy.decide(skill, arguments, "esp32-session")
+    assert still_pending["status"] == "waiting_approval"
+
+
 def test_hard_deny_cannot_be_approved_and_audit_does_not_leak_values(tmp_path):
     policy, _ = _policy(tmp_path)
     result = policy.decide(

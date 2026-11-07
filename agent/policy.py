@@ -111,6 +111,9 @@ class PolicyEngine:
             if not action:
                 self._audit(session, name, arguments, action, "hard_deny", "no_permission_pattern")
                 return {"allowed": False, "status": "denied"}
+            if action == "firmware_flash":
+                self._audit(session, name, arguments, action, "approved", "allowed", approver)
+                return {"allowed": True, "status": "approved"}
             add_always_allow(action, path=self.permission_path)
             self._audit(session, name, arguments, action, "always_allowed", "allowed", approver)
             return {"allowed": True, "status": "always_allowed"}
@@ -119,8 +122,15 @@ class PolicyEngine:
             return {"allowed": True, "status": "approved"}
         rules = permission_rules(self.permission_path)
         has_saved_allow = any(fnmatch.fnmatchcase(action, pattern) for pattern in rules["always_allow"])
-        ask = bool(action and needs_permission(action, path=self.permission_path) and not camera_already_running)
-        if not ask or has_saved_allow:
+        ask = bool(
+            action
+            and (
+                action == "firmware_flash"
+                or needs_permission(action, path=self.permission_path)
+            )
+            and not camera_already_running
+        )
+        if not ask or (has_saved_allow and action != "firmware_flash"):
             self._audit(session, name, arguments, action, "always_allowed" if has_saved_allow else "allowed", "allowed")
             return {"allowed": True, "status": "always_allowed" if has_saved_allow else "allowed"}
         self._audit(session, name, arguments, action, "ask", "waiting_for_approval")
@@ -143,12 +153,21 @@ class PolicyEngine:
                     "why": f"Adds {recipe['purpose']}; about {recipe['size_mb']} MB and needs the internet.",
                     "details": "Project virtual environment only. No sudo or system packages. Hsx will import the package to self-test it, then continue your request.",
                 })
+        if action == "firmware_flash":
+            request.update({
+                "request_type": "firmware_flash",
+                "summary": "Hsx wants to write firmware to the connected ESP device.",
+                "why": "Writing firmware changes the selected device and can erase or replace its current program.",
+                "details": str(arguments.get("command", ""))[:500],
+            })
         return {"allowed": False, "status": "waiting_approval", "approval_request": request}
 
     @staticmethod
     def _plain_action(action: str, arguments: dict) -> str:
         if action == "install_packages":
             return f"install {arguments.get('package', 'a package')} in its own Python environment"
+        if action == "firmware_flash":
+            return "write firmware to the selected ESP device"
         if action == "camera_start":
             return "start the camera for this request"
         if action == "microphone_start":
