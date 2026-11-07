@@ -170,6 +170,43 @@ def test_swarm_coder_critic_and_local_static_checks():
         lambda prompt: '{"approved": true, "tests_reviewed": true, "rationale": "Safe path helper."}',
     )["approved"]
 
+    helper_execution_proposal = (
+        "```python\n"
+        "def make_helper():\n"
+        "    namespace = {}\n"
+        "    exec(compile('result = 1', '<generated-helper>', 'exec'), namespace)\n"
+        "    return namespace\n"
+        "```"
+    )
+    assert review_proposal(
+        "Build an isolated helper",
+        "Compile a generated helper after validation.",
+        helper_execution_proposal,
+        lambda prompt: '{"approved": true, "tests_reviewed": true, "rationale": "Scoped helper proposal."}',
+    )["approved"]
+
+    safe_introspection = "```python\nname = getattr(value, 'name', '')\n```"
+    assert review_proposal(
+        "Read a helper property",
+        "Use an explicit attribute name.",
+        safe_introspection,
+        lambda prompt: '{"approved": true, "tests_reviewed": true, "rationale": "Static attribute lookup."}',
+    )["approved"]
+
+    for source in (
+        "def run_generated(source):\n    exec(source)",
+        "exec(\"import subprocess\")",
+        "eval(\"open('/etc/passwd').read()\")",
+        "getattr(value, attribute_name)",
+    ):
+        with pytest.raises(ValueError, match="restricted"):
+            review_proposal(
+                "Inspect generated code",
+                "Use only statically reviewable operations.",
+                f"```python\n{source}\n```",
+                lambda prompt: '{"approved": true, "tests_reviewed": true}',
+            )
+
     for source in (
         "import os\nos.system('id')",
         "from os import getenv\nvalue = getenv('TOKEN')",

@@ -9,7 +9,8 @@ MAX_PROPOSAL_CHARS = 12_000
 PYTHON_BLOCK = re.compile(r"```python\s*(.*?)```", re.IGNORECASE | re.DOTALL)
 UNFENCED_CODE = re.compile(r"(?m)^\s*\+?\s*(?:import\s|from\s+\S+\s+import\s|def\s+\w+\s*\(|class\s+\w+)")
 FORBIDDEN_IMPORTS = {"subprocess", "socket", "ctypes", "sys"}
-FORBIDDEN_CALLS = {"eval", "exec", "compile", "__import__", "open", "input", "getattr"}
+FORBIDDEN_CALLS = {"__import__", "open", "input", "globals", "locals", "vars"}
+FORBIDDEN_NAMES = {"__builtins__"}
 FORBIDDEN_ATTRIBUTES = {
     "unlink", "rmdir", "write_text", "write_bytes", "rename", "replace",
     "chmod", "chown", "system", "popen", "run", "Popen", "remove",
@@ -37,6 +38,84 @@ def write_proposal(
     return proposal.strip()[:MAX_PROPOSAL_CHARS]
 
 
+def _literal_code_source(node: ast.AST, default_mode: str) -> tuple[str, str] | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value, default_mode
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "compile"
+        and len(node.args) >= 3
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+        and isinstance(node.args[2], ast.Constant)
+        and node.args[2].value in {"exec", "eval", "single"}
+    ):
+        return node.args[0].value, node.args[2].value
+    return None
+
+
+def _validate_python_tree(tree: ast.AST, dynamic_depth: int = 0) -> None:
+    forbidden_os_names = {
+        name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "os"
+        for alias in node.names
+        for name in (alias.name, alias.asname or alias.name)
+    }
+    if forbidden_os_names & FORBIDDEN_ATTRIBUTES:
+        raise ValueError("Coder proposal uses a restricted system or filesystem operation.")
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            modules = (
+                [alias.name for alias in node.names]
+                if isinstance(node, ast.Import)
+                else [node.module or ""]
+            )
+            if any(module.split(".", 1)[0] in FORBIDDEN_IMPORTS for module in modules):
+                raise ValueError("Coder proposal imports a restricted system module.")
+        elif isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES:
+            raise ValueError("Coder proposal uses a restricted dunder name.")
+        elif isinstance(node, ast.Call):
+            function_name = (
+                node.func.id if isinstance(node.func, ast.Name)
+                else node.func.attr if isinstance(node.func, ast.Attribute)
+                else ""
+            )
+            if function_name in {"eval", "exec", "compile"}:
+                if dynamic_depth >= 5 or not isinstance(node.func, ast.Name) or not node.args:
+                    raise ValueError("Coder proposal uses a restricted dynamic-code operation.")
+                default_mode = "eval" if function_name == "eval" else "exec"
+                code_source = _literal_code_source(node.args[0], default_mode)
+                if function_name == "compile":
+                    code_source = _literal_code_source(node, default_mode)
+                if code_source is None:
+                    raise ValueError("Coder proposal uses a restricted dynamic-code operation.")
+                source, mode = code_source
+                try:
+                    nested_tree = ast.parse(source, mode=mode)
+                except SyntaxError as error:
+                    raise ValueError("Coder proposal contains invalid generated Python.") from error
+                _validate_python_tree(nested_tree, dynamic_depth + 1)
+            elif function_name == "getattr":
+                if (
+                    not isinstance(node.func, ast.Name)
+                    or len(node.args) < 2
+                    or not isinstance(node.args[1], ast.Constant)
+                    or not isinstance(node.args[1].value, str)
+                    or node.args[1].value.startswith("__")
+                    or node.args[1].value in FORBIDDEN_ATTRIBUTES
+                ):
+                    raise ValueError("Coder proposal uses a restricted dynamic-code operation.")
+            elif function_name in FORBIDDEN_CALLS:
+                raise ValueError("Coder proposal uses a restricted dynamic-code operation.")
+        elif isinstance(node, ast.Attribute) and node.attr.startswith("__"):
+            raise ValueError("Coder proposal uses a restricted dunder attribute.")
+        elif isinstance(node, ast.Attribute) and node.attr in FORBIDDEN_ATTRIBUTES:
+            raise ValueError("Coder proposal uses a restricted system or filesystem operation.")
+
+
 def _validate_python_blocks(proposal: str) -> None:
     sources = PYTHON_BLOCK.findall(proposal)
     if not sources and UNFENCED_CODE.search(proposal):
@@ -46,36 +125,7 @@ def _validate_python_blocks(proposal: str) -> None:
             tree = ast.parse(source, mode="exec")
         except SyntaxError as error:
             raise ValueError(f"Coder proposal contains invalid Python: {error.msg}") from error
-        forbidden_os_names = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == "os":
-                forbidden_os_names.update(
-                    name
-                    for alias in node.names
-                    for name in (alias.name, alias.asname or alias.name)
-                )
-        if forbidden_os_names & FORBIDDEN_ATTRIBUTES:
-            raise ValueError("Coder proposal uses a restricted system or filesystem operation.")
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                if any(alias.name.split(".", 1)[0] in FORBIDDEN_IMPORTS for alias in node.names):
-                    raise ValueError("Coder proposal imports a restricted system module.")
-            elif isinstance(node, ast.ImportFrom):
-                if (node.module or "").split(".", 1)[0] in FORBIDDEN_IMPORTS:
-                    raise ValueError("Coder proposal imports a restricted system module.")
-            elif isinstance(node, ast.Call):
-                function_name = (
-                    node.func.id if isinstance(node.func, ast.Name)
-                    else node.func.attr if isinstance(node.func, ast.Attribute)
-                    else ""
-                )
-                if function_name in FORBIDDEN_CALLS:
-                    raise ValueError("Coder proposal uses a restricted dynamic-code operation.")
-            elif isinstance(node, ast.Attribute) and node.attr.startswith("__"):
-                raise ValueError("Coder proposal uses a restricted dunder attribute.")
-            elif isinstance(node, ast.Attribute) and node.attr in FORBIDDEN_ATTRIBUTES:
-                raise ValueError("Coder proposal uses a restricted system or filesystem operation.")
+        _validate_python_tree(tree)
 
 
 def review_proposal(
