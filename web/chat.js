@@ -288,6 +288,7 @@ function conversationSnapshot(id) {
         prompt: article.dataset.prompt || '',
         edit_text: article.dataset.editText || '',
         feedback: article.querySelector('[data-feedback][aria-pressed="true"]')?.dataset.feedback || '',
+        attachments: JSON.parse(article.dataset.attachments || '[]'),
       })),
       artifacts,
     },
@@ -332,6 +333,7 @@ async function restoreConversation(id) {
     for (const message of saved.thread?.messages || []) {
       const article = appendMessage(message.role, message.text, message.job_id, {
         prompt: message.prompt, editText: message.edit_text, noFeedback: !message.job_id,
+        attachments: message.attachments,
       });
       if (message.feedback) article.querySelector(`[data-feedback="${message.feedback}"]`)?.setAttribute('aria-pressed', 'true');
       session.fragment.append(article);
@@ -485,6 +487,52 @@ function updateMessageTimes() {
   });
 }
 
+function renderMessageAttachments(article, attachments) {
+  const container = article.querySelector('.message-attachments');
+  if (!container || !attachments.length) return;
+  container.hidden = false;
+  for (const attachment of attachments) {
+    const path = String(attachment.path || '');
+    const name = String(attachment.name || path.split(/[\\/]/).pop() || 'Attached file');
+    const imageFile = /\.(?:png|jpe?g|gif|webp|bmp)$/i.test(name);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = imageFile ? 'message-attachment message-attachment-image' : 'message-attachment';
+    button.title = `Open ${name}`;
+    button.setAttribute('aria-label', `Open attached file ${name}`);
+    button.addEventListener('click', () => openActivityFileViewer(path, '', imageFile));
+    if (imageFile) {
+      const image = document.createElement('img');
+      image.alt = name;
+      image.loading = 'lazy';
+      const query = new URLSearchParams({ path });
+      void apiFetch(`/api/files/content?${query}`)
+        .then(async (response) => {
+          if (!response.ok) throw new Error('Attachment preview is unavailable.');
+          image.src = URL.createObjectURL(await response.blob());
+          activityImageObjectUrls.add(image.src);
+        })
+        .catch(() => { image.alt = `${name} (preview unavailable)`; });
+      button.append(image);
+    } else {
+      const type = document.createElement('span');
+      type.className = 'message-attachment-type';
+      type.textContent = name.includes('.') ? name.split('.').pop().slice(0, 5).toUpperCase() : 'FILE';
+      button.append(type);
+    }
+    const caption = document.createElement('span');
+    caption.className = 'message-attachment-name';
+    caption.textContent = name;
+    const size = document.createElement('small');
+    size.textContent = String(attachment.sizeLabel || 'Attachment');
+    const label = document.createElement('span');
+    label.className = 'message-attachment-label';
+    label.append(caption, size);
+    button.append(label);
+    container.append(button);
+  }
+}
+
 function appendMessage(role, text, jobId = '', options = {}) {
   elements.welcome.hidden = true;
   setConversationEmpty(false);
@@ -495,6 +543,13 @@ function appendMessage(role, text, jobId = '', options = {}) {
   article.dataset.response = String(text || '');
   article.dataset.editText = String(options.editText ?? text ?? '');
   article.dataset.prompt = String(options.prompt || '');
+  const attachments = Array.isArray(options.attachments)
+    ? options.attachments
+      .filter((item) => item && typeof item.name === 'string' && typeof item.path === 'string')
+      .map((item) => ({ name: item.name, path: item.path, sizeLabel: String(item.sizeLabel || 'Attachment') }))
+    : [];
+  article.dataset.attachments = JSON.stringify(attachments);
+  renderMessageAttachments(article, attachments);
   if (role === 'user') {
     const session = chatSessions.get(sessionId);
     if (session && (!session.title || session.title === 'New chat')) {
@@ -677,12 +732,19 @@ async function openActivityFileViewer(path, imageId = '', binary = false) {
       }
       const objectUrl = URL.createObjectURL(await response.blob());
       activityImageObjectUrls.add(objectUrl);
-      const openLink = document.createElement('a');
-      openLink.href = objectUrl;
-      openLink.target = '_blank';
-      openLink.rel = 'noopener';
-      openLink.textContent = 'Open binary file in a new tab';
-      content.append(openLink);
+      if (/\.(?:png|jpe?g|gif|webp|bmp)$/i.test(path)) {
+        const image = document.createElement('img');
+        image.src = objectUrl;
+        image.alt = path;
+        content.append(image);
+      } else {
+        const openLink = document.createElement('a');
+        openLink.href = objectUrl;
+        openLink.target = '_blank';
+        openLink.rel = 'noopener';
+        openLink.textContent = 'Open binary file in a new tab';
+        content.append(openLink);
+      }
     } else {
       const query = new URLSearchParams({ path });
       const response = await apiFetch(`/api/files/preview?${query}`);
@@ -1005,6 +1067,8 @@ function renderActivityEvent(trace, event, data) {
           button.currentTarget.textContent = button.currentTarget.textContent === 'Show more' ? 'Show less' : 'Show more';
         });
       }
+    } else if (data.music_player) {
+      appendMusicPlayerCard(details, data.music_player);
     } else if (data.tool === 'capabilities' && data.capabilities) {
       appendCapabilityCards(details, data.capabilities.groups);
     } else {
@@ -1031,6 +1095,89 @@ function renderActivityEvent(trace, event, data) {
     toggleActivityDetails(step, toggle, details, step.dataset.status === 'failed' || step.dataset.status === 'waiting' || currentExpanded);
   }
   updateActivityGrouping(trace);
+}
+
+function appendMusicPlayerCard(container, player) {
+  const tracks = Array.isArray(player.queue) && player.queue.length
+    ? player.queue.slice(0, 10)
+    : [player];
+  const card = document.createElement('section');
+  card.className = 'activity-music-player';
+  card.setAttribute('aria-label', 'Audio player');
+  const title = document.createElement('strong');
+  title.className = 'activity-music-title';
+  const attribution = document.createElement('p');
+  attribution.className = 'activity-music-attribution';
+  const status = document.createElement('p');
+  status.className = 'activity-music-status';
+  status.setAttribute('aria-live', 'polite');
+  const audio = document.createElement('audio');
+  audio.controls = true;
+  audio.preload = 'none';
+  audio.setAttribute('aria-label', 'Music playback controls');
+  const queue = document.createElement('ol');
+  queue.className = 'activity-music-queue';
+  const queueButtons = [];
+  let activeIndex = 0;
+  let settingTrack = false;
+
+  const selectTrack = async (index, shouldPlay = false) => {
+    if (settingTrack || !tracks[index]?.stream_id) return;
+    settingTrack = true;
+    queueButtons.forEach((button, buttonIndex) => {
+      button.setAttribute('aria-current', String(buttonIndex === index));
+    });
+    activeIndex = index;
+    const track = tracks[index];
+    title.textContent = track.title || 'Wikimedia Commons audio';
+    const creator = track.artist || track.attribution || 'Creator not listed';
+    attribution.textContent = `${creator} · ${track.license || 'Free license'}${track.attribution_required ? ' · attribution required' : ''}`;
+    status.textContent = 'Preparing secure playback…';
+    try {
+      const response = await apiFetch('/api/music/stream-ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stream_id: track.stream_id }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'This audio stream is unavailable.');
+      }
+      audio.src = `/api/music/stream/${encodeURIComponent(track.stream_id)}`;
+      audio.load();
+      status.textContent = 'Tap Play to start. Playback never starts automatically.';
+      if (shouldPlay) await audio.play();
+    } catch (error) {
+      status.textContent = error.message || 'Playback could not be prepared.';
+    } finally {
+      settingTrack = false;
+    }
+  };
+
+  tracks.forEach((track, index) => {
+    const item = document.createElement('li');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = track.title || `Track ${index + 1}`;
+    button.addEventListener('click', () => void selectTrack(index, true));
+    queueButtons.push(button);
+    item.appendChild(button);
+    queue.appendChild(item);
+  });
+  audio.addEventListener('ended', () => {
+    if (activeIndex + 1 < tracks.length) {
+      void selectTrack(activeIndex + 1, true);
+    } else {
+      status.textContent = 'Queue finished.';
+    }
+  });
+  audio.addEventListener('error', () => {
+    status.textContent = 'The selected audio could not be played in this browser.';
+  });
+  card.append(title, attribution, status, audio);
+  if (tracks.length > 1) card.append(queue);
+  container.appendChild(card);
+  void selectTrack(0);
 }
 
 async function retryActivityStep(data, trace) {
@@ -1582,10 +1729,7 @@ async function submitPrompt() {
     ? `\n\nUploaded workspace files:\n${readyAttachments.map((item) => `- ${item.path}`).join('\n')}`
     : '';
   const requestMessage = `${userMessage}${attachmentContext}`;
-  const displayMessage = readyAttachments.length
-    ? `${userMessage}\n\nAttached: ${readyAttachments.map((item) => item.name).join(', ')}`
-    : userMessage;
-  appendMessage('user', displayMessage, '', { editText: userMessage });
+  appendMessage('user', userMessage, '', { editText: userMessage, attachments: readyAttachments });
   setBusy(true);
   safeStorageSet('sessionStorage', `hsx-draft-${sessionId}`, typedMessage);
 
@@ -1760,10 +1904,6 @@ function setCameraStatus(connected, message) {
     ? connected ? 'Connecting to camera…' : 'Camera unavailable'
     : 'Camera is off';
   document.getElementById('camera-clip-time').hidden = !connected || !cameraHasFrame;
-  const composerCamera = document.getElementById('composer-camera-button');
-  composerCamera.setAttribute('aria-pressed', String(cameraEnabled));
-  composerCamera.setAttribute('aria-label', cameraEnabled ? 'Turn camera off' : 'Turn camera on');
-  composerCamera.title = cameraEnabled ? 'Turn camera off' : 'Turn camera on';
 }
 
 function stopCameraAndStandby() {
@@ -2591,6 +2731,16 @@ async function refreshAgentActivity() {
       const item = document.createElement('div');
       item.className = 'activity-item';
       item.dataset.state = String(task.state || 'unknown');
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'activity-item-toggle';
+      toggle.setAttribute('aria-expanded', 'false');
+      const chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      chevron.setAttribute('viewBox', '0 0 24 24');
+      chevron.setAttribute('aria-hidden', 'true');
+      const chevronPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      chevronPath.setAttribute('d', 'm6 9 6 6 6-6');
+      chevron.append(chevronPath);
       const summary = document.createElement('span');
       summary.className = 'activity-summary';
       summary.textContent = String(task.summary || 'Agent task');
@@ -2601,7 +2751,16 @@ async function refreshAgentActivity() {
       state.dataset.state = String(task.state || 'unknown');
       state.textContent = String(task.state || 'unknown').replaceAll('_', ' ');
       meta.append(state);
-      item.append(summary, meta);
+      toggle.setAttribute('aria-label', `${state.textContent}: ${summary.textContent}`);
+      toggle.append(summary, meta, chevron);
+      const details = document.createElement('div');
+      details.className = 'activity-card-details';
+      details.hidden = true;
+      toggle.addEventListener('click', () => {
+        const expanded = toggle.getAttribute('aria-expanded') !== 'true';
+        toggle.setAttribute('aria-expanded', String(expanded));
+        details.hidden = !expanded;
+      });
       const addDetail = (label, value) => {
         const detail = document.createElement('div');
         detail.className = 'activity-detail';
@@ -2610,7 +2769,7 @@ async function refreshAgentActivity() {
         const text = document.createElement('strong');
         text.textContent = value;
         detail.append(key, text);
-        item.append(detail);
+        details.append(detail);
         return text;
       };
       addDetail('Agent', `${task.agent_role || 'Assistant'} · ${task.agent_name || 'Hsx'}`);
@@ -2628,6 +2787,7 @@ async function refreshAgentActivity() {
             : 'Estimating',
         );
       }
+      item.append(toggle, details);
       fragment.append(item);
     }
     elements.activityList.replaceChildren(fragment);
@@ -2791,10 +2951,6 @@ async function initialize() {
       refreshArtifacts();
     }
   });
-  document.getElementById('composer-camera-button').addEventListener('click', () => {
-    if (!cameraEnabled) toggleCamera();
-    else stopCameraAndStandby();
-  });
   document.getElementById('camera-close').addEventListener('click', () => {
     stopCameraAndStandby();
     closeMobilePanels();
@@ -2908,6 +3064,12 @@ async function initialize() {
     safeStorageSet('localStorage', 'hsx-voice-language', event.target.value);
   });
   document.getElementById('test-provider-health').addEventListener('click', testProviderHealth);
+  document.getElementById('update-music-engine').addEventListener('click', () => {
+    document.getElementById('settings-dialog').close();
+    elements.prompt.value = 'Update the yt-dlp music engine using the pinned package resolver. Ask me before installing; install only into the active virtual environment, self-test, and continue.';
+    updateSendButton();
+    submitPrompt();
+  });
   document.getElementById('settings-open-camera').addEventListener('click', () => {
     document.getElementById('settings-dialog').close();
     openMobilePanel(elements.cameraSidebar);
@@ -2986,13 +3148,13 @@ async function initialize() {
     }
   });
   document.addEventListener('click', (event) => {
-    const connections = document.getElementById('connections-panel');
-    const toggle = document.getElementById('connection-toggle');
-    if (!connections.hidden && !connections.contains(event.target) && !toggle.contains(event.target)) {
-      connections.hidden = true;
-      toggle.setAttribute('aria-expanded', 'false');
-      toggle.focus();
-    }
+    if (!(event.target instanceof Element)) return;
+    const panels = [
+      [elements.notificationPanel, document.getElementById('notifications-toggle')],
+      [document.getElementById('connections-panel'), document.getElementById('connection-toggle')],
+    ];
+    if (panels.some(([panel]) => !panel.hidden && panel.contains(event.target))) return;
+    if (panels.some(([panel, button]) => !panel.hidden && !button.contains(event.target))) closeHeaderPopovers();
   });
   window.addEventListener('resize', () => {
     const panel = document.getElementById('connections-panel');

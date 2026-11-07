@@ -1,0 +1,15 @@
+{
+  "name": "music_search",
+  "description": "Search Wikimedia Commons for audio recordings with a verified public-domain or Creative Commons license.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ]
+  }
+}

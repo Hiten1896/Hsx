@@ -38,14 +38,17 @@ for shared design and server contracts.
 
 Only features backed by the current API are shown. Any file type up to 1 MB can be
 attached. Uploads preserve bytes through `/api/upload`; the resulting workspace paths
-are included in the chat request and are excluded from generated artifacts. The
-microphone is shown only in secure browsers that
-support speech recognition, and recognized text remains in the draft until the user
-sends it. The options menu opens the file picker or host camera panel.
+are included in the chat request and are excluded from generated artifacts. In the
+conversation, uploaded files render as separate file cards; supported images use
+authenticated previews instead of being appended to the user's prompt text. The
+microphone is shown only in secure browsers that support speech recognition, and
+recognized text remains in the draft until the user sends it. Camera controls live
+in the separate host-camera panel, not beside the composer.
 
-The input supports Enter to send, Shift+Enter for a newline, paste, and drag-and-drop.
-The Send action submits to `/api/chat/stream`, Stop calls `/api/stop`, response copy
-uses the Clipboard API, and feedback uses `/api/feedback`.
+The input supports Enter to send, Shift+Enter for a newline, paste, and drag-and-drop;
+the keyboard hint is intentionally omitted from the interface. The Send action
+submits to `/api/chat/stream`, Stop calls `/api/stop`, response copy uses the
+Clipboard API, and feedback uses `/api/feedback`.
 
 The host camera status and still frames come from the server-side capture service.
 When the device or service is unavailable, the panel accurately shows Offline rather

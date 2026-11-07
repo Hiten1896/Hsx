@@ -57,6 +57,23 @@ def test_capability_activity_event_carries_grouped_report():
     assert event["capabilities"]["cannot_do"][0]["how_to_add"] == "Add OCR."
 
 
+def test_music_activity_event_exposes_only_the_browser_player_payload():
+    start = tool_start_event("music_play", {"file_id": 101}, "music-call")
+    event = tool_end_event(start, {
+        "success": True,
+        "browser_action": {
+            "type": "music_play",
+            "stream_id": "a" * 32,
+            "title": "Public-domain song.ogg",
+            "license": "Public domain",
+            "queue": [{"stream_id": "a" * 32, "title": "Public-domain song.ogg"}],
+        },
+    }, 20)
+
+    assert event["music_player"]["title"] == "Public-domain song.ogg"
+    assert event["music_player"]["stream_id"] == "a" * 32
+
+
 def test_activity_arguments_redact_credentials_and_bound_content():
     value = redact_activity_value({
         "command": "curl https://example.test?token=abc123",

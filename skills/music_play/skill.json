@@ -1,0 +1,22 @@
+{
+  "name": "music_play",
+  "description": "Prepare a public-domain or Creative Commons audio file selected from Wikimedia Commons search results for browser playback.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "file_id": {
+        "type": "integer"
+      },
+      "queue": {
+        "type": "array",
+        "items": {
+          "type": "integer"
+        },
+        "maxItems": 9
+      }
+    },
+    "required": [
+      "file_id"
+    ]
+  }
+}

@@ -156,11 +156,10 @@
             <div id="drop-hint" class="drop-hint" hidden>Drop files here to attach them</div>
             <div id="attachment-list" class="attachment-list" aria-live="polite"></div>
             <form id="composer-form" class="composer">
-              <div class="composer-input-row">
-                <button id="attach-button" class="composer-icon-button attach-button" type="button" aria-label="Attach files" title="Attach files">＋</button>
-                <button id="composer-camera-button" class="composer-icon-button" type="button" aria-label="Turn camera on" title="Turn camera on" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5h11.5a2 2 0 0 1 2 2v1l3-2v7l-3-2v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"></path></svg></button>
-                <label class="sr-only" for="prompt-input">Message Hsx</label>
-                <textarea id="prompt-input" rows="1" placeholder="Type / for skills" autocomplete="off"></textarea>
+            <div class="composer-input-row">
+              <button id="attach-button" class="composer-icon-button attach-button" type="button" aria-label="Attach files" title="Attach files">＋</button>
+              <label class="sr-only" for="prompt-input">Message Hsx</label>
+              <textarea id="prompt-input" rows="1" placeholder="Type / for skills" autocomplete="off"></textarea>
                 <div class="composer-actions">
                   <button id="voice-button" class="composer-icon-button voice-button" type="button" aria-label="Start voice input" aria-describedby="voice-privacy" title="Dictate a message; Chrome and Edge send audio to their speech service.">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2.5" width="6" height="12" rx="3"></rect><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3.5M9 21.5h6"></path></svg>
@@ -174,7 +173,6 @@
                 </div>
               </div>
               <div class="composer-footer">
-                <span><kbd>Enter</kbd> to send <span class="footer-divider">·</span> <kbd>Shift</kbd> + <kbd>Enter</kbd> for a new line</span>
                 <span id="composer-status" role="status"></span>
               </div>
             </form>
@@ -297,6 +295,8 @@
             </section>
             <section id="settings-panel-advanced" role="tabpanel" aria-labelledby="settings-tab-advanced" data-settings-panel="advanced" hidden>
               <h3>Advanced</h3>
+              <p>Update the music engine through Hsx's approved, virtual-environment-only package resolver.</p>
+              <button id="update-music-engine" class="settings-action" type="button">Update music engine</button>
               <p>Debug information contains connection status only. Secrets are never shown.</p>
               <pre id="debug-info" class="debug-info">No diagnostic data loaded.</pre>
             </section>
@@ -312,6 +312,7 @@
 
     <template id="message-template">
       <article class="message-card">
+        <div class="message-attachments" hidden></div>
         <div class="message-content markdown-body"></div>
         <div class="message-actions">
           <div class="message-action-group">

@@ -33,6 +33,8 @@ ACTIVITY_MAP = {
     "make_docx": ToolActivity("package", "Building", "Built"),
     "make_markdown": ToolActivity("pencil", "Editing", "Edited"),
     "make_website": ToolActivity("pencil", "Editing", "Edited"),
+    "music_play": ToolActivity("music", "Preparing", "Prepared"),
+    "music_search": ToolActivity("music", "Searching", "Searched"),
     "network_status": ToolActivity("gear", "Checking", "Checked"),
     "notes": ToolActivity("save", "Saving", "Saved"),
     "read_file": ToolActivity("book", "Reading", "Read"),
@@ -218,6 +220,10 @@ def tool_end_event(start: dict, result: Any, duration_ms: float, *, failed: bool
         event["capabilities"] = redact_activity_value(
             {"groups": result.get("groups", []), "cannot_do": result.get("cannot_do", [])}
         )
+    if start.get("tool") == "music_play" and isinstance(result, dict):
+        player = result.get("browser_action")
+        if isinstance(player, dict) and player.get("type") == "music_play":
+            event["music_player"] = redact_activity_value(player)
     return event
 
 

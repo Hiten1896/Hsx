@@ -831,7 +831,7 @@ def run_agent(
             started = time.perf_counter()
             try:
                 tool_input = dict(call.input)
-                if call.name in {"audio_play", "camera_record"}:
+                if call.name in {"audio_play", "camera_record", "music_play"}:
                     tool_input["target_device"] = target_device
                 if call.name == "describe_image" and not _image_path_was_named(
                     user_input,
@@ -865,7 +865,7 @@ def run_agent(
                     _raise_permission_request(
                         call, results, tool_calls, call_index, conversation_history, error
                     )
-                if call.name in {"audio_play", "camera_record"} and device_actions is not None:
+                if call.name in {"audio_play", "camera_record", "music_play"} and device_actions is not None:
                     device_actions.append({
                         "type": call.name,
                         "target_device": target_device,
@@ -878,7 +878,7 @@ def run_agent(
                     session_id, job_id, call.name, call.id, (time.perf_counter() - started) * 1000, "succeeded"
                 )
                 resolved_tool = call.name
-                if isinstance(result, dict) and call.name in {"audio_play", "camera_record"} and device_actions is not None:
+                if isinstance(result, dict) and call.name in {"audio_play", "camera_record", "music_play"} and device_actions is not None:
                     device_actions.append(
                         result.get("browser_action")
                         or {

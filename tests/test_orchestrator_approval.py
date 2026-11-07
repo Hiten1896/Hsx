@@ -89,3 +89,62 @@ def test_resume_adds_only_tool_result_and_continues_turn(tmp_path, monkeypatch):
     assert answer == "The action was declined."
     assert seen[0][-1]["content"][0]["tool_use_id"] == "delete-call"
     assert "approval_request" not in json.dumps(history)
+
+
+def test_successful_package_install_resumes_the_original_task_with_new_tool(monkeypatch):
+    monkeypatch.setattr(orchestrator.POLICY, "is_stopped", lambda: False)
+    monkeypatch.setattr(orchestrator.POLICY, "decide", lambda *_args, **_kwargs: {"allowed": True})
+    monkeypatch.setattr(orchestrator.INTENT_ROUTER, "predict_with_confidence", lambda _message: ("", 0.0))
+    monkeypatch.setattr(orchestrator.MEMORY, "prompt_context", lambda _message: "")
+    monkeypatch.setattr(orchestrator.MEMORY, "record_message", lambda *_args: None)
+    monkeypatch.setattr(orchestrator.EXPERIENCE_MEMORY, "prompt_context", lambda _message: "")
+    monkeypatch.setattr(orchestrator.SEMANTIC_CACHE, "get", lambda _message: None)
+    monkeypatch.setattr(orchestrator.SEMANTIC_CACHE, "put", lambda *_args: None)
+    monkeypatch.setattr(orchestrator, "system_body_context", lambda _target: "")
+    searched = []
+    responses = iter([
+        NormalizedResponse([NormalizedBlock(
+            type="tool_use",
+            id="search-call",
+            name="music_search",
+            input={"query": "ambient piano"},
+        )]),
+        NormalizedResponse([NormalizedBlock(type="text", text="I found licensed music.")]),
+    ])
+    monkeypatch.setattr(orchestrator, "call_llm", lambda *_args, **_kwargs: next(responses))
+    checkpoint = [
+        {"role": "user", "content": "Find ambient piano and play it."},
+        {"role": "assistant", "content": [
+            {
+                "type": "tool_use",
+                "id": "resolver-call",
+                "name": "capability_resolver",
+                "input": {"package": "yt-dlp", "capability": "music playback"},
+            },
+            {"type": "text", "text": "Paused: waiting for user approval."},
+        ]},
+    ]
+
+    answer, history = orchestrator.run_agent(
+        "Find ambient piano and play it.",
+        checkpoint,
+        [
+            {"name": "music_search", "input_schema": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            }},
+        ],
+        {"music_search": lambda query: searched.append(query) or {"success": True, "results": []}},
+        session_id="music-session",
+        resume_tool_result={
+            "tool_call_id": "resolver-call",
+            "result": {"success": True, "package": "yt-dlp==2026.10.26"},
+        },
+        enable_planning=False,
+        track_intent=False,
+    )
+
+    assert answer == "I found licensed music."
+    assert searched == ["ambient piano"]
+    assert history[-1]["role"] == "assistant"

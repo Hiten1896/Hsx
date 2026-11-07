@@ -15,6 +15,7 @@ import time
 import copy
 import uuid
 from collections.abc import Callable
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
@@ -45,6 +46,7 @@ from agent.ml.log_recorder import LOG_RECORDER
 from agent.mesh.node_gateway import MeshGateway
 from agent.ml.memory import EXPERIENCE_MEMORY
 from agent.memory import MemoryManager
+from agent.music_catalog import MUSIC_CATALOG
 from agent.notifier import Notifier
 from agent.orchestrator import run_agent
 from agent.policy import POLICY
@@ -332,7 +334,7 @@ def _retry_activity_tool(job_id: str, call_id: str) -> tuple[dict, int]:
     started = time.perf_counter()
     POLICY.audit_event("activity_step_retry", retry["session_id"], job_id, tool_name)
     try:
-        if tool_name in {"audio_play", "camera_record"}:
+        if tool_name in {"audio_play", "camera_record", "music_play"}:
             arguments["target_device"] = retry["target_device"]
         result = runner(**arguments)
     except (OSError, RuntimeError, TypeError, ValueError) as error:
@@ -566,6 +568,7 @@ def _session_artifacts(session_id: str) -> list[dict]:
                 item
                 for item in workspace_search(WORKSPACE, directory=directory, limit=200)
                 if not _is_user_upload_path(item["path"])
+                and Path(item["path"]).name != "activity-trace.jsonl"
             )
         except (OSError, ValueError):
             LOGGER.warning("Skipping invalid artifact directory for session %s.", session_id)
@@ -747,13 +750,13 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
         tool_input = dict(arguments)
         if tool_name in {"system_execute", "shell"} and permission_request and approved:
             tool_input["_approved_elevation"] = True
-        if tool_name in {"audio_play", "camera_record"}:
+        if tool_name in {"audio_play", "camera_record", "music_play"}:
             tool_input["target_device"] = job.get("target_device", "local_host")
         try:
             result = SKILL_MAP[tool_name](**tool_input)
         except (OSError, RuntimeError, TypeError, ValueError) as error:
             result = {"success": False, "error": str(error)}
-        if isinstance(result, dict) and tool_name in {"audio_play", "camera_record"}:
+        if isinstance(result, dict) and tool_name in {"audio_play", "camera_record", "music_play"}:
             device_actions.append(
                 result.get("browser_action")
                 or {
@@ -1187,6 +1190,19 @@ class HsxHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self._request_path()
+        if path.startswith("/api/music/stream/"):
+            stream_id = path.removeprefix("/api/music/stream/")
+            cookie = SimpleCookie(self.headers.get("Cookie", ""))
+            auth_cookie = cookie.get("hsx_audio")
+            audio_path = MUSIC_CATALOG.resolve_stream(
+                stream_id,
+                auth_cookie.value if auth_cookie else "",
+            )
+            if audio_path is None:
+                self._json({"error": "Music stream is unavailable or expired."}, 404)
+                return
+            self._serve_file(audio_path, inline=True, no_store=True)
+            return
         if not self._api_access_allowed():
             return
         query = parse_qs(urlsplit(self.path).query)
@@ -1456,6 +1472,26 @@ class HsxHandler(BaseHTTPRequestHandler):
                         break
                     remaining -= len(chunk)
             self._json({"error": "Request is too large. Reduce the upload and try again."}, 413)
+            return
+        if path == "/api/music/stream-ticket":
+            payload = self._body()
+            stream_id = str(payload.get("stream_id", ""))
+            secret = MUSIC_CATALOG.authorize_stream(stream_id)
+            if secret is None:
+                self._json({"error": "Music stream is unavailable or expired."}, 404)
+                return
+            origin = self.headers.get("Origin", "")
+            forwarded_proto = self.headers.get("X-Forwarded-Proto", "").casefold()
+            secure = "; Secure" if origin.startswith("https://") or forwarded_proto == "https" else ""
+            self.send_response(204)
+            self._security_headers()
+            self.send_header("Cache-Control", "no-store")
+            self.send_header(
+                "Set-Cookie",
+                f"hsx_audio={secret}; HttpOnly; SameSite=Strict; Path=/api/music/stream/; "
+                f"Max-Age={MUSIC_CATALOG.stream_ttl_seconds}{secure}",
+            )
+            self.end_headers()
             return
         if path == "/api/mesh/tasks":
             path = "/api/chat/stream"
@@ -2137,7 +2173,7 @@ class HsxHandler(BaseHTTPRequestHandler):
             )
         ]
 
-    def _serve_file(self, target: Path, *, inline: bool) -> None:
+    def _serve_file(self, target: Path, *, inline: bool, no_store: bool = False) -> None:
         size = target.stat().st_size
         start, end = 0, size - 1
         status = 200
@@ -2166,6 +2202,8 @@ class HsxHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Disposition", f"{disposition}; filename*=UTF-8''{quote(target.name)}")
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(length))
+        if no_store:
+            self.send_header("Cache-Control", "no-store")
         if status == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.end_headers()

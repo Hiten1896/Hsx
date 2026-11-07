@@ -148,7 +148,9 @@ def classify_action(tool_name: str, arguments: dict) -> str:
         return "microphone_start"
     if name == "capability_resolver":
         return "install_packages"
-    if name in {"web_search", "web_fetch", "music_search", "music_play"}:
+    if name == "web_search":
+        return ""
+    if name in {"web_fetch", "music_search", "music_play"}:
         return "external_services"
     if name in {"create_text_file", "make_docx", "make_csv", "make_markdown", "make_website", "report", "make_pdf"}:
         filename = str(arguments.get("filename", arguments.get("path", "")))

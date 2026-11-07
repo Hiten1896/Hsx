@@ -41,6 +41,25 @@ def test_deny_always_allow_restart_and_policy_edit(tmp_path):
     assert reopened.permission_list()["always_allow"] == []
 
 
+def test_package_install_approval_is_a_plain_vetted_plan(tmp_path):
+    policy, _ = _policy(tmp_path)
+
+    decision = policy.decide(
+        {"name": "capability_resolver"},
+        {"package": "yt-dlp", "capability": "play audio"},
+        "music-session",
+    )
+
+    request = decision["approval_request"]
+    assert decision["status"] == "waiting_approval"
+    assert request["request_type"] == "package_install"
+    assert "yt-dlp==" in request["summary"]
+    assert "about 20 MB" in request["why"]
+    assert "virtual environment only" in request["details"]
+    assert "No sudo" in request["details"]
+    assert "raw" not in str(request).casefold()
+
+
 def test_hard_deny_cannot_be_approved_and_audit_does_not_leak_values(tmp_path):
     policy, _ = _policy(tmp_path)
     result = policy.decide(

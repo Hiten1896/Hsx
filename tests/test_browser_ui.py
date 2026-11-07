@@ -2,6 +2,7 @@ import base64
 import json
 import threading
 import time
+import wave
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -11,6 +12,9 @@ from playwright.sync_api import sync_playwright
 import server
 from agent.conversations import ConversationStore
 from agent.notifier import Notifier
+
+BROWSER_MUSIC_STREAM_IDS: list[str] = []
+BROWSER_CHAT_MESSAGES: list[str] = []
 
 
 class BrowserFakeHandler(server.HsxHandler):
@@ -45,6 +49,7 @@ class BrowserFakeHandler(server.HsxHandler):
         if self._request_path() != "/api/chat/stream":
             return super().do_POST()
         payload = self._body()
+        BROWSER_CHAT_MESSAGES.append(str(payload.get("message", "")))
         if payload.get("message") == "cause provider failure":
             self._json({"error": "The provider is temporarily unavailable."}, 502)
             return
@@ -176,6 +181,55 @@ class BrowserFakeHandler(server.HsxHandler):
                 ("job", {"id": "capabilities-job", "state": "done", "result": "Hsx is ready for these tasks."}),
                 ("done", {}),
             ]
+        elif payload.get("message") == "music player":
+            events = [
+                ("message_start", {"run_id": "music-player-run"}),
+                ("tool_start", {
+                    "tool_call_id": "music-player-step", "tool": "music_play", "icon": "music",
+                    "present": "Preparing", "past": "Prepared", "target": "music",
+                    "status": "running",
+                }),
+                ("tool_end", {
+                    "tool_call_id": "music-player-step", "tool": "music_play", "icon": "music",
+                    "present": "Preparing", "past": "Prepared", "target": "music",
+                    "status": "completed", "duration_ms": 10, "output": "Prepared two tracks.",
+                    "details": {"arguments": {}}, "images": [],
+                    "music_player": {
+                        "type": "music_play", "stream_id": BROWSER_MUSIC_STREAM_IDS[0],
+                        "title": "Public-domain song.ogg", "artist": "Example Artist",
+                        "license": "Public domain", "attribution_required": True,
+                        "queue": [
+                            {
+                                "type": "music_play", "stream_id": stream_id,
+                                "title": f"Track {index + 1}.ogg", "artist": "Example Artist",
+                                "license": "Public domain", "attribution_required": True,
+                            }
+                            for index, stream_id in enumerate(BROWSER_MUSIC_STREAM_IDS)
+                        ],
+                    },
+                }),
+                ("text_delta", {"text": "The selected free audio is ready."}),
+                ("job", {"id": "music-player-job", "state": "done", "result": "The selected free audio is ready."}),
+                ("done", {}),
+            ]
+        elif payload.get("message") == "resolver plan" or payload.get("message", "").startswith(
+            "Update the yt-dlp music engine"
+        ):
+            events = [
+                ("message_start", {"run_id": "resolver-plan-run"}),
+                ("job", {
+                    "id": "resolver-plan-job",
+                    "state": "waiting_for_approval",
+                    "approval_id": "resolver-approval",
+                    "approval": {
+                        "request_type": "package_install",
+                        "summary": "Hsx wants to: install yt-dlp==2026.10.26 in its own Python environment.",
+                        "why": "Adds music search and audio downloads; about 20 MB and needs the internet.",
+                        "details": "Project virtual environment only. No sudo or system packages. Hsx will import the package to self-test it, then continue your request.",
+                    },
+                }),
+                ("done", {}),
+            ]
         else:
             events = [
                 ("message_start", {"run_id": "browser-fake-run"}),
@@ -231,6 +285,89 @@ def test_browser_new_chat_saves_thread_and_does_not_save_empty_chats(browser_app
     page.locator("#new-chat-button").click()
     assert page.locator(".chat-history-row").count() == 1
     assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
+
+
+def test_browser_music_player_is_tap_to_play_and_exposes_queue(browser_app, browser_page, tmp_path, monkeypatch):
+    from agent.music_catalog import MusicCatalog
+
+    cache = tmp_path / "music-cache"
+    cache.mkdir()
+    audio_path = cache / "commons.wav"
+    with wave.open(str(audio_path), "wb") as audio_file:
+        audio_file.setnchannels(1)
+        audio_file.setsampwidth(2)
+        audio_file.setframerate(8000)
+        audio_file.writeframes(b"\0\0" * 24_000)
+    catalog = MusicCatalog(cache)
+    stream_ids = [
+        catalog._create_stream_ticket(audio_path),
+        catalog._create_stream_ticket(audio_path),
+    ]
+    monkeypatch.setattr(server, "MUSIC_CATALOG", catalog)
+    monkeypatch.setattr("tests.test_browser_ui.BROWSER_MUSIC_STREAM_IDS", stream_ids)
+    base_url, _ = browser_app
+    _, page = browser_page
+    page.set_default_timeout(5000)
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.locator("#prompt-input").fill("music player")
+    page.locator("#send-button").click()
+    step = page.locator(".activity-step").last
+    step.locator(".activity-row-toggle").click()
+    player = step.locator(".activity-music-player")
+    player.wait_for()
+    audio = player.locator("audio")
+    assert audio.evaluate("element => element.controls")
+    assert audio.evaluate("element => element.paused")
+    assert player.locator(".activity-music-status").inner_text() == "Tap Play to start. Playback never starts automatically."
+    assert player.locator(".activity-music-queue li").count() == 2
+    player.get_by_role("button", name="Track 2.ogg").click()
+    page.wait_for_function(
+        "() => document.querySelector('.activity-music-status')?.textContent === 'Tap Play to start. Playback never starts automatically.'"
+    )
+    cookie = next(item for item in page.context.cookies() if item["name"] == "hsx_audio")
+    assert cookie["httpOnly"]
+    assert cookie["path"] == "/api/music/stream/"
+    page.set_viewport_size({"width": 360, "height": 800})
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+def test_browser_package_resolver_shows_one_plain_approval_plan(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    page.set_default_timeout(5000)
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.locator("#prompt-input").fill("resolver plan")
+    page.locator("#send-button").click()
+    card = page.locator(".approval-card")
+    card.wait_for()
+    assert page.locator(".approval-card").count() == 1
+    assert card.get_by_role("heading", name="Hsx can add this ability").is_visible()
+    assert "install yt-dlp==2026.10.26" in card.inner_text()
+    assert "about 20 MB" in card.inner_text()
+    card.get_by_text("Details").click()
+    assert "virtual environment only" in card.locator("pre").inner_text()
+    assert "No sudo" in card.locator("pre").inner_text()
+    assert card.get_by_role("button", name="Allow", exact=True).is_visible()
+    assert card.get_by_role("button", name="Always allow this").is_visible()
+    assert card.get_by_role("button", name="Not now").is_visible()
+    assert not card.inner_text().lstrip().startswith("{")
+
+
+def test_advanced_settings_update_music_engine_uses_resolver_approval(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    page.set_default_timeout(5000)
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.locator("#settings-toggle").click()
+    page.locator("#settings-tab-advanced").click()
+    page.get_by_role("button", name="Update music engine").click()
+    card = page.locator(".approval-card")
+    card.wait_for()
+    assert "install yt-dlp==2026.10.26" in card.inner_text()
+    assert page.locator("#settings-dialog").evaluate("dialog => !dialog.open")
 
 
 def test_browser_history_survives_reload_and_another_browser_and_supports_actions(browser_app, browser_page):
@@ -344,8 +481,18 @@ def test_browser_layout_contracts_and_connection_popover(browser_app, browser_pa
     page.locator("#connection-toggle").click()
     page.mouse.click(2, 2)
     assert popover.is_hidden()
-    assert page.evaluate("document.activeElement.id") == "connection-toggle"
+    page.locator("#notifications-toggle").click()
+    notifications = page.locator("#notifications-panel")
+    assert notifications.is_visible()
+    page.mouse.click(2, 2)
+    assert notifications.is_hidden()
+    assert page.locator("#composer-camera-button").count() == 0
+    assert "Enter to send" not in page.locator(".composer-footer").inner_text()
+    send_box = page.locator("#send-button").bounding_box()
+    assert send_box["width"] == 44
+    assert send_box["height"] == 44
     page.set_viewport_size({"width": 1280, "height": 900})
+    assert page.locator("#send-button").bounding_box()["width"] == 48
     page.locator(".suggestion-chip").first.click()
     page.locator("#send-button").click()
     first = page.locator("#chat-stream .message-card").first
@@ -445,6 +592,81 @@ def test_browser_layout_screenshots_at_requested_widths(browser_app, browser_pag
         page.screenshot(path=str(screenshots / f"after-{width}-long-conversation.png"))
 
 
+def test_sidebar_activity_cards_expand_only_on_request(browser_app, browser_page):
+            base_url, _ = browser_app
+            _, page = browser_page
+            page.route(
+                "**/api/activity?*",
+                lambda route: route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({"tasks": [{
+                        "state": "running",
+                        "summary": "Build a weekly report",
+                        "agent_name": "Hsx",
+                        "agent_role": "Assistant",
+                        "task_path": "Hsx Work/weekly-report",
+                        "elapsed_seconds": 18,
+                        "eta_seconds": 42,
+                    }]}),
+                ),
+            )
+            page.goto(f"{base_url}/web/")
+            page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+            page.locator("#activity-toggle").click()
+            card = page.locator(".activity-item")
+            card.wait_for()
+            toggle = card.locator(".activity-item-toggle")
+            details = card.locator(".activity-card-details")
+            assert toggle.get_attribute("aria-expanded") == "false"
+            assert details.is_hidden()
+            toggle.click()
+            assert toggle.get_attribute("aria-expanded") == "true"
+            assert details.is_visible()
+            assert details.get_by_text("weekly-report").is_visible()
+
+
+def test_sent_attachments_render_as_file_cards_not_query_text(browser_app, browser_page):
+            base_url, _ = browser_app
+            _, page = browser_page
+            BROWSER_CHAT_MESSAGES.clear()
+            image = base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l3sAAAAASUVORK5CYII="
+            )
+            page.route(
+                "**/api/upload",
+                lambda route: route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({"success": True, "name": "screenshot.png", "path": "Hsx Work/screenshot.png"}),
+                ),
+            )
+            page.route(
+                "**/api/files/content**",
+                lambda route: route.fulfill(status=200, content_type="image/png", body=image),
+            )
+            page.goto(f"{base_url}/web/")
+            page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+            page.locator("#file-input").set_input_files({
+                "name": "screenshot.png", "mimeType": "image/png", "buffer": image,
+            })
+            page.locator(".attachment-chip").wait_for()
+            page.locator("#prompt-input").fill("Describe this screenshot")
+            page.locator("#send-button").click()
+            message = page.locator('.message-card[data-role="user"]').last
+            message.locator(".message-attachment-image img").wait_for()
+            assert message.locator(".message-content").inner_text() == "Describe this screenshot"
+            assert message.locator(".message-attachment-name").inner_text() == "screenshot.png"
+            assert BROWSER_CHAT_MESSAGES[-1].endswith("Hsx Work/screenshot.png")
+            page.locator('.message-card[data-role="assistant"]').last.wait_for()
+            page.wait_for_timeout(500)
+            page.reload()
+            restored = page.locator('.message-card[data-role="user"]').last
+            restored.wait_for()
+            assert restored.locator(".message-content").inner_text() == "Describe this screenshot"
+            assert restored.locator(".message-attachment-name").inner_text() == "screenshot.png"
+
+
 def test_browser_activity_trace_diff_images_grouping_and_failure(browser_app, browser_page):
     base_url, _ = browser_app
     browser, page = browser_page
@@ -461,6 +683,7 @@ def test_browser_activity_trace_diff_images_grouping_and_failure(browser_app, br
     summary.click()
     assert trace.locator(".activity-step").count() == 7
     first = trace.locator(".activity-step").first
+    assert first.locator(".activity-details").is_hidden()
     assert first.locator(".activity-target-chip").get_attribute("title").startswith("Hsx Work/")
     assert first.locator(".activity-target-chip").evaluate("el => getComputedStyle(el).textOverflow") == "ellipsis"
     first.locator(".activity-target-chip").click()

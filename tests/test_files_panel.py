@@ -114,6 +114,23 @@ def test_activity_endpoint_lists_only_the_session_and_hides_sensitive_prompts(tm
     assert all(item["state"] == "running" for item in tasks)
 
 
+def test_session_artifacts_hide_internal_activity_trace(tmp_path, monkeypatch):
+    root = tmp_path / "share"
+    task_dir = root / "Hsx Work" / "make-report"
+    task_dir.mkdir(parents=True)
+    (task_dir / "report.pdf").write_bytes(b"pdf")
+    (task_dir / "activity-trace.jsonl").write_text('{"event":"tool_start"}\n', encoding="utf-8")
+    jobs = AskUserJobs(tmp_path / "jobs.db")
+    jobs.create_running("Make a report PDF", "browser-session", "make-report")
+    monkeypatch.setattr(server, "ASK_JOBS", jobs)
+    monkeypatch.setattr(server, "WORKSPACE", Workspace(root, "Hsx Work"))
+    monkeypatch.setattr(server, "WORK_DIR", root / "Hsx Work")
+
+    files = server._session_artifacts("browser-session")
+
+    assert [item["name"] for item in files] == ["report.pdf"]
+
+
 def test_web_notifications_list_approval_and_mark_it_read(tmp_path: Path, monkeypatch):
     notifier = Notifier(tmp_path / "notifications.db")
     notifier.notify("needs_approval", "Hsx needs approval", job_id="approval-job")
