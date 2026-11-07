@@ -84,6 +84,25 @@ def test_local_api_rejects_an_invalid_bearer_token(monkeypatch):
     assert status == 401
 
 
+def test_same_origin_fetch_can_use_the_ui_without_a_bearer_token(monkeypatch):
+    from tests.test_files_panel import _request
+
+    monkeypatch.setattr(server, "ALLOWED_ORIGINS", ("http://127.0.0.1:8000",))
+    status, _, _ = _request(
+        "/api/skills",
+        headers={"Sec-Fetch-Site": "same-origin", "Host": "127.0.0.1:8000"},
+        tokenless=True,
+    )
+    assert status == 200
+
+    status, _, _ = _request(
+        "/api/skills",
+        headers={"Sec-Fetch-Site": "same-origin", "Host": "attacker.invalid"},
+        tokenless=True,
+    )
+    assert status == 401
+
+
 def test_api_accepts_only_an_exact_configured_origin(monkeypatch):
     from tests.test_files_panel import _request
 

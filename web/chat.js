@@ -1,6 +1,5 @@
-let sessionId = loadSessionId();
+let sessionId = makeSessionId();
 let apiContract;
-let apiToken = '';
 let pendingQuestion = null;
 let submitting = false;
 let activeChatController = null;
@@ -100,6 +99,14 @@ function safeStorageSet(storage, key, value) {
   return true;
 }
 
+function applyTheme(preference) {
+  const resolved = preference === 'system'
+    ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+    : preference;
+  document.documentElement.dataset.theme = resolved;
+  document.querySelector('meta[name="theme-color"]').content = resolved === 'light' ? '#ffffff' : '#1e1e1e';
+}
+
 function makeSessionId() {
   return `web-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
 }
@@ -107,10 +114,6 @@ function makeSessionId() {
 function makeClientMessageId() {
   return globalThis.crypto?.randomUUID?.()
     || `client-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function loadSessionId() {
-  return safeStorageGet('sessionStorage', 'hsx-session-id') || makeSessionId();
 }
 
 function persistSessionId() {
@@ -131,71 +134,10 @@ function persistAttachments() {
 
 function apiFetch(url, options = {}) {
   const headers = new Headers(options.headers || {});
-  apiToken = apiToken || safeStorageGet('sessionStorage', 'hsx-api-token');
-  if (apiToken) headers.set('Authorization', `Bearer ${apiToken}`);
   const signal = options.signal || (globalThis.AbortSignal?.timeout
     ? AbortSignal.timeout(8000)
     : undefined);
   return fetch(url, { ...options, headers, signal });
-}
-
-async function ensureApiAuthentication() {
-  apiToken = safeStorageGet('sessionStorage', 'hsx-api-token');
-  if (apiToken) {
-    const response = await apiFetch(apiContract.endpoints.auth_check, { cache: 'no-store' });
-    if (response.ok) return;
-    apiToken = '';
-    try {
-      window.sessionStorage.removeItem('hsx-api-token');
-    } catch {
-      // The in-memory token is cleared even when storage is unavailable.
-    }
-  }
-
-  const dialog = document.getElementById('auth-dialog');
-  const form = document.getElementById('auth-form');
-  const input = document.getElementById('auth-token');
-  const message = document.getElementById('auth-message');
-  dialog.addEventListener('cancel', (event) => event.preventDefault());
-  await new Promise((resolve) => {
-    let checking = false;
-    const submit = async (event) => {
-      event.preventDefault();
-      if (checking) return;
-      const candidate = input.value.trim();
-      if (!candidate) {
-        message.textContent = 'Enter the access token from data/auth.token on your Hsx host.';
-        return;
-      }
-      checking = true;
-      apiToken = candidate;
-      safeStorageSet('sessionStorage', 'hsx-api-token', apiToken);
-      try {
-        const response = await apiFetch(apiContract.endpoints.auth_check, { cache: 'no-store' });
-        if (response.ok) {
-          input.value = '';
-          form.removeEventListener('submit', submit);
-          dialog.close();
-          resolve();
-          return;
-        }
-        const payload = await response.json().catch(() => ({}));
-        message.textContent = payload.error || 'That token was not accepted. Check it and try again.';
-      } catch {
-        message.textContent = 'Hsx could not be reached. Check the connection and try again.';
-      }
-      checking = false;
-      apiToken = '';
-      try {
-        window.sessionStorage.removeItem('hsx-api-token');
-      } catch {
-        // The rejected token is not retained in memory.
-      }
-    };
-    form.addEventListener('submit', submit);
-    dialog.showModal();
-    input.focus();
-  });
 }
 
 function renderMarkdown(text, container) {
@@ -2862,6 +2804,16 @@ async function refreshAgentActivity() {
       toggle.type = 'button';
       toggle.className = 'activity-item-toggle';
       toggle.setAttribute('aria-expanded', 'false');
+      const taskTool = String(task.tool_name || task.last_tool || task.tool || '').toLowerCase();
+      const iconName = task.state === 'running'
+        ? 'spinner'
+        : /(shell|terminal|command|run_code|execute)/.test(taskTool)
+          ? 'terminal'
+          : /(edit|write|patch|file)/.test(taskTool)
+            ? 'pencil'
+            : 'brain';
+      const taskIcon = activityIcon(iconName, iconName === 'spinner' ? 'activity-spinner' : '');
+      taskIcon.classList.add('activity-task-icon');
       const chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       chevron.setAttribute('viewBox', '0 0 24 24');
       chevron.setAttribute('aria-hidden', 'true');
@@ -2879,7 +2831,7 @@ async function refreshAgentActivity() {
       state.textContent = String(task.state || 'unknown').replaceAll('_', ' ');
       meta.append(state);
       toggle.setAttribute('aria-label', `${state.textContent}: ${summary.textContent}`);
-      toggle.append(summary, meta, chevron);
+      toggle.append(taskIcon, summary, meta, chevron);
       const details = document.createElement('div');
       details.className = 'activity-card-details';
       details.hidden = true;
@@ -3028,7 +2980,7 @@ async function initialize() {
   ]);
   if (!tokensResponse.ok || !contractResponse.ok) throw new Error('Could not load the Hsx interface contract.');
   apiContract = await contractResponse.json();
-  await ensureApiAuthentication();
+  persistSessionId();
   try {
     const response = await apiFetch(apiContract.endpoints.conversations);
     if (response.ok) {
@@ -3048,18 +3000,12 @@ async function initialize() {
       draft: safeStorageGet('sessionStorage', `hsx-draft-${sessionId}`), attachments: [], pendingQuestion: null,
     });
   }
-  if (chatSessions.get(sessionId)?.saved) {
-    await restoreConversation(sessionId);
-    elements.stream.replaceChildren(elements.welcome, chatSessions.get(sessionId).fragment);
-    chatSessions.get(sessionId).fragment = document.createDocumentFragment();
-    elements.welcome.hidden = true;
-    setConversationEmpty(false);
-  }
   renderChatHistory();
   const savedTheme = safeStorageGet('localStorage', 'hsx-theme') || 'dark';
-  document.documentElement.dataset.theme = savedTheme === 'system'
-    ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
-    : savedTheme;
+  applyTheme(savedTheme);
+  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+    if (safeStorageGet('localStorage', 'hsx-theme') === 'system') applyTheme('system');
+  });
   document.getElementById('theme-setting').value = savedTheme;
   document.getElementById('language-setting').value = safeStorageGet('localStorage', 'hsx-language') || 'en';
   document.getElementById('voice-language-setting').value = safeStorageGet('localStorage', 'hsx-voice-language') || navigator.language || 'en-US';
@@ -3181,9 +3127,7 @@ async function initialize() {
   });
   document.getElementById('theme-setting').addEventListener('change', (event) => {
     safeStorageSet('localStorage', 'hsx-theme', event.target.value);
-    document.documentElement.dataset.theme = event.target.value === 'system'
-      ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
-      : event.target.value;
+    applyTheme(event.target.value);
   });
   document.getElementById('language-setting').addEventListener('change', (event) => {
     safeStorageSet('localStorage', 'hsx-language', event.target.value);

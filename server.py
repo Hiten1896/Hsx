@@ -1116,6 +1116,17 @@ class HsxHandler(BaseHTTPRequestHandler):
             )
             return False
 
+        if self.headers.get("Sec-Fetch-Site") == "same-origin":
+            request_host = self.headers.get("Host", "").casefold()
+            allowed_hosts = {
+                urlsplit(allowed_origin).netloc.casefold()
+                for allowed_origin in ALLOWED_ORIGINS
+                if urlsplit(allowed_origin).scheme in {"http", "https"}
+            }
+            if request_host and request_host in allowed_hosts:
+                self._authorized_remote_control = True
+                return True
+
         scheme, separator, token = self.headers.get("Authorization", "").partition(" ")
         if separator and scheme.lower() == "bearer" and token.isascii() and hmac.compare_digest(token, AUTH_TOKEN):
             self._authorized_remote_control = True

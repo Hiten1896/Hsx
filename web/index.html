@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="theme-color" content="#111513">
+    <meta name="theme-color" content="#1e1e1e">
     <meta name="description" content="Hsx — your private, local-first AI workspace.">
     <title>Hsx — Workspace</title>
     <link rel="icon" type="image/svg+xml" href="/web/favicon.svg">
@@ -350,16 +350,6 @@
         <button class="activity-show-steps" type="button" aria-expanded="true" hidden>Show fewer steps</button>
       </section>
     </template>
-    <dialog id="auth-dialog" class="auth-dialog" aria-labelledby="auth-title" aria-describedby="auth-description">
-      <form id="auth-form">
-        <h2 id="auth-title">Connect to your Hsx host</h2>
-        <p id="auth-description">Enter the access token stored in <code>data/auth.token</code> on your Hsx host. It stays in this browser tab only.</p>
-        <label for="auth-token">Access token</label>
-        <input id="auth-token" type="password" autocomplete="current-password" maxlength="512" required>
-        <p id="auth-message" role="status" aria-live="polite"></p>
-        <button type="submit">Connect</button>
-      </form>
-    </dialog>
     <dialog id="activity-file-viewer" class="activity-file-viewer" aria-labelledby="activity-viewer-title">
       <header><h2 id="activity-viewer-title"></h2><button id="activity-viewer-close" type="button" aria-label="Close file viewer">×</button></header>
       <div id="activity-viewer-content"></div>
