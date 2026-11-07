@@ -176,6 +176,7 @@ def test_camera_status_is_read_only_and_does_not_start_camera(monkeypatch):
 
     camera = FakeCamera()
     monkeypatch.setattr(server, "CAMERA", camera)
+    monkeypatch.setattr(server, "system_info", lambda: pytest.fail("camera status should not load full host metrics"))
     status, _, body = _request("/api/camera/status")
     assert status == 200
     assert json.loads(body)["running"] is False
@@ -189,6 +190,7 @@ def test_camera_consent_is_bound_to_session_start_and_stop(monkeypatch):
 
     class FakeCamera:
         owners = set()
+        device = "/dev/video0"
 
         def acquire(self, owner):
             self.owners.add(owner)
@@ -206,11 +208,23 @@ def test_camera_consent_is_bound_to_session_start_and_stop(monkeypatch):
         def health_check(self):
             return {"running": bool(self.owners), "device_available": True}
 
+        def latest_frame(self):
+            return None
+
+        def wait_for_frame(self, _version, timeout=5.0):
+            return CameraFrame(1, b"\xff\xd8frame\xff\xd9", monotonic())
+
     camera = FakeCamera()
     monkeypatch.setattr(server, "CAMERA", camera)
+    monkeypatch.setattr(server, "system_info", lambda: {
+        "hostname": "test-host",
+        "cpu": {"model": "test hardware"},
+    })
+    monkeypatch.setattr(server.POLICY, "audit_event", lambda *args: None)
+    monkeypatch.setattr(server.NOTIFIER, "broadcast_event", lambda *args: None)
 
     status, _, _ = _request("/api/camera/start", method="POST", payload={"session_id": "browser-one"})
-    assert status == 202
+    assert status == 200
     assert camera.has_owner(camera_session_owner("browser-one"))
 
     status, _, body = _request("/api/camera/stop", method="POST", payload={"session_id": "browser-two"})
@@ -417,12 +431,13 @@ def test_visual_orchestrator_uses_live_frame_after_approval(tmp_path, monkeypatc
     import shutil
 
     from agent import orchestrator
-    from agent.hardware.camera import CAMERA
+    from agent.hardware.camera import CAMERA, camera_session_owner
     from agent.notifier import NOTIFIER
     from agent.llm_client import NormalizedBlock, NormalizedResponse
 
     jpeg = b"\xff\xd8frame\xff\xd9"
     events = []
+    released_owners = []
     monkeypatch.setenv("HSX_ENABLE_VISION_CAPTURE", "1")
     monkeypatch.setattr(shutil, "which", lambda _name: "ffmpeg")
     monkeypatch.setattr(os.path, "exists", lambda _path: True)
@@ -431,7 +446,7 @@ def test_visual_orchestrator_uses_live_frame_after_approval(tmp_path, monkeypatc
     monkeypatch.setattr(CAMERA, "latest_frame", lambda: None)
     monkeypatch.setattr(CAMERA, "acquire", lambda _owner: True)
     monkeypatch.setattr(CAMERA, "wait_for_frame", lambda *_args, **_kwargs: CameraFrame(1, jpeg, monotonic()))
-    monkeypatch.setattr(CAMERA, "release", lambda _owner: None)
+    monkeypatch.setattr(CAMERA, "release", lambda owner: released_owners.append(owner))
     monkeypatch.setattr(NOTIFIER, "broadcast_event", lambda *args: None)
     monkeypatch.setattr(orchestrator.POLICY, "decide", lambda *args: {"allowed": True})
     monkeypatch.setattr(orchestrator.POLICY, "audit_event", lambda *args: None)
@@ -470,6 +485,35 @@ def test_visual_orchestrator_uses_live_frame_after_approval(tmp_path, monkeypatc
         for block in message.get("content", [])
         if isinstance(block, dict)
     )
+
+    events.clear()
+    answer, result_history = orchestrator.run_agent(
+        "Turn on the camera",
+        [],
+        [],
+        {},
+        session_id="camera-only-session",
+        on_activity_event=lambda event_type, payload: events.append((event_type, payload)),
+    )
+    assert "connecting" in answer.lower()
+    assert any(event == "camera_state" and payload["active"] for event, payload in events)
+    assert not any(event == "camera_snapshot" for event, _payload in events)
+    assert all(
+        block.get("type") != "image"
+        for message in result_history
+        for block in message.get("content", [])
+        if isinstance(block, dict)
+    )
+
+    answer, _ = orchestrator.run_agent(
+        "Turn off the camera",
+        [],
+        [],
+        {},
+        session_id="camera-only-session",
+    )
+    assert "camera access is off" in answer.lower()
+    assert released_owners == [camera_session_owner("camera-only-session")]
 
 
 def test_camera_start_pauses_for_approval_without_opening_camera(monkeypatch):

@@ -108,6 +108,53 @@ def test_play_uses_only_validated_commons_media_and_creates_scoped_stream_ticket
     assert catalog.resolve_stream(action["stream_id"], "wrong-secret") is None
 
 
+def test_play_routes_host_tracks_to_host_audio_tool(tmp_path, monkeypatch):
+    class FakeYoutubeDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def extract_info(self, _url, download=False):
+            assert download is False
+            return {"duration": 120, "ext": "ogg", "id": "commons-101"}
+
+        def prepare_filename(self, info):
+            return self.options["outtmpl"].replace("%(ext)s", info["ext"])
+
+        def download(self, _urls):
+            Path(self.prepare_filename({"ext": "ogg"})).write_bytes(b"audio")
+
+    responses = iter([{"query": {"pages": [
+        _page(101, "File:Free.ogg", mime="audio/ogg", license_name="CC BY-SA 4.0"),
+    ]}}])
+    catalog = MusicCatalog(
+        tmp_path / "audio",
+        api_request=lambda _params: next(responses),
+        youtube_dl_factory=FakeYoutubeDL,
+    )
+    playback_calls = []
+    monkeypatch.setattr(
+        "skills.audio_play.skill.run",
+        lambda source, target_device: playback_calls.append((source, target_device)) or {
+            "success": True,
+            "target_device": target_device,
+        },
+    )
+
+    result = catalog.play(101, target_device="local_host")
+
+    assert result["success"] is True
+    assert result["host_playback"]["target_device"] == "local_host"
+    assert playback_calls[0][0].endswith(".ogg")
+    assert playback_calls[0][1] == "local_host"
+    assert "browser_action" not in result
+
+
 def test_play_rejects_nonfree_media_and_overlong_audio(tmp_path):
     copyrighted = MusicCatalog(
         tmp_path / "copyrighted",

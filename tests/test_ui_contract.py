@@ -321,7 +321,10 @@ def test_camera_is_lazy_and_run_state_resets_after_failure_or_stop():
     assert ".camera-badge-standby" in css
     assert "let cameraEnabled = false;" in script
     assert "function toggleCamera()" in script
-    assert "if (!cameraEnabled) return;" in script
+    camera_refresh = script[script.index("async function refreshCamera()"):script.index("function handleCameraStateEvent")]
+    assert "apiContract.endpoints.camera_status" in camera_refresh
+    assert "apiContract.endpoints.camera_start" not in camera_refresh
+    assert "window.setInterval(refreshCamera, 5000)" in script
     assert "elements.cameraView.addEventListener('click', toggleCamera)" in script
     assert "elements.cameraView.addEventListener('keydown'" in script
     assert "elements.send.disabled = isBusy;" not in script

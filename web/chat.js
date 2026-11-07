@@ -1358,7 +1358,14 @@ function renderActivityEvent(trace, event, data) {
         });
       }
     } else if (data.music_player) {
-      appendMusicPlayerCard(details, data.music_player);
+      const playerCard = document.createElement('div');
+      playerCard.className = 'activity-music-player-host';
+      playerCard.dataset.toolCallId = String(data.tool_call_id || '');
+      appendMusicPlayerCard(playerCard, data.music_player);
+      steps.querySelector(
+        `.activity-music-player-host[data-tool-call-id="${CSS.escape(String(data.tool_call_id || ''))}"]`,
+      )?.remove();
+      steps.append(playerCard);
     } else if (data.tool === 'capabilities' && data.capabilities) {
       appendCapabilityCards(details, data.capabilities.groups);
     } else {
@@ -1412,7 +1419,7 @@ function appendMusicPlayerCard(container, player) {
   let activeIndex = 0;
   let settingTrack = false;
 
-  const selectTrack = async (index, shouldPlay = false) => {
+  const selectTrack = async (index) => {
     if (settingTrack || !tracks[index]?.stream_id) return;
     settingTrack = true;
     queueButtons.forEach((button, buttonIndex) => {
@@ -1436,8 +1443,7 @@ function appendMusicPlayerCard(container, player) {
       }
       audio.src = `/api/music/stream/${encodeURIComponent(track.stream_id)}`;
       audio.load();
-      status.textContent = 'Tap Play to start. Playback never starts automatically.';
-      if (shouldPlay) await audio.play();
+      status.textContent = 'Ready. Press Play to start audio in this browser.';
     } catch (error) {
       status.textContent = error.message || 'Playback could not be prepared.';
     } finally {
@@ -1450,17 +1456,26 @@ function appendMusicPlayerCard(container, player) {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = track.title || `Track ${index + 1}`;
-    button.addEventListener('click', () => void selectTrack(index, true));
+    button.addEventListener('click', () => void selectTrack(index));
     queueButtons.push(button);
     item.appendChild(button);
     queue.appendChild(item);
   });
   audio.addEventListener('ended', () => {
     if (activeIndex + 1 < tracks.length) {
-      void selectTrack(activeIndex + 1, true);
+      void selectTrack(activeIndex + 1);
     } else {
       status.textContent = 'Queue finished.';
     }
+  });
+  audio.addEventListener('play', () => {
+    status.textContent = 'Playing in this browser.';
+  });
+  audio.addEventListener('pause', () => {
+    if (!audio.ended) status.textContent = 'Paused.';
+  });
+  audio.addEventListener('waiting', () => {
+    status.textContent = 'Buffering audio…';
   });
   audio.addEventListener('error', () => {
     status.textContent = 'The selected audio could not be played in this browser.';
@@ -1842,6 +1857,103 @@ async function answerPendingQuestion(message, signal) {
   await pollQuestionJob(jobId, activity, signal);
 }
 
+function submitQuestionChoice(answer) {
+  if (!pendingQuestion || !answer.trim() || submitting) return;
+  elements.prompt.value = answer;
+  elements.prompt.dispatchEvent(new Event('input', { bubbles: true }));
+  elements.composer.requestSubmit();
+}
+
+function appendInteractiveQuestion(job) {
+  const jobId = String(job.id || '');
+  if (!jobId) return;
+  let article = [...elements.stream.querySelectorAll('.message-card')]
+    .find((item) => item.dataset.jobId === jobId);
+  if (!article) {
+    article = appendMessage(
+      'assistant',
+      job.question || 'I need a little more information.',
+      jobId,
+      { noFeedback: true },
+    );
+  }
+  const questionCount = Number(job.question_count) || 1;
+  if (
+    article.dataset.questionCount === String(questionCount)
+    && article.querySelector('.interactive-question')
+  ) return;
+  article.dataset.questionCount = String(questionCount);
+  const content = article.querySelector('.message-content');
+  content.replaceChildren();
+  const feedback = article.querySelector('.message-feedback');
+  if (feedback) feedback.hidden = true;
+
+  const card = document.createElement('section');
+  card.className = 'interactive-question';
+  card.setAttribute('aria-label', 'Question for you');
+  const progress = document.createElement('p');
+  progress.className = 'interactive-question-progress';
+  progress.textContent = `Question ${questionCount} of 3`;
+  const question = document.createElement('p');
+  question.className = 'interactive-question-prompt';
+  question.textContent = job.question || 'I need a little more information.';
+  card.append(progress, question);
+
+  const options = Array.isArray(job.options) ? job.options : [];
+  if (options.length) {
+    const optionList = document.createElement('div');
+    optionList.className = 'interactive-question-options';
+    options.forEach((value, index) => {
+      const label = typeof value === 'string' ? value : String(value?.label || '');
+      if (!label) return;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'interactive-question-option';
+      button.textContent = label;
+      button.setAttribute('aria-label', `Choose option ${index + 1}: ${label}`);
+      button.addEventListener('click', () => submitQuestionChoice(label));
+      optionList.append(button);
+    });
+    card.append(optionList);
+  }
+
+  if (job.allow_free_text !== false) {
+    const otherRow = document.createElement('div');
+    otherRow.className = 'interactive-question-other';
+    const otherButton = document.createElement('button');
+    otherButton.type = 'button';
+    otherButton.className = 'interactive-question-other-toggle';
+    otherButton.textContent = 'Other';
+    const answerBox = document.createElement('div');
+    answerBox.className = 'interactive-question-answer';
+    answerBox.hidden = true;
+    const answerInput = document.createElement('input');
+    answerInput.type = 'text';
+    answerInput.maxLength = 4000;
+    answerInput.placeholder = 'Type your own answer';
+    answerInput.setAttribute('aria-label', 'Type your own answer');
+    const send = document.createElement('button');
+    send.type = 'button';
+    send.textContent = 'Send';
+    send.addEventListener('click', () => submitQuestionChoice(answerInput.value.trim()));
+    answerInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.isComposing) {
+        event.preventDefault();
+        submitQuestionChoice(answerInput.value.trim());
+      }
+    });
+    otherButton.addEventListener('click', () => {
+      answerBox.hidden = false;
+      answerInput.focus();
+    });
+    answerBox.append(answerInput, send);
+    otherRow.append(otherButton, answerBox);
+    card.append(otherRow);
+  }
+  content.append(card);
+  scrollToLatest();
+}
+
 function appendApprovalCard(job) {
   elements.welcome.hidden = true;
   setConversationEmpty(false);
@@ -1929,7 +2041,7 @@ async function pollQuestionJob(jobId, activity, signal) {
     if (job.state === 'waiting_for_user') {
       activity.remove();
       pendingQuestion = job;
-      appendMessage('assistant', job.question || 'I need a little more information.', job.id);
+      appendInteractiveQuestion(job);
       return;
     }
     if (['waiting_for_approval', 'permission_request'].includes(job.state)) {
@@ -1996,12 +2108,52 @@ async function submitPrompt() {
   activeChatController = controller;
   let assistantCard = null;
   let assistantContent = '';
+  let visibleAssistantContent = '';
+  let assistantStreamEnded = false;
+  let assistantRenderTimer = null;
   let currentJob = null;
   let cameraSnapshotPending = false;
   let activity;
   const clientMessageId = makeClientMessageId();
   let lastEventId = 0;
   let retries = 0;
+  const scheduleAssistantReveal = () => {
+    if (assistantRenderTimer !== null || !assistantCard) return;
+    const revealNext = () => {
+      assistantRenderTimer = null;
+      const remaining = assistantContent.slice(visibleAssistantContent.length);
+      if (!remaining) return;
+      let nextLength = 0;
+      const boundary = remaining.search(/\s/);
+      if (boundary === 0) {
+        nextLength = remaining.match(/^\s+/)?.[0].length || 1;
+      } else if (boundary > 0) {
+        nextLength = boundary + 1;
+      } else if (assistantStreamEnded) {
+        nextLength = remaining.length;
+      }
+      if (nextLength) {
+        visibleAssistantContent += remaining.slice(0, nextLength);
+        const content = assistantCard.querySelector('.message-content');
+        content.textContent = visibleAssistantContent;
+        assistantCard.dataset.response = assistantContent;
+        scrollToLatest();
+      }
+      if (visibleAssistantContent.length < assistantContent.length) {
+        assistantRenderTimer = window.setTimeout(revealNext, nextLength ? 34 : 50);
+      } else if (assistantStreamEnded) {
+        const content = assistantCard.querySelector('.message-content');
+        renderMarkdown(assistantContent, content);
+        assistantCard.dataset.response = assistantContent;
+        queueConversationSave();
+      }
+    };
+    assistantRenderTimer = window.setTimeout(revealNext, 0);
+  };
+  const finishAssistantStream = () => {
+    assistantStreamEnded = true;
+    scheduleAssistantReveal();
+  };
   try {
     let streamInitialized = false;
     const handleStreamEvent = ({ event, data, id }) => {
@@ -2024,35 +2176,42 @@ async function submitPrompt() {
       if (event === 'text_delta') {
         assistantContent += data.text || '';
         if (!assistantCard) {
-          assistantCard = appendMessage('assistant', assistantContent, '', { noFeedback: true });
+          assistantCard = appendMessage('assistant', '', '', { noFeedback: true });
           if (!activity?.querySelector('.activity-step')) activity?.remove();
-        } else {
-          assistantCard.dataset.response = assistantContent;
-          renderMarkdown(assistantContent, assistantCard.querySelector('.message-content'));
-          scrollToLatest();
         }
+        assistantCard.dataset.response = assistantContent;
+        scheduleAssistantReveal();
       } else if (event === 'job' && data.id) {
         currentJob = data;
         activeRunId = data.id;
         activity.dataset.jobId = data.id;
         if (data.state === 'waiting_for_user') {
+          finishAssistantStream();
           pendingQuestion = data;
           if (!activity?.querySelector('.activity-step')) activity?.remove();
-          appendMessage('assistant', data.question || 'I need a little more information.', data.id);
+          appendInteractiveQuestion(data);
         }
         if (['waiting_for_approval', 'permission_request'].includes(data.state)) {
+          finishAssistantStream();
           pendingQuestion = data;
           if (!activity?.querySelector('.activity-step')) activity?.remove();
           appendApprovalCard(data);
         }
         if (['done', 'failed', 'cancelled'].includes(data.state)) {
+          finishAssistantStream();
           if (!activity?.querySelector('.activity-step')) activity?.remove();
           const text = assistantContent || data.result || data.error || 'The task was cancelled.';
-          assistantCard?.remove();
-          assistantCard = appendMessage('assistant', text, data.id, { prompt: requestMessage });
+          if (assistantCard) {
+            assistantCard.dataset.jobId = data.id;
+            assistantCard.dataset.prompt = requestMessage;
+            assistantCard.dataset.response = text;
+          } else {
+            assistantCard = appendMessage('assistant', text, data.id, { prompt: requestMessage });
+          }
           if (cameraSnapshotPending) void appendInlineCameraSnapshot(assistantCard);
         }
       } else if (event === 'error') {
+        finishAssistantStream();
         elements.providerNotice.hidden = true;
         setBusy(false);
         const error = new Error(data.message || 'The task failed.');
@@ -2063,6 +2222,7 @@ async function submitPrompt() {
       } else if (event === 'camera_snapshot') {
         cameraSnapshotPending = data.source === apiContract.endpoints.camera_snapshot;
       } else if (event === 'done' && activeChatController === controller) {
+        finishAssistantStream();
         elements.providerNotice.hidden = true;
         setBusy(false);
         elements.prompt.focus();
@@ -2180,12 +2340,12 @@ function setCameraStatus(connected, message) {
   document.getElementById('camera-clip-time').hidden = !connected || !cameraHasFrame;
 }
 
-function stopCameraAndStandby() {
+function stopCameraAndStandby({ notifyServer = true } = {}) {
   cameraEnabled = false;
   stopCameraVision(true);
   window.clearTimeout(cameraAutoOffTimer);
   cameraAutoOffTimer = null;
-  if (apiContract) {
+  if (notifyServer && apiContract) {
     void apiFetch(apiContract.endpoints.camera_stop, {
       method: 'POST',
       keepalive: true,
@@ -2208,44 +2368,46 @@ function stopCameraAndStandby() {
 }
 
 async function refreshCamera() {
-  if (!cameraEnabled) return;
+  if (document.hidden) return;
   try {
-    const startResponse = await apiFetch(apiContract.endpoints.camera_start, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId }),
-    });
-    if (!startResponse.ok) throw new Error('Camera could not be started.');
     const response = await apiFetch(apiContract.endpoints.camera_status);
     const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || `Camera status failed (HTTP ${response.status}).`);
+    }
     const host = data.host || {};
     const hostLabel = [host.hostname, host.hardware].filter(Boolean).join(' · ');
     document.getElementById('camera-heading').title =
       hostLabel || 'Host hardware information unavailable';
-    const connected = response.ok && data.running === true;
+    const connected = data.running === true;
     if (connected) {
+      if (!cameraEnabled) {
+        cameraEnabled = true;
+      }
       cameraAvailable = true;
       setCameraStatus(true, cameraHasFrame ? 'Live from the Hsx host' : 'Connecting to the Hsx host…');
       startCameraStream();
     } else {
-      cameraAvailable = false;
-      stopCameraStream();
-      cameraHasFrame = false;
-      elements.camera.removeAttribute('src');
-      if (cameraObjectUrl) {
-        URL.revokeObjectURL(cameraObjectUrl);
-        cameraObjectUrl = '';
+      if (!cameraEnabled) {
+        cameraAvailable = false;
+        setCameraStatus(false, 'Click to turn on camera');
+        return;
       }
-      document.getElementById('camera-clip-time').textContent = 'Waiting for video';
-      setCameraLatency(null);
-      setCameraStatus(false, 'Camera feed offline');
-      scheduleCameraReconnect();
+      stopCameraAndStandby({ notifyServer: false });
+      cameraAvailable = false;
+      const reason = data.last_error || data.snapshot_reason || 'The host camera is not running.';
+      setCameraStatus(false, `Camera feed unavailable: ${reason}`);
     }
-  } catch {
+  } catch (error) {
     document.getElementById('camera-heading').title = 'Host hardware information unavailable';
-    if (cameraHasFrame) setCameraReconnecting('Camera feed offline; retrying…');
-    else setCameraStatus(false, 'Camera feed offline');
-    scheduleCameraReconnect();
+    const message = error.message || 'The camera status could not be read.';
+    if (!cameraEnabled) {
+      setCameraStatus(false, 'Click to turn on camera');
+      return;
+    }
+    if (cameraHasFrame) setCameraReconnecting(`Camera feed interrupted: ${message}`);
+    else setCameraStatus(false, `Camera feed unavailable: ${message}`);
+    if (!/\(HTTP 4\d\d\)/.test(message)) scheduleCameraReconnect(`Camera feed unavailable: ${message}`);
   }
 }
 
@@ -2257,27 +2419,42 @@ function handleCameraStateEvent(data) {
       openMobilePanel(elements.cameraSidebar);
       setCameraStatus(false, 'Live feed active…');
       refreshCamera();
+    }
+    if (data.session_id === sessionId) {
       window.clearTimeout(cameraAutoOffTimer);
       cameraAutoOffTimer = window.setTimeout(stopCameraAndStandby, 5 * 60 * 1000);
     }
   } else {
     if (cameraEnabled) {
-      stopCameraAndStandby();
+      stopCameraAndStandby({ notifyServer: false });
     }
   }
 }
 
-function toggleCamera() {
+async function toggleCamera() {
   if (cameraEnabled) {
     stopCameraAndStandby();
     return;
   }
-  cameraEnabled = true;
-  startCameraVision();
-  window.clearTimeout(cameraAutoOffTimer);
-  cameraAutoOffTimer = window.setTimeout(stopCameraAndStandby, 5 * 60 * 1000);
-  setCameraStatus(false, 'Connecting to the host camera…');
-  refreshCamera();
+  setCameraStatus(false, 'Requesting the host camera…');
+  try {
+    const response = await apiFetch(apiContract.endpoints.camera_start, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+    const data = await response.json();
+    if (!response.ok || data.started !== true) {
+      throw new Error(data.error || `Camera start failed (HTTP ${response.status}).`);
+    }
+    cameraEnabled = true;
+    startCameraVision();
+    window.clearTimeout(cameraAutoOffTimer);
+    cameraAutoOffTimer = window.setTimeout(stopCameraAndStandby, 5 * 60 * 1000);
+    await refreshCamera();
+  } catch (error) {
+    setCameraStatus(false, `Camera did not start: ${error.message || 'Unknown camera error.'}`);
+  }
 }
 
 function findBytes(haystack, needle) {
@@ -2566,9 +2743,10 @@ function stopCameraStream() {
   }
 }
 
-function scheduleCameraReconnect() {
+function scheduleCameraReconnect(message = '') {
   if (!cameraEnabled || document.hidden || !navigator.onLine || cameraReconnectTimer) return;
-  if (cameraHasFrame) setCameraReconnecting('Video paused; reconnecting to the latest frame…');
+  if (message) setCameraStatus(false, message);
+  else if (cameraHasFrame) setCameraReconnecting('Video paused; reconnecting to the latest frame…');
   else setCameraStatus(false, 'Camera feed offline');
   cameraReconnectTimer = window.setTimeout(() => {
     cameraReconnectTimer = null;
@@ -2591,8 +2769,12 @@ async function startCameraStream() {
     });
     if (!response.ok || !response.body) {
       cameraAvailable = false;
-      setCameraStatus(false, 'Camera feed offline');
-      scheduleCameraReconnect();
+      const error = await response.json().catch(() => ({}));
+      const message = error.error || `Camera stream failed (HTTP ${response.status}).`;
+      setCameraStatus(false, `Camera feed unavailable: ${message}`);
+      if (response.status >= 500 || response.status === 0) {
+        scheduleCameraReconnect(`Camera feed unavailable: ${message}`);
+      }
       return;
     }
     const serverTime = Number(response.headers.get('X-Hsx-Server-Time'));
@@ -2615,8 +2797,12 @@ async function startCameraStream() {
         throw new Error('Camera stream is out of sync.');
       }
     }
-  } catch {
-    if (!controller.signal.aborted) scheduleCameraReconnect();
+  } catch (error) {
+    if (!controller.signal.aborted) {
+      const message = `Camera feed interrupted: ${error.message || 'stream ended unexpectedly'}`;
+      setCameraStatus(false, message);
+      scheduleCameraReconnect(message);
+    }
   } finally {
     if (cameraStreamController === controller) cameraStreamController = null;
     if (!controller.signal.aborted && cameraAvailable) scheduleCameraReconnect();
@@ -2702,8 +2888,6 @@ async function refreshConnections() {
   }
   const indicator = document.getElementById('connection-indicator');
   indicator.dataset.state = document.getElementById('api-dot').dataset.state || 'warning';
-  if (cameraEnabled) await refreshCamera();
-  else setCameraStatus(false, 'Click to turn on camera');
 }
 
 function closeMobilePanels() {
@@ -2974,7 +3158,7 @@ async function openNotification(notification) {
       }
     } else if (job.state === 'waiting_for_user') {
       pendingQuestion = job;
-      appendMessage('assistant', job.question || 'I need a little more information.', job.id);
+      appendInteractiveQuestion(job);
     } else if (job.state === 'done' || job.state === 'failed') {
       appendMessage('assistant', job.result || job.error || notification.title, job.id);
     }
@@ -3587,7 +3771,7 @@ async function initialize() {
       appendApprovalCard(pendingQuestion);
     } else if (pendingData.job?.state === 'waiting_for_user') {
       pendingQuestion = pendingData.job;
-      appendMessage('assistant', pendingQuestion.question || 'I need a little more information.', pendingQuestion.id);
+      appendInteractiveQuestion(pendingQuestion);
     }
   }
   elements.composer.addEventListener('submit', (event) => {
@@ -3655,6 +3839,7 @@ async function initialize() {
   window.addEventListener('pageshow', () => {
     if (!document.hidden) {
       refreshConnections();
+      refreshCamera();
       startNotificationStream();
     }
   });
@@ -3667,6 +3852,7 @@ async function initialize() {
     } else {
       cameraRetryDelay = 500;
       refreshConnections();
+      refreshCamera();
       startNotificationStream();
     }
   });
@@ -3679,11 +3865,13 @@ async function initialize() {
     cameraVisionObserver.observe(elements.cameraView);
   }
   await refreshConnections();
+  await refreshCamera();
   refreshFeedbackSettings();
   refreshArtifacts();
   refreshAgentActivity();
   startNotificationStream();
   window.setInterval(refreshConnections, 15000);
+  window.setInterval(refreshCamera, 5000);
   window.setInterval(refreshAgentActivity, 5000);
   window.setInterval(updateActivityElapsed, 1000);
   window.setInterval(updateMessageTimes, 60000);

@@ -8,4 +8,4 @@ def run(
 ) -> dict:
     if target_device not in {"client_browser", "local_host"}:
         raise ValueError("target_device must be local_host or client_browser.")
-    return MUSIC_CATALOG.play(file_id, queue)
+    return MUSIC_CATALOG.play(file_id, queue, target_device=target_device)

@@ -335,9 +335,19 @@ class MusicCatalog:
             "duration": duration,
         }
 
-    def play(self, file_id: int, queue: list[int] | None = None) -> dict:
+    def play(
+        self,
+        file_id: int,
+        queue: list[int] | None = None,
+        *,
+        target_device: str = "client_browser",
+    ) -> dict:
+        if target_device not in {"client_browser", "local_host"}:
+            raise ValueError("target_device must be local_host or client_browser.")
         if queue is not None and (not isinstance(queue, list) or len(queue) > 9):
             raise ValueError("A music queue can contain at most 10 tracks.")
+        if target_device == "local_host" and queue:
+            raise ValueError("Host playback currently supports one track at a time.")
         file_ids = [file_id, *(queue or [])]
         if any(isinstance(item_id, bool) or not isinstance(item_id, int) or item_id < 1 for item_id in file_ids):
             raise ValueError("Choose music files from the search results.")
@@ -348,17 +358,37 @@ class MusicCatalog:
         if total_size > self.max_cache_bytes:
             raise ValueError("This music queue exceeds the 500 MB audio cache limit.")
         self._clean_cache(total_size)
-        tracks = []
+        downloaded = []
         for item in items:
             path, duration = self._download_media(item)
-            tracks.append(self._player_track(item, self._create_stream_ticket(path), duration))
+            downloaded.append((item, path, duration))
+        if target_device == "local_host":
+            from skills.audio_play.skill import run as play_audio
+
+            playback = play_audio(str(downloaded[0][1]), target_device="local_host")
+            return {
+                "success": True,
+                "host_playback": playback,
+                "message": (
+                    "Started the selected freely licensed track on the Hsx host output route. "
+                    "Speaker output cannot be verified remotely."
+                ),
+            }
+        tracks = [
+            self._player_track(item, self._create_stream_ticket(path), duration)
+            for item, path, duration in downloaded
+        ]
         first = tracks[0]
 
         return {
             "success": True,
             "browser_action": {**first, "queue": tracks},
-            "message": f"Prepared {len(tracks)} freely licensed track{'s' if len(tracks) != 1 else ''} for browser playback.",
+            "message": (
+                f"Prepared {len(tracks)} freely licensed track{'s' if len(tracks) != 1 else ''} "
+                "in the chat audio player. Playback has not started; the user must press Play."
+            ),
         }
+
 
 
 MUSIC_CATALOG = MusicCatalog()

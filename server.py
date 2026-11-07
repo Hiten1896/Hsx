@@ -583,23 +583,25 @@ def _is_user_upload_path(raw_path: str) -> bool:
     )
 
 
-def _camera_status_payload() -> dict:
+def _camera_status_payload(include_host: bool = True) -> dict:
     status = CAMERA.health_check()
     from agent.tools.vision_capture import disabled_reason, enabled
 
     snapshot_available = CAMERA.is_started() or (
         enabled() and bool(status.get("device_available")) and shutil.which("ffmpeg") is not None
     )
-    host = system_info()
-    return {
+    payload = {
         **status,
         "snapshot_available": snapshot_available,
         "snapshot_reason": "" if snapshot_available else disabled_reason(),
-        "host": {
+    }
+    if include_host:
+        host = system_info()
+        payload["host"] = {
             "hostname": host["hostname"],
             "hardware": host["cpu"]["model"],
-        },
-    }
+        }
+    return payload
 
 
 def _session_artifacts(session_id: str) -> list[dict]:
@@ -1392,7 +1394,7 @@ class HsxHandler(BaseHTTPRequestHandler):
             telemetry["provider_stats"] = PROVIDER_BANDIT.snapshot()["providers"]
             self._json(telemetry)
         elif path == "/api/camera/status":
-            self._json(_camera_status_payload())
+            self._json(_camera_status_payload(include_host=False))
         elif path == "/api/camera/stream":
             self._stream_camera()
             return
@@ -1658,8 +1660,30 @@ class HsxHandler(BaseHTTPRequestHandler):
             except (json.JSONDecodeError, ValueError):
                 self._json({"error": "A valid session_id is required to consent to camera use."}, 400)
                 return
-            started = CAMERA.acquire(owner)
-            self._json({"started": started, **_camera_status_payload()}, 202)
+            session_id = str(payload["session_id"])
+            had_owner = CAMERA.has_owner(owner)
+            previous_frame = CAMERA.latest_frame()
+            CAMERA.acquire(owner)
+            frame = CAMERA.wait_for_frame(
+                previous_frame.version if previous_frame else -1,
+                timeout=5.0,
+            )
+            if frame is None:
+                status = CAMERA.health_check()
+                if not had_owner:
+                    CAMERA.release(owner)
+                self._json({
+                    "started": False,
+                    "error": status.get("last_error") or "No fresh camera frame arrived within 5 seconds.",
+                    **_camera_status_payload(),
+                }, 503)
+                return
+            POLICY.audit_event("camera_access", session_id, "", "started_from_ui")
+            NOTIFIER.broadcast_event(
+                "camera_state",
+                {"active": True, "device": CAMERA.device, "session_id": session_id},
+            )
+            self._json({"started": True, **_camera_status_payload()})
         elif path == "/api/camera/stop":
             try:
                 payload = self._body()
@@ -1668,7 +1692,11 @@ class HsxHandler(BaseHTTPRequestHandler):
                 self._json({"error": "A valid session_id is required to stop this camera session."}, 400)
                 return
             CAMERA.release(owner)
-            self._json({"stopped": True, **_camera_status_payload()})
+            active = CAMERA.is_started()
+            session_id = str(payload["session_id"])
+            POLICY.audit_event("camera_off", session_id, "", "stopped_from_ui")
+            NOTIFIER.broadcast_event("camera_state", {"active": active})
+            self._json({"stopped": True, "active": active, **_camera_status_payload()})
         elif path == "/api/conversations":
             payload = self._body()
             try:

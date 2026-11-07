@@ -293,17 +293,19 @@ def run_agent(
         if CAMERA_STOP_PROMPT.search(user_input):
             from agent.hardware.camera import CAMERA, camera_session_owner
             from agent.notifier import NOTIFIER
-            try:
-                owner = camera_session_owner(session_id)
-                CAMERA.release(owner)
-            except Exception:
-                pass
-            CAMERA.release("chat-active")
+            owner = camera_session_owner(session_id)
+            CAMERA.release(owner)
+            active = CAMERA.is_started()
             POLICY.audit_event("camera_off", session_id, job_id, "stopped")
-            NOTIFIER.broadcast_event("camera_state", {"active": False})
+            camera_event = {"active": active}
+            NOTIFIER.broadcast_event("camera_state", camera_event)
             if on_activity_event is not None:
-                on_activity_event("camera_state", {"active": False})
-            answer = "I've turned off the camera."
+                on_activity_event("camera_state", camera_event)
+            answer = (
+                "This chat's camera access is off."
+                if not active
+                else "This chat's camera access is off, but another active camera session is still using the camera."
+            )
             conversation_history.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
             MEMORY.record_message(session_id, "assistant", answer)
             return answer, conversation_history
@@ -352,10 +354,8 @@ def run_agent(
 
             owner = camera_session_owner(session_id)
             had_owner = CAMERA.has_owner(owner)
-            had_chat_owner = CAMERA.has_owner("chat-active")
             previous_frame = CAMERA.latest_frame()
             CAMERA.acquire(owner)
-            CAMERA.acquire("chat-active")
             frame = CAMERA.wait_for_frame(
                 previous_frame.version if previous_frame else -1,
                 timeout=5.0,
@@ -364,8 +364,6 @@ def run_agent(
                 status = CAMERA.health_check()
                 if not had_owner:
                     CAMERA.release(owner)
-                if not had_chat_owner:
-                    CAMERA.release("chat-active")
                 reason = status.get("last_error") or "No fresh frame arrived within 5 seconds."
                 return _finish_vision_notice(
                     f"The camera did not start: {reason}",
@@ -379,15 +377,18 @@ def run_agent(
                 time.sleep(300)
                 if owner and CAMERA.has_owner(owner):
                     CAMERA.release(owner)
-                CAMERA.release("chat-active")
                 if not CAMERA.is_started():
                     POLICY.audit_event("camera_auto_stop", session_id, job_id, "stopped")
-                    NOTIFIER.broadcast_event("camera_state", {"active": False})
+                    NOTIFIER.broadcast_event(
+                        "camera_state",
+                        {"active": False},
+                    )
             threading.Thread(target=_auto_stop_camera, daemon=True).start()
 
-            NOTIFIER.broadcast_event("camera_state", {"active": True, "device": CAMERA.device})
+            camera_event = {"active": True, "device": CAMERA.device, "session_id": session_id}
+            NOTIFIER.broadcast_event("camera_state", camera_event)
             if on_activity_event is not None:
-                on_activity_event("camera_state", {"active": True, "device": CAMERA.device})
+                on_activity_event("camera_state", camera_event)
 
             is_describe = bool(_vision_request(user_input) or re.search(r"\b(?:what do you see|describe|show (?:me )?(?:the )?room)\b", user_input, re.I))
             if is_describe:
@@ -413,9 +414,15 @@ def run_agent(
                         disable_panel=True,
                     )
                     description = _response_text(vision_resp)
-                    answer = f"{description}\n\nThe live camera feed is active on your screen."
+                    answer = (
+                        f"{description}\n\nA fresh camera frame was captured. "
+                        "The browser camera card is connecting to the live feed."
+                    )
             else:
-                answer = "I've started the camera. The live feed is now visible in the camera card on all open tabs."
+                answer = (
+                    "The camera service is capturing fresh frames. "
+                    "The browser camera card is connecting; it will show Live when video arrives."
+                )
 
             conversation_history.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
             MEMORY.record_message(session_id, "assistant", answer)

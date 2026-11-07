@@ -4,7 +4,6 @@ import threading
 import time
 import wave
 from http.server import ThreadingHTTPServer
-from pathlib import Path
 
 import pytest
 from playwright.sync_api import sync_playwright
@@ -17,6 +16,7 @@ from agent.notifier import Notifier
 BROWSER_MUSIC_STREAM_IDS: list[str] = []
 BROWSER_CHAT_MESSAGES: list[str] = []
 BROWSER_RESUME_REQUESTS: list[tuple[str, str]] = []
+BROWSER_ASK_ANSWERS: list[tuple[str, str]] = []
 
 
 class BrowserFakeHandler(server.HsxHandler):
@@ -37,6 +37,9 @@ class BrowserFakeHandler(server.HsxHandler):
             self.send_header("Content-Length", str(len(image)))
             self.end_headers()
             self.wfile.write(image)
+            return
+        if path == "/api/ask-jobs/question-card-job":
+            self._json({"job": {"id": "question-card-job", "state": "done", "result": "Answer received."}})
             return
         if path == "/api/camera/snapshot":
             image = base64.b64decode(
@@ -76,6 +79,11 @@ class BrowserFakeHandler(server.HsxHandler):
 
     def do_POST(self):
         if not self._api_access_allowed():
+            return
+        if self._request_path() == "/api/ask-jobs/question-card-job/answer":
+            payload = self._body()
+            BROWSER_ASK_ANSWERS.append(("question-card-job", str(payload.get("answer", ""))))
+            self._json({"job": {"id": "question-card-job", "state": "running"}}, 202)
             return
         if self._request_path() == "/api/feedback":
             self._json({"success": True, "saved": True}, 201)
@@ -251,6 +259,40 @@ class BrowserFakeHandler(server.HsxHandler):
                 }),
                 ("done", {}),
             ]
+        elif payload.get("message") == "question card":
+            events = [
+                ("message_start", {"run_id": "question-card-run"}),
+                ("tool_start", {
+                    "tool_call_id": "ask-user-call", "tool": "ask_user", "icon": "question",
+                    "present": "Asking", "past": "Asked", "target": "question", "status": "running",
+                }),
+                ("tool_end", {
+                    "tool_call_id": "ask-user-call", "tool": "ask_user", "icon": "question",
+                    "present": "Asking", "past": "Asked", "target": "question", "status": "completed",
+                    "duration_ms": 5, "output": "Waiting for your answer.", "details": {"arguments": {}},
+                }),
+                ("job", {
+                    "id": "question-card-job", "state": "waiting_for_user",
+                    "question": "What style should the presentation use?",
+                    "options": ["Modern", "Classic"], "allow_free_text": True, "question_count": 1,
+                }),
+                ("done", {}),
+            ]
+        elif payload.get("message") == "streaming demo":
+            events = [
+                ("message_start", {"run_id": "streaming-demo-run"}),
+                ("text_delta", {"text": "One two three four five."}),
+            ]
+            for name, data in events:
+                self.wfile.write(f"event: {name}\ndata: {json.dumps(data)}\n\n".encode())
+            self.wfile.flush()
+            time.sleep(0.7)
+            self.wfile.write(
+                b'event: job\ndata: {"id":"streaming-demo-job","state":"done","result":"One two three four five."}\n\n'
+                b'event: done\ndata: {}\n\n'
+            )
+            self.wfile.flush()
+            return
         elif payload.get("message") == "camera inline":
             events = [
                 ("message_start", {"run_id": "camera-inline-run"}),
@@ -574,6 +616,67 @@ def test_browser_resumes_chat_stream_with_same_client_message_id(browser_app, br
     assert BROWSER_RESUME_REQUESTS[1][1] == "2"
 
 
+def test_browser_reveals_single_response_delta_word_by_word(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.locator("#prompt-input").fill("streaming demo")
+    page.locator("#send-button").click()
+    content = page.locator('.message-card[data-role="assistant"] .message-content')
+    page.wait_for_function(
+        """() => {
+          const value = document.querySelector('.message-card[data-role="assistant"] .message-content')?.textContent || '';
+          return value.length > 0 && value.length < 'One two three four five.'.length;
+        }""",
+        timeout=5000,
+    )
+    page.get_by_text("One two three four five.", exact=True).wait_for(timeout=5000)
+    assert content.inner_text() == "One two three four five."
+
+
+def test_browser_renders_ask_user_options_and_custom_answer_field(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    BROWSER_ASK_ANSWERS.clear()
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.locator("#prompt-input").fill("question card")
+    page.locator("#send-button").click()
+
+    card = page.locator(".interactive-question")
+    card.wait_for(timeout=5000)
+    assert card.get_by_text("Question 1 of 3").is_visible()
+    assert card.get_by_role("button", name="Choose option 1: Modern").is_visible()
+    assert card.get_by_role("button", name="Choose option 2: Classic").is_visible()
+    assert card.get_by_placeholder("Type your own answer").is_hidden()
+    card.get_by_role("button", name="Other").click()
+    answer = card.get_by_placeholder("Type your own answer")
+    answer.fill("Minimalist with warm colors")
+    card.get_by_role("button", name="Send").click()
+    deadline = time.monotonic() + 3
+    while not BROWSER_ASK_ANSWERS and time.monotonic() < deadline:
+        page.wait_for_timeout(25)
+    assert BROWSER_ASK_ANSWERS == [("question-card-job", "Minimalist with warm colors")]
+
+
+def test_browser_option_button_submits_selected_answer(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    BROWSER_ASK_ANSWERS.clear()
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.locator("#prompt-input").fill("question card")
+    page.locator("#send-button").click()
+    card = page.locator(".interactive-question")
+    card.wait_for(timeout=5000)
+    card.get_by_role("button", name="Choose option 1: Modern").click()
+    deadline = time.monotonic() + 3
+    while not BROWSER_ASK_ANSWERS and time.monotonic() < deadline:
+        page.wait_for_timeout(25)
+    assert BROWSER_ASK_ANSWERS == [("question-card-job", "Modern")]
+
+
 def test_browser_renders_camera_snapshot_inline_in_the_active_message(browser_app, browser_page):
     base_url, _ = browser_app
     _, page = browser_page
@@ -646,18 +749,18 @@ def test_browser_music_player_is_tap_to_play_and_exposes_queue(browser_app, brow
     page.locator('body[data-ready="true"]').wait_for(timeout=10000)
     page.locator("#prompt-input").fill("music player")
     page.locator("#send-button").click()
-    step = page.locator(".activity-step").last
-    step.locator(".activity-row-toggle").click()
-    player = step.locator(".activity-music-player")
+    player = page.locator(".activity-music-player")
     player.wait_for()
+    assert player.is_visible()
+    assert page.locator(".activity-step .activity-details").is_hidden()
     audio = player.locator("audio")
     assert audio.evaluate("element => element.controls")
     assert audio.evaluate("element => element.paused")
-    assert player.locator(".activity-music-status").inner_text() == "Tap Play to start. Playback never starts automatically."
+    assert player.locator(".activity-music-status").inner_text() == "Ready. Press Play to start audio in this browser."
     assert player.locator(".activity-music-queue li").count() == 2
     player.get_by_role("button", name="Track 2.ogg").click()
     page.wait_for_function(
-        "() => document.querySelector('.activity-music-status')?.textContent === 'Tap Play to start. Playback never starts automatically.'"
+        "() => document.querySelector('.activity-music-status')?.textContent === 'Ready. Press Play to start audio in this browser.'"
     )
     cookie = next(item for item in page.context.cookies() if item["name"] == "hsx_audio")
     assert cookie["httpOnly"]
@@ -908,10 +1011,10 @@ def test_browser_send_and_stop_share_one_composer_slot(browser_app, browser_page
     stop.click()
 
 
-def test_browser_layout_screenshots_at_requested_widths(browser_app, browser_page):
+def test_browser_layout_screenshots_at_requested_widths(browser_app, browser_page, tmp_path):
     base_url, database = browser_app
     browser, page = browser_page
-    screenshots = Path(__file__).resolve().parents[1] / "docs" / "screens"
+    screenshots = tmp_path / "screens"
     screenshots.mkdir(parents=True, exist_ok=True)
     page.goto(f"{base_url}/web/")
     page.locator('body[data-ready="true"]').wait_for(timeout=10000)
@@ -1062,9 +1165,11 @@ def test_sent_attachments_render_as_file_cards_not_query_text(browser_app, brows
             assert restored.locator(".message-attachment-name").inner_text() == "screenshot.png"
 
 
-def test_browser_activity_trace_diff_images_grouping_and_failure(browser_app, browser_page):
+def test_browser_activity_trace_diff_images_grouping_and_failure(browser_app, browser_page, tmp_path):
     base_url, _ = browser_app
     browser, page = browser_page
+    screenshots = tmp_path / "screens"
+    screenshots.mkdir(parents=True, exist_ok=True)
     page.set_default_timeout(5000)
     page.goto(f"{base_url}/web/")
     page.locator('body[data-ready="true"]').wait_for(timeout=10000)
@@ -1113,7 +1218,7 @@ def test_browser_activity_trace_diff_images_grouping_and_failure(browser_app, br
     for width in (360, 768, 1280):
         page.set_viewport_size({"width": width, "height": 900})
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-        page.screenshot(path=str(Path(__file__).resolve().parents[1] / "docs" / "screens" / f"after-{width}-activity-trace.png"))
+        page.screenshot(path=str(screenshots / f"after-{width}-activity-trace.png"))
     second = trace.locator(".activity-step").nth(1)
     second.locator(".activity-row-toggle").click()
     assert "python step_1.py" in second.locator(".activity-command").inner_text()
