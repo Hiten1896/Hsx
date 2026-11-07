@@ -1997,6 +1997,7 @@ async function submitPrompt() {
         elements.providerNotice.hidden = true;
         setBusy(false);
         elements.prompt.focus();
+        checkAndShowBrowserNotification('Your Hsx task is complete.');
       }
     };
     while (true) {
@@ -2660,6 +2661,7 @@ async function refreshNotifications() {
       item.dataset.unread = String(!notification.read);
       item.dataset.notificationId = String(notification.id);
       item.dataset.jobId = String(notification.job_id || '');
+      item.dataset.severity = String(notification.severity || 'info');
       const title = document.createElement('span');
       title.className = 'notification-title';
       title.textContent = String(notification.title || 'Hsx update');
@@ -2670,6 +2672,23 @@ async function refreshNotifications() {
         Number.isNaN(created.getTime()) ? '' : created.toLocaleString()
       }`;
       item.append(title, meta);
+      if (notification.thumbnail) {
+        const thumb = document.createElement('img');
+        thumb.className = 'notification-thumbnail';
+        thumb.src = notification.thumbnail;
+        thumb.alt = 'Motion snapshot';
+        item.append(thumb);
+      }
+      if (notification.link) {
+        const link = document.createElement('a');
+        link.className = 'notification-link';
+        link.href = notification.link;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = 'View details';
+        link.addEventListener('click', (e) => e.stopPropagation());
+        item.append(link);
+      }
       item.addEventListener('click', () => openNotification(notification));
       fragment.append(item);
     }
@@ -2694,12 +2713,74 @@ function showNotificationToast(title) {
 
 function handleLiveNotification(notification) {
   const supportedEvents = new Set([
-    'job_done', 'job_failed', 'needs_input', 'needs_approval', 'health_alert', 'camera_motion',
+    'system_temp', 'disk_full', 'low_memory', 'network', 'download', 'backup', 'service_restart',
+    'camera_motion', 'needs_input', 'needs_approval', 'health_alert',
   ]);
   if (!supportedEvents.has(notification.event)) return;
   showNotificationToast(String(notification.title || 'Hsx update'));
   refreshNotifications();
   refreshAgentActivity();
+}
+
+async function loadNotificationSettings() {
+  try {
+    const response = await apiFetch(apiContract.endpoints.notifications_settings);
+    if (!response.ok) return;
+    const data = await response.json();
+    const settings = data.settings || {};
+    for (const [key, val] of Object.entries(settings)) {
+      const input = document.getElementById(`notif-toggle-${key}`);
+      if (input) input.checked = Boolean(val);
+    }
+    const tempEl = document.getElementById('settings-cpu-temp');
+    if (tempEl) {
+      if (data.temperature !== null && data.temperature !== undefined) {
+        tempEl.textContent = `${data.temperature}°C`;
+      } else {
+        tempEl.textContent = 'Unavailable on this host';
+      }
+    }
+    const motionBadge = document.getElementById('motion-badge');
+    if (motionBadge) {
+      motionBadge.hidden = !data.motion_active && !settings.camera_motion;
+    }
+  } catch {
+    // Non-blocking
+  }
+}
+
+async function saveNotificationSetting(key, enabled) {
+  try {
+    const response = await apiFetch(apiContract.endpoints.notifications_settings, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [key]: enabled }),
+    });
+    if (response.ok) {
+      const data = await response.json();
+      const motionBadge = document.getElementById('motion-badge');
+      if (motionBadge) {
+        motionBadge.hidden = !data.motion_active && !(data.settings && data.settings.camera_motion);
+      }
+    }
+  } catch {
+    // Non-blocking
+  }
+}
+
+function checkAndShowBrowserNotification(message) {
+  if (!document.hidden) return;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const toggle = document.getElementById('notif-toggle-task_browser');
+  if (toggle && !toggle.checked) return;
+  try {
+    new Notification('Hsx', {
+      body: message,
+      icon: '/favicon.svg',
+    });
+  } catch {
+    // Ignore notification error
+  }
 }
 
 function abortNotificationStream() {
@@ -3284,6 +3365,22 @@ async function initialize() {
   document.getElementById('voice-language-setting').addEventListener('change', (event) => {
     safeStorageSet('localStorage', 'hsx-voice-language', event.target.value);
   });
+  document.querySelectorAll('.settings-notification-toggles input[type="checkbox"]').forEach((checkbox) => {
+    checkbox.addEventListener('change', () => {
+      const eventKey = checkbox.dataset.event;
+      if (eventKey) {
+        if (eventKey === 'task_browser' && checkbox.checked && 'Notification' in window && Notification.permission !== 'granted') {
+          Notification.requestPermission();
+        }
+        saveNotificationSetting(eventKey, checkbox.checked);
+      }
+    });
+  });
+  document.getElementById('settings-clear-notifications')?.addEventListener('click', async () => {
+    await apiFetch(apiContract.endpoints.notifications_clear, { method: 'POST' });
+    refreshNotifications();
+  });
+  loadNotificationSettings();
   document.getElementById('test-provider-health').addEventListener('click', testProviderHealth);
   document.getElementById('update-music-engine').addEventListener('click', () => {
     document.getElementById('settings-dialog').close();

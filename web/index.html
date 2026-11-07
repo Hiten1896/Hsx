@@ -167,6 +167,7 @@
           <div id="camera-heading" class="camera-heading" title="Camera status">
             <h2>Live camera</h2>
             <div class="camera-heading-actions">
+              <span id="motion-badge" class="motion-badge" hidden><span class="connection-dot dot-active"></span> Motion watch on</span>
               <span id="camera-badge" class="camera-badge camera-badge-standby"><span class="connection-dot"></span> Standby</span>
               <button id="camera-retry" class="panel-refresh camera-retry" type="button" aria-label="Refresh camera video" title="Refresh camera video">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"></path><path d="M5.6 9a7 7 0 0 1 11.6-2L20 12M4 12l2.8 5a7 7 0 0 0 11.6-2"></path></svg>
@@ -219,6 +220,7 @@
         <div class="settings-content">
           <nav class="settings-tabs" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
             <button role="tab" id="settings-tab-general" aria-controls="settings-panel-general" aria-selected="true" tabindex="0" data-settings-tab="general">General</button>
+            <button role="tab" id="settings-tab-notifications" aria-controls="settings-panel-notifications" aria-selected="false" tabindex="-1" data-settings-tab="notifications">Notifications</button>
             <button role="tab" id="settings-tab-voice" aria-controls="settings-panel-voice" aria-selected="false" tabindex="-1" data-settings-tab="voice">Voice</button>
             <button role="tab" id="settings-tab-models" aria-controls="settings-panel-models" aria-selected="false" tabindex="-1" data-settings-tab="models">Models</button>
             <button role="tab" id="settings-tab-camera" aria-controls="settings-panel-camera" aria-selected="false" tabindex="-1" data-settings-tab="camera">Camera</button>
@@ -234,6 +236,25 @@
               <label class="settings-field" for="language-setting">Language<select id="language-setting"><option value="en">English</option><option value="hi">Hindi</option><option value="es">Español</option></select></label>
               <button id="emergency-stop-button" class="settings-action danger-action" type="button">Emergency stop</button>
               <button id="resume-button" class="settings-action" type="button" hidden>Resume emergency stop</button>
+            </section>
+            <section id="settings-panel-notifications" role="tabpanel" aria-labelledby="settings-tab-notifications" data-settings-panel="notifications" hidden>
+              <h3>Notifications</h3>
+              <p>Hsx notifies you only for background events you would not otherwise see.</p>
+              <div class="settings-notification-system-info" style="margin: 10px 0; font-size: 13px;">
+                <span>CPU Temperature: </span><strong id="settings-cpu-temp">Checking…</strong>
+              </div>
+              <div class="settings-notification-toggles" style="display: grid; gap: 8px; margin: 12px 0;">
+                <label class="settings-check"><input id="notif-toggle-system_temp" type="checkbox" data-event="system_temp"> System heating (CPU over 80°C)</label>
+                <label class="settings-check"><input id="notif-toggle-disk_full" type="checkbox" data-event="disk_full"> Storage almost full (over 85%)</label>
+                <label class="settings-check"><input id="notif-toggle-low_memory" type="checkbox" data-event="low_memory"> Low system memory (over 90%)</label>
+                <label class="settings-check"><input id="notif-toggle-network" type="checkbox" data-event="network"> Network / Wi-Fi lost and restored</label>
+                <label class="settings-check"><input id="notif-toggle-download" type="checkbox" data-event="download"> Scheduled downloads finished</label>
+                <label class="settings-check"><input id="notif-toggle-backup" type="checkbox" data-event="backup"> Backups finished or failed</label>
+                <label class="settings-check"><input id="notif-toggle-service_restart" type="checkbox" data-event="service_restart"> Service restarts</label>
+                <label class="settings-check"><input id="notif-toggle-camera_motion" type="checkbox" data-event="camera_motion"> Camera motion alerts</label>
+                <label class="settings-check"><input id="notif-toggle-task_browser" type="checkbox" data-event="task_browser"> Browser notification on task completion (when tab is hidden)</label>
+              </div>
+              <button id="settings-clear-notifications" class="settings-action" type="button">Clear all notifications</button>
             </section>
             <section id="settings-panel-voice" role="tabpanel" aria-labelledby="settings-tab-voice" data-settings-panel="voice" hidden>
               <h3>Voice</h3>

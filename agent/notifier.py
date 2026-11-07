@@ -1,21 +1,79 @@
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import stat
+import subprocess
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 
 
+def read_cpu_temperature() -> float | None:
+    """Read CPU temperature from /sys/class/thermal or sensors; return None if unavailable."""
+    # 1. Linux sysfs: /sys/class/thermal/thermal_zone*/temp
+    try:
+        thermal_zones = list(Path("/sys/class/thermal").glob("thermal_zone*/temp"))
+        if thermal_zones:
+            temps: list[float] = []
+            for tz in thermal_zones:
+                try:
+                    val = tz.read_text(encoding="ascii").strip()
+                    if val.isdigit():
+                        temps.append(int(val) / 1000.0)
+                except OSError:
+                    continue
+            if temps:
+                return round(max(temps), 1)
+    except Exception:
+        pass
+
+    # 2. psutil sensors_temperatures
+    try:
+        import psutil
+        reader = getattr(psutil, "sensors_temperatures", None)
+        if reader is not None:
+            sensors = reader()
+            temps = [
+                reading.current
+                for entries in sensors.values()
+                for reading in entries
+                if reading.current is not None
+            ]
+            if temps:
+                return round(max(temps), 1)
+    except Exception:
+        pass
+
+    # 3. sensors CLI
+    try:
+        res = subprocess.run(["sensors"], capture_output=True, text=True, timeout=2)
+        if res.returncode == 0:
+            matches = re.findall(r"\+(\d+\.\d+)°C", res.stdout)
+            if matches:
+                return round(max(float(m) for m in matches), 1)
+    except Exception:
+        pass
+
+    return None
+
+
 EVENTS = {
+    "system_temp",
+    "disk_full",
+    "low_memory",
+    "network",
+    "download",
+    "backup",
+    "service_restart",
+    "camera_motion",
     "job_done",
     "needs_input",
     "needs_approval",
     "job_failed",
     "health_alert",
-    "camera_motion",
     "heartbeat",
 }
 PUSH_HOSTS = {
@@ -24,12 +82,19 @@ PUSH_HOSTS = {
     "web.push.apple.com",
 }
 DEFAULT_ROUTES = {
+    "system_temp": ("inapp", "webpush"),
+    "disk_full": ("inapp", "webpush"),
+    "low_memory": ("inapp", "webpush"),
+    "network": ("inapp", "webpush"),
+    "download": ("inapp", "webpush"),
+    "backup": ("inapp", "webpush"),
+    "service_restart": ("inapp", "webpush"),
+    "camera_motion": ("inapp", "webpush"),
     "job_done": ("inapp", "webpush"),
     "needs_input": ("inapp", "webpush"),
     "needs_approval": ("inapp", "webpush"),
     "job_failed": ("inapp", "webpush"),
     "health_alert": ("inapp", "webpush", "telegram"),
-    "camera_motion": ("inapp", "webpush"),
     "heartbeat": ("telegram",),
 }
 
@@ -90,9 +155,21 @@ class Notifier:
             connection.execute(
                 """CREATE TABLE IF NOT EXISTS notifications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT NOT NULL, title TEXT NOT NULL,
-                job_id TEXT NOT NULL DEFAULT '', result_path TEXT NOT NULL DEFAULT '',
-                created TEXT NOT NULL, read INTEGER NOT NULL DEFAULT 0, dedupe_key TEXT NOT NULL)"""
+                severity TEXT NOT NULL DEFAULT 'info', link TEXT NOT NULL DEFAULT '',
+                thumbnail TEXT NOT NULL DEFAULT '', job_id TEXT NOT NULL DEFAULT '',
+                result_path TEXT NOT NULL DEFAULT '', created TEXT NOT NULL,
+                read INTEGER NOT NULL DEFAULT 0, dedupe_key TEXT NOT NULL)"""
             )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(notifications)").fetchall()
+            }
+            if "severity" not in columns:
+                connection.execute("ALTER TABLE notifications ADD COLUMN severity TEXT NOT NULL DEFAULT 'info'")
+            if "link" not in columns:
+                connection.execute("ALTER TABLE notifications ADD COLUMN link TEXT NOT NULL DEFAULT ''")
+            if "thumbnail" not in columns:
+                connection.execute("ALTER TABLE notifications ADD COLUMN thumbnail TEXT NOT NULL DEFAULT ''")
             connection.execute(
                 """CREATE TABLE IF NOT EXISTS notification_dedupe (
                 dedupe_key TEXT PRIMARY KEY, created TEXT NOT NULL)"""
@@ -233,20 +310,63 @@ class Notifier:
             )
         return True
 
+    def get_temperature(self) -> float | None:
+        return read_cpu_temperature()
+
+    def get_settings(self) -> dict[str, bool]:
+        settings_file = self.database_path.parent / "notification_settings.json"
+        defaults = {
+            "system_temp": True,
+            "disk_full": True,
+            "low_memory": True,
+            "network": True,
+            "download": True,
+            "backup": True,
+            "service_restart": True,
+            "camera_motion": False,
+            "task_browser": False,
+        }
+        if settings_file.is_file():
+            try:
+                stored = json.loads(settings_file.read_text(encoding="utf-8"))
+                if isinstance(stored, dict):
+                    defaults.update({k: bool(v) for k, v in stored.items() if k in defaults})
+            except Exception:
+                pass
+        return defaults
+
+    def update_settings(self, updates: dict[str, bool]) -> dict[str, bool]:
+        settings = self.get_settings()
+        settings.update({k: bool(v) for k, v in updates.items() if k in settings})
+        settings_file = self.database_path.parent / "notification_settings.json"
+        try:
+            settings_file.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+        return settings
+
     def notify(
         self,
         event: str,
         title: str,
         *,
+        severity: str = "info",
+        link: str = "",
+        thumbnail: str = "",
+        cooldown_seconds: float | None = None,
         job_id: str = "",
         result_path: str = "",
         dedupe_key: str = "",
     ) -> dict:
         if event not in EVENTS:
             raise ValueError("Unknown notification event.")
+        settings = self.get_settings()
+        if event in settings and not settings[event]:
+            return {"sent": [], "disabled": True}
         clean_title = " ".join(str(title).split())[:120]
         if not clean_title:
             raise ValueError("Notification title is required.")
+        cooldown = cooldown_seconds if cooldown_seconds is not None else (120.0 if event == "camera_motion" else 60.0)
         key_value = dedupe_key or f"{event}\0{job_id}\0{clean_title}"
         dedupe = hashlib.sha256(key_value.encode("utf-8")).hexdigest()
         now = datetime.now(UTC)
@@ -254,7 +374,7 @@ class Notifier:
             existing = connection.execute(
                 "SELECT created FROM notification_dedupe WHERE dedupe_key = ?", (dedupe,)
             ).fetchone()
-            if existing and datetime.fromisoformat(existing["created"]) > now - timedelta(minutes=5):
+            if existing and datetime.fromisoformat(existing["created"]) > now - timedelta(seconds=cooldown):
                 return {"sent": [], "deduplicated": True}
             connection.execute(
                 """INSERT INTO notification_dedupe(dedupe_key, created) VALUES (?, ?)
@@ -266,9 +386,9 @@ class Notifier:
         if "inapp" in channels:
             with self._connect() as connection:
                 connection.execute(
-                    """INSERT INTO notifications(event, title, job_id, result_path, created, dedupe_key)
-                    VALUES (?, ?, ?, ?, ?, ?)""",
-                    (event, clean_title, job_id, result_path, now.isoformat(), dedupe),
+                    """INSERT INTO notifications(event, title, severity, link, thumbnail, job_id, result_path, created, dedupe_key)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (event, clean_title, severity, link, thumbnail, job_id, result_path, now.isoformat(), dedupe),
                 )
             with self._condition:
                 self._condition.notify_all()
@@ -362,7 +482,7 @@ class Notifier:
         limit = min(max(int(limit), 1), 200)
         with self._connect() as connection:
             rows = connection.execute(
-                """SELECT id, event, title, job_id, result_path, created, read
+                """SELECT id, event, title, severity, link, thumbnail, job_id, result_path, created, read
                 FROM notifications ORDER BY id DESC LIMIT ?""",
                 (limit,),
             ).fetchall()
@@ -385,7 +505,7 @@ class Notifier:
         with self._condition:
             with self._connect() as connection:
                 rows = connection.execute(
-                    """SELECT id, event, title, job_id, result_path, created, read
+                    """SELECT id, event, title, severity, link, thumbnail, job_id, result_path, created, read
                     FROM notifications WHERE id > ? ORDER BY id""",
                     (after_id,),
                 ).fetchall()
@@ -393,7 +513,7 @@ class Notifier:
                 self._condition.wait(timeout)
                 with self._connect() as connection:
                     rows = connection.execute(
-                        """SELECT id, event, title, job_id, result_path, created, read
+                        """SELECT id, event, title, severity, link, thumbnail, job_id, result_path, created, read
                         FROM notifications WHERE id > ? ORDER BY id""",
                         (after_id,),
                     ).fetchall()

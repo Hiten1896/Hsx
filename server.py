@@ -462,31 +462,62 @@ def _record_job_telemetry(
 def _notify_motion_event(event: dict) -> None:
     snapshot = str(event.get("snapshot", "")).strip()
     if snapshot:
+        try:
+            ts = event.get("timestamp")
+            if ts:
+                dt = datetime.fromisoformat(ts).astimezone()
+                time_str = dt.strftime("%I:%M %p").lstrip("0")
+            else:
+                time_str = datetime.now().strftime("%I:%M %p").lstrip("0")
+        except Exception:
+            time_str = datetime.now().strftime("%I:%M %p").lstrip("0")
+        title = f"Motion detected in the room, {time_str}"
+        thumb = f"/api/camera/snapshot?motion={snapshot}"
         NOTIFIER.notify(
             "camera_motion",
-            "Motion detected by the Hsx host camera",
+            title,
+            severity="info",
+            thumbnail=thumb,
+            cooldown_seconds=120.0,
             dedupe_key=f"camera-motion:{snapshot}",
         )
 
 
 def _notify_resource_alerts(metrics: SystemMetrics) -> None:
     disk = shutil.disk_usage(DATA_DIR)
-    values = {
-        "cpu": (metrics.cpu_percent >= 95, "CPU use is unusually high on the Hsx host"),
-        "memory": (metrics.ram_percent >= 90, "Memory use is unusually high on the Hsx host"),
-        "disk": (
-            disk.used / max(1, disk.total) >= 0.85,
-            "Hsx host storage is at least 85% full",
-        ),
-    }
-    new_alerts = []
-    with _RESOURCE_ALERT_LOCK:
-        for resource, (is_high, title) in values.items():
-            if is_high and not _RESOURCE_ALERT_STATE[resource]:
-                new_alerts.append((resource, title))
-            _RESOURCE_ALERT_STATE[resource] = is_high
-    for resource, title in new_alerts:
-        NOTIFIER.notify("health_alert", title, dedupe_key=f"resource:{resource}:{time.time_ns()}")
+    disk_ratio = disk.used / max(1, disk.total)
+    temp = metrics.temperature_c
+    if temp is None:
+        try:
+            from agent.notifier import read_cpu_temperature
+            temp = read_cpu_temperature()
+        except Exception:
+            temp = None
+
+    if disk_ratio >= 0.85:
+        NOTIFIER.notify(
+            "disk_full",
+            f"Storage is almost full ({disk_ratio * 100:.0f}% used)",
+            severity="warning",
+            cooldown_seconds=600.0,
+            dedupe_key="disk_full",
+        )
+    if metrics.ram_percent >= 90:
+        NOTIFIER.notify(
+            "low_memory",
+            f"System memory is low ({metrics.ram_percent:.0f}% used)",
+            severity="warning",
+            cooldown_seconds=300.0,
+            dedupe_key="low_memory",
+        )
+    if temp is not None and temp >= 80:
+        NOTIFIER.notify(
+            "system_temp",
+            f"System heating: CPU temperature is {temp:.0f}°C",
+            severity="warning",
+            cooldown_seconds=300.0,
+            dedupe_key="system_temp",
+        )
 
 
 def _notify_system_anomaly(_event: dict) -> None:
@@ -626,7 +657,6 @@ def _fail_job(
         _emit_chat_event(job_id, "done", {})
     POLICY.audit_event("job_failed", job["session_id"], job_id, "failed")
     _hardware_audio_alert(succeeded=False)
-    NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
 
 
 def _resume_ask_job(job_id: str) -> None:
@@ -700,7 +730,6 @@ def _resume_ask_job(job_id: str) -> None:
             )
             return
         POLICY.audit_event("question_limit", job["session_id"], job_id, "cancelled")
-        NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
         return
     except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
         SESSION_HISTORIES[job["session_id"]] = resume_history
@@ -723,12 +752,6 @@ def _resume_ask_job(job_id: str) -> None:
         )
         POLICY.audit_event("job_done", job["session_id"], job_id, "done")
         _hardware_audio_alert(succeeded=True)
-        NOTIFIER.notify(
-            "job_done",
-            "Your Hsx task is complete",
-            job_id=job_id,
-            result_path=_task_result_path(job),
-        )
     finally:
         if scratch_dir.exists():
             shutil.rmtree(scratch_dir, ignore_errors=True)
@@ -856,7 +879,6 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
             )
         else:
             POLICY.audit_event("question_limit", job["session_id"], job_id, "cancelled")
-            NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
         return
     except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
         SESSION_HISTORIES[job["session_id"]] = resume_history
@@ -880,7 +902,6 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
     _emit_chat_event(job_id, "job", _ask_job_payload(ASK_JOBS.get(job_id)))
     _emit_chat_event(job_id, "done", {})
     POLICY.audit_event("job_done", job["session_id"], job_id, "done")
-    NOTIFIER.notify("job_done", "Your Hsx task is complete", job_id=job_id)
 
 
 def _session_lock(session_id: str):
@@ -1061,7 +1082,6 @@ def _run_chat_job(
             )
         else:
             POLICY.audit_event("question_limit", job["session_id"], job_id, "cancelled")
-            NOTIFIER.notify("job_failed", "Hsx could not complete the task", job_id=job_id)
         return
     except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
         _fail_job(job_id, job, error, stream=True, started_at=started_at)
@@ -1089,12 +1109,6 @@ def _run_chat_job(
         _emit_chat_event(job_id, "done", {})
         POLICY.audit_event("job_done", job["session_id"], job_id, "done")
         _hardware_audio_alert(succeeded=True)
-        NOTIFIER.notify(
-            "job_done",
-            "Your Hsx task is complete",
-            job_id=job_id,
-            result_path=_task_result_path(job),
-        )
     finally:
         if scratch_dir.exists():
             shutil.rmtree(scratch_dir, ignore_errors=True)
@@ -1391,7 +1405,44 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"facts": MEMORY.list_facts()})
         elif path == "/api/notifications":
             notifications, unread = NOTIFIER.list_notifications()
-            self._json({"notifications": notifications, "unread": unread})
+            self._json({
+                "notifications": notifications,
+                "unread": unread,
+                "temperature": NOTIFIER.get_temperature(),
+            })
+        elif path == "/api/notifications/settings":
+            self._json({
+                "settings": NOTIFIER.get_settings(),
+                "temperature": NOTIFIER.get_temperature(),
+                "motion_active": MOTION_MONITOR.health_check().get("running", False),
+            })
+        elif path == "/api/camera/snapshot":
+            motion_name = query.get("motion", [""])[0].strip()
+            if motion_name:
+                if not re.fullmatch(r"[a-zA-Z0-9_\-\.]+", motion_name):
+                    self._json({"error": "Invalid snapshot name."}, 400)
+                    return
+                snap_path = (DATA_DIR / "snapshots" / "motion" / motion_name).resolve()
+                motion_dir = (DATA_DIR / "snapshots" / "motion").resolve()
+                if not snap_path.is_file() or not str(snap_path).startswith(str(motion_dir)):
+                    self._json({"error": "Snapshot not found."}, 404)
+                    return
+                data = snap_path.read_bytes()
+            else:
+                frame = CAMERA.latest_frame()
+                if not frame or not frame.data:
+                    self._json({"error": "No camera frame available."}, 404)
+                    return
+                data = frame.data
+            self.send_response(200)
+            self._security_headers()
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-cache")
+            self._cors_headers()
+            self.end_headers()
+            self.wfile.write(data)
+            return
         elif path == "/api/conversations":
             self._json({"conversations": CONVERSATIONS.list()})
         elif path.startswith("/api/conversations/"):
@@ -1836,6 +1887,27 @@ class HsxHandler(BaseHTTPRequestHandler):
             POLICY.audit_event("user_answered", job["session_id"], job_id, "running")
             threading.Thread(target=_resume_ask_job, args=(job_id,), daemon=True).start()
             self._json({"job": _ask_job_payload(job)}, 202)
+        elif path == "/api/notifications/clear":
+            deleted = NOTIFIER.clear_all()
+            self._json({"success": True, "deleted": deleted, "unread": 0})
+        elif path == "/api/notifications/settings":
+            payload = self._body()
+            updates = payload.get("settings", payload) if isinstance(payload, dict) else {}
+            updated = NOTIFIER.update_settings(updates)
+            if "camera_motion" in updates:
+                active = bool(updates["camera_motion"])
+                if active:
+                    POLICY.audit_event("motion_watch", "system", "motion_monitor", "enabled")
+                    MOTION_MONITOR.on_event = _notify_motion_event
+                    MOTION_MONITOR.start()
+                else:
+                    POLICY.audit_event("motion_watch", "system", "motion_monitor", "disabled")
+                    MOTION_MONITOR.stop()
+            self._json({
+                "settings": updated,
+                "temperature": NOTIFIER.get_temperature(),
+                "motion_active": MOTION_MONITOR.health_check().get("running", False),
+            })
         elif path == "/api/notifications/read":
             payload = self._body()
             notification_id = payload.get("id")
