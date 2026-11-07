@@ -33,3 +33,19 @@ def test_delete_removes_memory_from_next_prompt(tmp_path: Path):
     fact = manager.add_fact("Temporary preference")
     manager.delete_fact(fact["id"])
     assert "Temporary preference" not in manager.prompt_context("preference")
+
+
+def test_explicit_facts_are_saved_in_memory_folder_and_survive_message_pruning(tmp_path: Path):
+    manager = MemoryManager(tmp_path / "data" / "memory.db")
+    fact = manager.add_fact("The user prefers concise answers", category="preference")
+    manager.record_message("session", "user", "A temporary conversation")
+    old = "2000-01-01T00:00:00+00:00"
+    with manager._connect() as connection:
+        connection.execute("UPDATE messages SET created = ?", (old,))
+
+    assert manager.prune_messages_before("2025-01-01T00:00:00+00:00") == 1
+    assert manager.session_messages("session") == []
+    assert manager.get_fact(fact["id"])["text"] == "The user prefers concise answers"
+    assert "The user prefers concise answers" in (tmp_path / "memory" / "facts.json").read_text(
+        encoding="utf-8"
+    )

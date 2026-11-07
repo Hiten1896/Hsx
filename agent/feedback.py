@@ -77,7 +77,7 @@ class FeedbackStore:
                     value TEXT NOT NULL
                 );
                 INSERT OR IGNORE INTO feedback_settings(key, value)
-                    VALUES ('save_feedback', '1'), ('include_full_conversation', '0'),
+                    VALUES ('save_feedback', '1'), ('include_full_conversation', '1'),
                            ('include_file_contents', '0');
                 """
             )
@@ -101,7 +101,7 @@ class FeedbackStore:
             "include_full_conversation": rows.get("include_full_conversation", "0") == "1",
             "include_file_contents": rows.get("include_file_contents", "0") == "1",
             "count": count,
-            "storage": "Stored on this computer only.",
+            "storage": "Stored locally; chat and feedback history is summarized and pruned after 7 days. File contents are excluded.",
         }
 
     def update_settings(
@@ -205,17 +205,24 @@ class FeedbackStore:
             connection.execute("DELETE FROM feedback")
         return count
 
+    def prune_before(self, cutoff: str) -> int:
+        with self._connect() as connection:
+            cursor = connection.execute("DELETE FROM feedback WHERE created_at < ?", (cutoff,))
+        return cursor.rowcount
+
     def export_records(self, *, since: str | None = None, include_file_contents: bool = False) -> list[dict]:
+        exact_cutoff = False
         if since:
             try:
-                date.fromisoformat(since)
+                date.fromisoformat(since[:10])
             except ValueError as error:
                 raise ValueError("The since date must use YYYY-MM-DD format.") from error
+            exact_cutoff = len(since) > 10
         settings = self.settings()
         query = "SELECT * FROM feedback"
         parameters: tuple = ()
         if since:
-            query += " WHERE substr(created_at, 1, 10) >= ?"
+            query += " WHERE created_at >= ?" if exact_cutoff else " WHERE substr(created_at, 1, 10) >= ?"
             parameters = (since,)
         query += " ORDER BY created_at, id"
         with self._connect() as connection:
@@ -228,10 +235,7 @@ class FeedbackStore:
                 else json.loads(row["prompt_messages"])
             )
             if not (include_file_contents and settings["include_file_contents"]):
-                prompt_messages = [
-                    message for message in prompt_messages
-                    if str(message.get("role", "")).lower() not in {"tool", "function"}
-                ]
+                prompt_messages = _without_file_contents(prompt_messages)
             records.append({
                 "prompt_messages": _redact_value(
                     prompt_messages,
@@ -289,15 +293,14 @@ def _is_secret_field(key: object) -> bool:
 
 def _without_file_contents(value):
     if isinstance(value, list):
-        return [
-            _without_file_contents(item)
-            for item in value
-            if not (
-                isinstance(item, dict)
-                and str(item.get("role", "")).lower() in {"tool", "function"}
-            )
-        ]
+        return [_without_file_contents(item) for item in value]
     if isinstance(value, dict):
+        if str(value.get("role", "")).lower() in {"tool", "function"}:
+            return {
+                key: _without_file_contents(item)
+                for key, item in value.items()
+                if key.lower() in {"role", "name", "tool_name", "tool_call_id"}
+            } | {"content": "[TOOL_RESULT_OMITTED]"}
         return {
             key: _without_file_contents(item)
             for key, item in value.items()

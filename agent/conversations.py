@@ -66,3 +66,48 @@ class ConversationStore:
         with self._connect() as connection:
             cursor = connection.execute("DELETE FROM conversations WHERE session_id=?", (session_id[:100],))
         return cursor.rowcount > 0
+
+    def prune_before(self, cutoff: str) -> int:
+        cutoff_date = datetime.fromisoformat(cutoff.replace("Z", "+00:00"))
+        if cutoff_date.tzinfo is None:
+            cutoff_date = cutoff_date.replace(tzinfo=UTC)
+        removed = 0
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT session_id, thread_json, created FROM conversations"
+            ).fetchall()
+            for row in rows:
+                thread = json.loads(row["thread_json"])
+                messages = thread.get("messages", []) if isinstance(thread, dict) else []
+                if not isinstance(messages, list):
+                    messages = []
+                if not messages and row["created"] >= cutoff:
+                    continue
+                retained = []
+                for message in messages:
+                    created = message.get("created_at") if isinstance(message, dict) else None
+                    timestamp = created if isinstance(created, str) else row["created"]
+                    try:
+                        message_date = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                    except ValueError:
+                        message_date = cutoff_date
+                    if message_date.tzinfo is None:
+                        message_date = message_date.replace(tzinfo=UTC)
+                    if message_date >= cutoff_date:
+                        retained.append(message)
+                expired = len(messages) - len(retained)
+                if expired:
+                    thread["messages"] = retained
+                if retained:
+                    if expired:
+                        connection.execute(
+                            "UPDATE conversations SET thread_json = ? WHERE session_id = ?",
+                            (json.dumps(thread, ensure_ascii=False, separators=(",", ":")), row["session_id"]),
+                        )
+                        removed += 1
+                else:
+                    cursor = connection.execute(
+                        "DELETE FROM conversations WHERE session_id = ?", (row["session_id"],)
+                    )
+                    removed += cursor.rowcount
+        return removed

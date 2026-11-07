@@ -1,6 +1,8 @@
 import json
+import os
 import re
 import sqlite3
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,7 +17,15 @@ class MemoryManager:
     def __init__(self, database_path: Path):
         self.database_path = database_path
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        memory_root = (
+            self.database_path.parent.parent
+            if self.database_path.parent.name == "data"
+            else self.database_path.parent
+        )
+        self.memory_dir = memory_root / "memory"
+        self.facts_path = self.memory_dir / "facts.json"
         self._initialize()
+        self._sync_facts_file()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path)
@@ -45,7 +55,7 @@ class MemoryManager:
                     ON messages(session_id, id);
                 """
             )
-            legacy_path = self.database_path.parent.parent / "memory" / "facts.json"
+            legacy_path = self.facts_path
             if legacy_path.exists() and connection.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == 0:
                 try:
                     legacy_facts = json.loads(legacy_path.read_text(encoding="utf-8"))
@@ -82,7 +92,9 @@ class MemoryManager:
                 "SELECT id, text, category, created, source, pinned FROM facts WHERE id = ?",
                 (cursor.lastrowid,),
             ).fetchone()
-            return dict(row)
+            fact = dict(row)
+        self._sync_facts_file()
+        return fact
 
     def list_facts(self) -> list[dict]:
         with self._connect() as connection:
@@ -116,11 +128,14 @@ class MemoryManager:
             ).rowcount
         if not changed:
             raise KeyError("Memory not found.")
-        return self.get_fact(fact_id)
+        fact = self.get_fact(fact_id)
+        self._sync_facts_file()
+        return fact
 
     def delete_fact(self, fact_id: int) -> None:
         with self._connect() as connection:
             connection.execute("DELETE FROM facts WHERE id = ?", (fact_id,))
+        self._sync_facts_file()
 
     def search(self, query: str, limit: int = 5) -> list[dict]:
         terms = [term.lower() for term in re.findall(r"\w+", query) if len(term) > 1]
@@ -146,6 +161,31 @@ class MemoryManager:
                 (session_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def prune_messages_before(self, cutoff: str) -> int:
+        with self._connect() as connection:
+            cursor = connection.execute("DELETE FROM messages WHERE created < ?", (cutoff,))
+        return cursor.rowcount
+
+    def _sync_facts_file(self) -> None:
+        self.memory_dir.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(self.list_facts(), ensure_ascii=False, indent=2) + "\n"
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=self.memory_dir,
+            prefix=".facts-",
+            suffix=".tmp",
+            text=True,
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            os.chmod(temporary_path, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as destination:
+                destination.write(payload)
+                destination.flush()
+                os.fsync(destination.fileno())
+            os.replace(temporary_path, self.facts_path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     def prompt_context(self, query: str, max_chars: int = 4000) -> str:
         facts = self.list_facts()

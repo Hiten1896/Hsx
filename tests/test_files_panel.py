@@ -99,6 +99,37 @@ def test_outputs_endpoint_lists_generated_artifacts(tmp_path: Path, monkeypatch)
     files = json.loads(body)["files"]
     assert [item["name"] for item in files] == ["report.pdf"]
     assert files[0]["path"] == "Hsx Work/report.pdf"
+    payload = json.loads(body)
+    assert payload["storage_available"] is True
+    assert payload["storage_path"] == str(output_dir)
+
+
+def test_outputs_panel_shows_shared_folder_files_across_chat_sessions(tmp_path: Path, monkeypatch):
+    from agent.artifacts import ArtifactStore
+
+    root = tmp_path / "network-share"
+    output_dir = root / "Hsx Work"
+    task_dir = output_dir / "another-device-task"
+    task_dir.mkdir(parents=True)
+    artifact_path = task_dir / "shared-report.pdf"
+    artifact_path.write_bytes(b"pdf")
+    uploads = output_dir / "Uploads"
+    uploads.mkdir()
+    (uploads / "user-photo.png").write_bytes(b"image")
+    workspace = Workspace(root, "Hsx Work")
+    artifact_store = ArtifactStore(tmp_path / "artifacts.sqlite")
+    monkeypatch.setattr(server, "WORKSPACE", workspace)
+    monkeypatch.setattr(server, "WORK_DIR", output_dir)
+    monkeypatch.setattr(server, "ARTIFACTS", artifact_store)
+    monkeypatch.setattr(server, "ASK_JOBS", None)
+
+    first_listing = server._session_artifacts("")
+    created = first_listing[0]["created"]
+    second_listing = server._session_artifacts("")
+
+    assert [item["name"] for item in first_listing] == ["shared-report.pdf"]
+    assert first_listing[0]["session_id"] == ""
+    assert second_listing[0]["created"] == created
 
 
 def test_activity_endpoint_lists_only_the_session_and_hides_sensitive_prompts(tmp_path: Path, monkeypatch):

@@ -240,7 +240,8 @@ def test_web_shell_has_shared_chat_hierarchy_and_feedback_widgets():
     assert "controller.abort()" in script
     assert "receivedDone" in script
     assert "The connection ended before Hsx finished. Your draft was kept." in script
-    assert "pendingFeedback = { article, rating: button.dataset.feedback }" in script
+    assert "void submitFeedback(article, button.dataset.feedback)" in script
+    assert 'id="feedback-dialog"' not in html
     assert 'id="settings-panel-privacy"' in html
     assert 'id="save-feedback-setting"' in html
     assert 'id="full-conversation-setting"' in html
@@ -504,6 +505,7 @@ def test_feedback_and_telemetry_api_contract(tmp_path, monkeypatch):
     from agent.feedback import FeedbackStore
 
     feedback_store = FeedbackStore(tmp_path / "feedback.db")
+    feedback_store.update_settings(save_feedback=True, include_full_conversation=False)
     monkeypatch.setattr(server, "FEEDBACK_STORE", feedback_store)
     monkeypatch.setattr(server, "LLM_TELEMETRY", type("Telemetry", (), {
         "snapshot": lambda self: {"provider": "groq", "router_confidence": 0.9, "latency_ms": 12.0},

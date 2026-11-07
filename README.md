@@ -111,13 +111,13 @@ terminal client over SSH for keyboard-first work on the HP itself.
 
 ### Feedback and local export
 
-Ratings and optional notes are stored in the Hsx data directory on this computer only. Each saved rating includes the exact user message and assistant response, the job's provider/model calls, and the tools used. The web Settings panel shows the saved count, can disable saving, and can delete all saved feedback after confirmation. Exports redact secrets, email addresses, phone numbers, and long tokens by default:
+Thumbs-up and thumbs-down save immediately without opening a dialog. Ratings and optional notes are stored in the Hsx data directory on this computer only. By default, local personalization uses the redacted conversation context, provider/model calls, and tool-call metadata; tool results and file contents are omitted. The web Settings panel shows the saved count, can disable saving, and can delete all saved feedback after confirmation. Exports redact secrets, email addresses, phone numbers, and long tokens by default:
 
 ```sh
 python tools/export_feedback.py --format jsonl --since 2025-01-01 --output feedback.jsonl
 ```
 
-By default, each export contains only the last user prompt and assistant response. Full-conversation export and file-content export require their respective Settings opt-ins; file contents additionally require `--include-file-contents`. Feedback is never sent to an external service.
+The server refreshes a compact, local personalization summary hourly, then removes feedback, saved chat snapshots, memory transcripts, and training/log records older than seven days. Explicit memory facts and generated artifacts are retained. The seven-day training window supplies local datasets and preference statistics; it does not fine-tune provider model weights or send feedback to a provider. File-content export remains disabled unless explicitly enabled in Settings and requested with `--include-file-contents`.
 
 ## Web vs terminal at a glance
 
@@ -308,6 +308,13 @@ unprivileged account and keep proposal directories writable only by that account
 The PIN is stored as a salted hash outside the agent context and is never placed in a
 prompt or memory record.
 
+Routine local tools, workspace work, searches, package setup in Hsx's environment,
+and explicitly requested camera or microphone actions run without repeated approval
+cards. Hsx asks before host-level service, administrator, power, firmware, or
+out-of-scope file changes. Secret reads, credential exfiltration, and disabling
+security controls remain blocked; commands run as the unprivileged Hsx service
+account and do not receive administrator access.
+
 ## Workspace and generated files
 
 The workspace has separate roles:
@@ -316,12 +323,19 @@ The workspace has separate roles:
 - `HSX_WORK_DIR`: generated deliverables exposed by the Files panel.
 - `scratch/`: temporary work and isolated prototypes.
 - `uploads/`: uploaded request material.
-- `memory/` and `data/`: persistent facts and SQLite databases.
+- `memory/`: durable explicit facts plus the rolling, local personalization summary.
+- `data/`: SQLite databases, seven-day chat/feedback records, and short-lived training/log data.
 - `logs/`: append-only audit records and operational logs.
 
 `HSX_WORK_DIR` must be a dedicated directory inside `HSX_WORKSPACE`. Generated work is
 placed in dated task folders and uses collision-safe names; existing files are not
 silently overwritten. Workspace path resolution rejects traversal and symlink escapes.
+The Artifacts panel lists deliverables found in the shared Hsx Work folder, independent
+of the chat session, so authenticated devices connected to this Hsx server can browse
+the same generated files. For cross-device access, mount the network share on the Hsx
+host and configure `HSX_WORKSPACE` and `HSX_WORK_DIR` to that mounted location.
+Uploaded source files are stored under `Hsx Work/Uploads` for chat access and are
+excluded from the generated-artifacts list.
 Local ML telemetry stays under `data/`: `anomalies.jsonl` contains advisory-only
 outliers, `workload_history.jsonl` contains resource/job measurements, and
 `intent_logs.jsonl` contains bounded, redacted successful task examples. Explicitly

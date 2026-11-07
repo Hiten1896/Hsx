@@ -60,6 +60,14 @@ class JobQueue:
             ids = [row["id"] for row in connection.execute("SELECT id FROM jobs ORDER BY created DESC")]
         return [self.get(job_id) for job_id in ids]
 
+    def prune_before(self, cutoff: str) -> int:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM jobs WHERE created < ? AND state IN ('done', 'failed', 'cancelled')",
+                (cutoff,),
+            )
+        return cursor.rowcount
+
     def cancel(self, job_id: str) -> bool:
         with self._lock:
             self._cancelled.add(job_id)

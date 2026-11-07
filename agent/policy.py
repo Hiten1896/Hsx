@@ -8,6 +8,16 @@ from agent.activity_trace import redact_activity_text
 from agent.autonomy import classify_action, is_hard_denied
 from config import BASE_DIR
 
+APPROVAL_REQUIRED_ACTIONS = {
+    "delete_owner_files",
+    "firmware_flash",
+    "overwrite_owner_files",
+    "pipe_to_shell",
+    "shutdown_reboot",
+    "sudo",
+    "system_services",
+}
+
 
 class PolicyEngine:
     def __init__(self, audit_path: Path | None = None, approval_guard: ApprovalGuard | None = None):
@@ -54,7 +64,7 @@ class PolicyEngine:
                approved: bool | str | None = None, *, approver: str = "system") -> dict:
         name = str(skill.get("name", "unknown"))
         action = classify_action(name, arguments)
-        if is_hard_denied(name, arguments):
+        if is_hard_denied(name, arguments) or action == "read_secrets":
             self._audit(session, name, arguments, action, "hard_deny", "denied")
             return {"allowed": False, "status": "denied", "error": "Hsx always blocks actions that expose secrets or disable its security controls."}
         if approved is False or approved == "reject":
@@ -72,6 +82,10 @@ class PolicyEngine:
             self._audit(session, name, arguments, action, "approved", "allowed", approver)
             return {"allowed": True, "status": "approved"}
         if name == "ask_user":
+            self._audit(session, name, arguments, action, "allowed", "allowed")
+            return {"allowed": True, "status": "allowed"}
+
+        if action not in APPROVAL_REQUIRED_ACTIONS:
             self._audit(session, name, arguments, action, "allowed", "allowed")
             return {"allowed": True, "status": "allowed"}
 

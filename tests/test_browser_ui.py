@@ -55,9 +55,16 @@ class BrowserFakeHandler(server.HsxHandler):
             self._json({"content": "one\ntwo\nthree"})
             return
         if self._request_path() == "/api/files/content":
-            content = b"%PDF-1.4"
+            is_image = "sample.png" in self.path
+            content = (
+                base64.b64decode(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l3sAAAAASUVORK5CYII="
+                )
+                if is_image
+                else b"%PDF-1.4"
+            )
             self.send_response(200)
-            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Type", "image/png" if is_image else "application/pdf")
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
@@ -845,8 +852,8 @@ def test_browser_history_survives_reload_and_another_browser_and_supports_action
     page.locator("#send-button").click()
     page.get_by_text("Test answer from fake provider.").wait_for()
     page.locator('.message-card[data-role="assistant"] [data-feedback="good"]').click()
-    page.locator("#feedback-form button[type='submit']").click()
     page.get_by_text("Thanks for your feedback.").wait_for()
+    assert page.locator("#feedback-dialog").count() == 0
     page.wait_for_timeout(500)
     page.reload()
     page.locator('body[data-ready="true"]').wait_for(timeout=10000)
@@ -883,6 +890,31 @@ def test_browser_history_survives_reload_and_another_browser_and_supports_action
     second.get_by_role("button", name="Delete chat: Renamed saved thread").first.click()
     assert second.locator(".chat-history-row").count() == 0
     second.close()
+
+
+def test_uploaded_image_and_documents_open_in_preview_viewer(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+
+    page.evaluate("openActivityFileViewer('Uploads/sample.png')")
+    viewer = page.locator("#activity-file-viewer")
+    viewer.wait_for()
+    page.locator("#activity-viewer-content img").wait_for()
+    assert page.locator("#artifact-viewer-tabs button[aria-selected='true']").inner_text() == "Preview"
+    page.locator("#activity-viewer-close").click()
+    page.wait_for_function("() => !document.querySelector('#activity-file-viewer').open")
+
+    page.evaluate("openActivityFileViewer('Uploads/report.pdf')")
+    page.locator("#activity-viewer-content object[type='application/pdf']").wait_for()
+    page.locator("#activity-viewer-close").click()
+
+    page.evaluate("openActivityFileViewer('Uploads/report.docx')")
+    page.locator("#activity-viewer-content pre.artifact-preview-text").wait_for()
+    assert "one" in page.locator("#activity-viewer-content pre.artifact-preview-text").inner_text()
+    assert page.locator("#artifact-viewer-tabs button[aria-selected='true']").inner_text() == "Preview"
+    page.locator("#activity-viewer-close").click()
 
 
 def test_browser_feedback_settings_can_disable_saving_and_delete_all(browser_app, browser_page):

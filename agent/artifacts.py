@@ -81,6 +81,24 @@ class ArtifactStore:
             "created": created,
         }
 
+    def record_if_missing(self, session_id: str, path: str) -> dict:
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT version, created FROM artifacts WHERE session_id = ? AND path = ?",
+                (session_id, path),
+            ).fetchone()
+        if existing:
+            target = Path(path)
+            return {
+                "session_id": session_id,
+                "path": path,
+                "name": target.name,
+                "type": target.suffix.lower().lstrip(".") or "file",
+                "version": int(existing["version"]),
+                "created": existing["created"],
+            }
+        return self.record(session_id, path)
+
     def list(self, session_id: str = "") -> list[dict]:
         with self._connect() as connection:
             if session_id:
@@ -168,12 +186,10 @@ class ArtifactStore:
                 continue
             rel_path = candidate.resolve().relative_to(root).as_posix()
 
-            target_session = session_id
-            if not target_session:
-                rel_work = candidate.resolve().relative_to(work_path).as_posix()
-                top_folder = rel_work.split("/")[0] if "/" in rel_work else ""
-                target_session = task_dir_to_session.get(top_folder, "")
+            rel_work = candidate.resolve().relative_to(work_path).as_posix()
+            top_folder = rel_work.split("/")[0] if "/" in rel_work else ""
+            target_session = task_dir_to_session.get(top_folder, session_id)
 
-            item = self.record(target_session, rel_path)
+            item = self.record_if_missing(target_session, rel_path)
             registered.append(item)
         return registered

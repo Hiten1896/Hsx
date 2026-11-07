@@ -12,7 +12,6 @@ let notificationInitialized = false;
 let notificationReconnectTimer = null;
 let notificationRetryDelay = 500;
 let notificationToastTimer = null;
-let pendingFeedback = null;
 const chatSessions = new Map();
 let artifactsRequestId = 0;
 let voiceRecognition = null;
@@ -375,6 +374,7 @@ function conversationSnapshot(id) {
         prompt: article.dataset.prompt || '',
         edit_text: article.dataset.editText || '',
         feedback: article.querySelector('[data-feedback][aria-pressed="true"]')?.dataset.feedback || '',
+        created_at: article.dataset.createdAt || '',
         attachments: JSON.parse(article.dataset.attachments || '[]'),
       })),
       artifacts,
@@ -422,6 +422,7 @@ async function restoreConversation(id) {
         prompt: message.prompt, editText: message.edit_text, noFeedback: !message.job_id,
         attachments: message.attachments,
       });
+      article.dataset.createdAt = message.created_at || saved.created || article.dataset.createdAt;
       if (message.feedback) article.querySelector(`[data-feedback="${message.feedback}"]`)?.setAttribute('aria-pressed', 'true');
       session.fragment.append(article);
     }
@@ -587,7 +588,7 @@ function renderMessageAttachments(article, attachments) {
     button.className = imageFile ? 'message-attachment message-attachment-image' : 'message-attachment';
     button.title = `Open ${name}`;
     button.setAttribute('aria-label', `Open attached file ${name}`);
-    button.addEventListener('click', () => openActivityFileViewer(path, '', imageFile));
+    button.addEventListener('click', () => openActivityFileViewer(path));
     if (imageFile) {
       const image = document.createElement('img');
       image.alt = name;
@@ -629,11 +630,8 @@ function bindMessageFeedback(article, jobId) {
     button.disabled = false;
     button.removeAttribute('title');
     button.addEventListener('click', () => {
-      pendingFeedback = { article, rating: button.dataset.feedback };
-      document.getElementById('feedback-reason').value = '';
-      document.getElementById('feedback-note').value = '';
-      document.getElementById('feedback-dialog').showModal();
-    }, { once: true });
+      void submitFeedback(article, button.dataset.feedback);
+    });
   });
 }
 
@@ -764,6 +762,7 @@ function appendActivity(label) {
 }
 
 const activityImageObjectUrls = new Set();
+const artifactViewerObjectUrls = new Set();
 
 async function appendInlineCameraSnapshot(article) {
   const content = article?.querySelector('.message-content');
@@ -868,6 +867,7 @@ function highlightCode(rawCode, ext = '') {
 }
 
 async function openArtifactViewer(file, initialTab = 'preview') {
+  if (window.matchMedia('(max-width: 700px)').matches) openMobilePanel(elements.cameraSidebar);
   artifactViewerFile = file;
   artifactViewerTab = initialTab;
   const dialog = document.getElementById('activity-file-viewer');
@@ -904,6 +904,8 @@ async function renderArtifactViewerTab() {
   const file = artifactViewerFile;
   if (!file) return;
   const content = document.getElementById('activity-viewer-content');
+  artifactViewerObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+  artifactViewerObjectUrls.clear();
   content.replaceChildren();
 
   if (artifactViewerTab === 'details') {
@@ -934,7 +936,7 @@ async function renderArtifactViewerTab() {
     if (response.ok) {
       const img = document.createElement('img');
       img.src = URL.createObjectURL(await response.blob());
-      activityImageObjectUrls.add(img.src);
+      artifactViewerObjectUrls.add(img.src);
       content.append(img);
       return;
     }
@@ -946,7 +948,7 @@ async function renderArtifactViewerTab() {
     if (response.ok) {
       const img = document.createElement('img');
       img.src = URL.createObjectURL(await response.blob());
-      activityImageObjectUrls.add(img.src);
+      artifactViewerObjectUrls.add(img.src);
       content.append(img);
       return;
     }
@@ -964,12 +966,26 @@ async function renderArtifactViewerTab() {
 
   if (artifactViewerTab === 'preview' && /\.pdf$/i.test(file.path || file.name)) {
     const query = new URLSearchParams({ path: file.path });
+    const response = await apiFetch(`/api/files/content?${query}`);
+    if (!response.ok) {
+      const error = document.createElement('p');
+      error.className = 'artifacts-empty';
+      error.textContent = 'PDF preview is unavailable.';
+      content.append(error);
+      return;
+    }
     const obj = document.createElement('object');
-    obj.data = `/api/files/content?${query}`;
+    obj.data = URL.createObjectURL(await response.blob());
+    artifactViewerObjectUrls.add(obj.data);
     obj.type = 'application/pdf';
     obj.className = 'artifact-preview-object';
     const fallback = document.createElement('p');
-    fallback.innerHTML = `PDF preview unavailable. <a href="/api/files/download?${query}">Download ${file.name}</a>`;
+    fallback.append('PDF preview unavailable. ');
+    const link = document.createElement('a');
+    link.href = obj.data;
+    link.download = file.name;
+    link.textContent = `Download ${file.name}`;
+    fallback.append(link);
     obj.append(fallback);
     content.append(obj);
     return;
@@ -1000,12 +1016,12 @@ async function renderArtifactViewerTab() {
   }
 }
 
-async function openActivityFileViewer(path, imageId = '', binary = false) {
+async function openActivityFileViewer(path, imageId = '') {
   const name = path ? path.replace(/\\/g, '/').split('/').pop() : 'Preview';
   const type = path ? (path.split('.').pop() || 'file') : 'file';
   const file = { name, path: path || '', type, created: new Date().toISOString(), versions: [] };
   if (imageId) file.imageId = imageId;
-  await openArtifactViewer(file, binary ? 'preview' : 'code');
+  await openArtifactViewer(file, 'preview');
 }
 
 function appendDiffCard(details, data) {
@@ -1045,7 +1061,7 @@ function appendDiffCard(details, data) {
     const binary = document.createElement('p');
     binary.textContent = `Binary file, ${Math.max(1, Math.round((diff.size_bytes || 0) / 1024))} KB`;
     card.append(binary);
-    appendActionButton(card, 'Open', () => openActivityFileViewer(diff.path || data.file_path, '', true));
+    appendActionButton(card, 'Open', () => openActivityFileViewer(diff.path || data.file_path));
   } else {
     const list = document.createElement('div');
     list.className = 'activity-diff-lines';
@@ -1164,7 +1180,7 @@ function appendActivityArtifact(trace, data) {
   time.dateTime = new Date().toISOString();
   time.textContent = 'Just now';
   card.append(icon, label, typeChip, time);
-  card.addEventListener('click', () => openActivityFileViewer(path, '', /\.(?:png|jpe?g|gif|webp|bmp)$/i.test(name)));
+  card.addEventListener('click', () => openActivityFileViewer(path));
   steps.append(card);
 }
 
@@ -1539,8 +1555,8 @@ async function submitFeedback(article, feedback) {
         conversation_id: sessionId,
         message_id: article.dataset.jobId,
         feedback: feedback === 'good' ? 'up' : 'down',
-        reason: document.getElementById('feedback-reason').value,
-        note: document.getElementById('feedback-note').value,
+        reason: '',
+        note: '',
         prompt_messages: [{ role: 'user', content: article.dataset.prompt || '' }],
         response: article.dataset.response || '',
         client: 'web',
@@ -1555,7 +1571,6 @@ async function submitFeedback(article, feedback) {
       button.disabled = false;
     });
     queueConversationSave();
-    document.getElementById('feedback-dialog').close();
     refreshFeedbackSettings();
   } catch {
     buttons.forEach((button) => {
@@ -3284,11 +3299,16 @@ async function refreshArtifacts() {
   empty.textContent = 'Loading generated files…';
   elements.artifactsList.replaceChildren(empty);
   try {
-    const query = new URLSearchParams({ session_id: requestedSessionId });
-    const response = await apiFetch(`${apiContract.endpoints.outputs}?${query}`);
+    const response = await apiFetch(apiContract.endpoints.outputs);
     if (!response.ok) throw new Error('Could not load generated files.');
     const data = await response.json();
     if (requestId !== artifactsRequestId || requestedSessionId !== sessionId) return;
+    const location = document.getElementById('artifacts-location');
+    const storagePath = typeof data.storage_path === 'string' ? data.storage_path : 'Hsx Work';
+    location.textContent = data.storage_available === false
+      ? 'Hsx Work folder unavailable'
+      : `Shared Hsx Work · ${storagePath}`;
+    location.title = storagePath;
     const files = Array.isArray(data.files) ? data.files : [];
     if (!files.length) {
       empty.textContent = 'Files Hsx creates for you will appear here.';
@@ -3527,6 +3547,11 @@ async function initialize() {
   document.body.append(document.getElementById('connections-panel'));
   const viewer = document.getElementById('activity-file-viewer');
   document.getElementById('activity-viewer-close').addEventListener('click', () => viewer.close());
+  viewer.addEventListener('close', () => {
+    artifactViewerObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+    artifactViewerObjectUrls.clear();
+    artifactViewerFile = null;
+  });
   viewer.addEventListener('click', (event) => {
     if (event.target === viewer) viewer.close();
   });
@@ -3768,16 +3793,6 @@ async function initialize() {
     document.getElementById('settings-dialog').close();
     openMobilePanel(elements.cameraSidebar);
     if (!cameraEnabled) toggleCamera();
-  });
-  document.getElementById('feedback-form').addEventListener('submit', (event) => {
-    event.preventDefault();
-    if (!pendingFeedback) return;
-    submitFeedback(pendingFeedback.article, pendingFeedback.rating);
-    pendingFeedback = null;
-  });
-  document.getElementById('feedback-cancel').addEventListener('click', () => {
-    document.getElementById('feedback-dialog').close();
-    pendingFeedback = null;
   });
   for (const id of ['save-feedback-setting', 'full-conversation-setting', 'file-contents-setting']) {
     document.getElementById(id).addEventListener('change', () => {

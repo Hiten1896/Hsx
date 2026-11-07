@@ -13,30 +13,24 @@ def _policy(tmp_path):
 def test_silent_run_and_approval_run_are_audited(tmp_path):
     policy = _policy(tmp_path)
     result = policy.decide({"name": "system_info"}, {}, "s")
-    assert result["status"] == "waiting_approval"
-    assert result["approval_request"]["request_type"] == "tool_consent"
-    assert "Possible consequence:" in result["approval_request"]["why"]
-    assert policy.decide({"name": "system_info"}, {}, "s", True)["allowed"]
+    assert result == {"allowed": True, "status": "allowed"}
     result = policy.decide({"name": "camera_snapshot"}, {}, "s")
-    assert result["status"] == "waiting_approval"
-    assert "camera" in result["approval_request"]["summary"]
-    assert "camera feed" in result["approval_request"]["why"]
-    assert policy.decide({"name": "camera_snapshot"}, {}, "s", True)["allowed"]
+    assert result == {"allowed": True, "status": "allowed"}
     events = [json.loads(line) for line in (tmp_path / "audit.jsonl").read_text().splitlines()]
-    assert [event["decision"] for event in events] == ["ask", "approved", "ask", "approved"]
+    assert [event["decision"] for event in events] == ["allowed", "allowed"]
     assert all("tier" not in event for event in events)
 
 
 def test_approval_is_one_time_and_ignores_legacy_persistent_grants(tmp_path):
     policy = _policy(tmp_path)
-    skill, args = {"name": "capability_resolver"}, {"package": "yt-dlp"}
+    skill, args = {"name": "system_execute"}, {"action": "exec", "command": "sudo systemctl restart hsx"}
     assert policy.decide(skill, args, "s", False)["status"] == "cancelled"
     assert policy.decide(skill, args, "s", "always_allow")["status"] == "waiting_approval"
     assert policy.decide(skill, args, "s", True)["status"] == "approved"
     assert policy.decide(skill, args, "s")["status"] == "waiting_approval"
 
 
-def test_package_install_approval_is_a_plain_vetted_plan(tmp_path):
+def test_package_install_is_a_routine_agent_environment_operation(tmp_path):
     policy = _policy(tmp_path)
 
     decision = policy.decide(
@@ -45,17 +39,10 @@ def test_package_install_approval_is_a_plain_vetted_plan(tmp_path):
         "music-session",
     )
 
-    request = decision["approval_request"]
-    assert decision["status"] == "waiting_approval"
-    assert request["request_type"] == "package_install"
-    assert "yt-dlp==" in request["summary"]
-    assert "about 20 MB" in request["why"]
-    assert "virtual environment only" in request["details"]
-    assert "No sudo" in request["details"]
-    assert "raw" not in str(request).casefold()
+    assert decision == {"allowed": True, "status": "allowed"}
 
 
-def test_esptool_install_uses_the_same_explicit_approval_card(tmp_path):
+def test_esptool_install_is_allowed_without_a_repeated_approval_card(tmp_path):
     policy = _policy(tmp_path)
 
     decision = policy.decide(
@@ -64,12 +51,7 @@ def test_esptool_install_uses_the_same_explicit_approval_card(tmp_path):
         "esp32-session",
     )
 
-    request = decision["approval_request"]
-    assert decision["status"] == "waiting_approval"
-    assert request["request_type"] == "package_install"
-    assert "esptool==5.6.0" in request["summary"]
-    assert "virtual environment only" in request["details"]
-    assert "No sudo" in request["details"]
+    assert decision == {"allowed": True, "status": "allowed"}
 
 
 def test_firmware_flash_requires_explicit_one_time_approval(tmp_path):
@@ -93,7 +75,7 @@ def test_firmware_flash_requires_explicit_one_time_approval(tmp_path):
 
 def test_command_approval_describes_hp_impact_and_redacts_secrets(tmp_path):
     policy = _policy(tmp_path)
-    command = "python -m tool --password=not-for-display"
+    command = "rm -f --password=not-for-display"
 
     decision = policy.decide(
         {"name": "system_execute"},
@@ -103,7 +85,7 @@ def test_command_approval_describes_hp_impact_and_redacts_secrets(tmp_path):
 
     request = decision["approval_request"]
     assert decision["status"] == "waiting_approval"
-    assert request["command"] == "python -m tool --password=[REDACTED]"
+    assert request["command"].startswith("rm -f")
     assert "HP host" in request["host_impact"]
     assert "files" in request["security_risk"]
     assert "not-for-display" not in str(request)
@@ -126,6 +108,47 @@ def test_hard_deny_cannot_be_approved_and_audit_does_not_leak_values(tmp_path):
 def test_ask_user_is_exempt_from_action_approval(tmp_path):
     policy = _policy(tmp_path)
     assert policy.decide({"name": "ask_user"}, {"question": "Which file?"}, "s")["allowed"]
+
+
+def test_routine_tools_and_explicit_hardware_commands_do_not_pause_for_approval(tmp_path):
+    policy = _policy(tmp_path)
+
+    for tool, arguments in (
+        ({"name": "system_info"}, {}),
+        ({"name": "read_file"}, {"path": "Hsx Work/report.txt"}),
+        ({"name": "web_search"}, {"query": "weather"}),
+        ({"name": "capability_resolver"}, {"package": "pillow"}),
+        ({"name": "vision_capture"}, {}),
+        ({"name": "microphone_start"}, {"action": "start"}),
+    ):
+        decision = policy.decide(tool, arguments, "routine-task")
+        assert decision == {"allowed": True, "status": "allowed"}
+
+
+def test_system_changes_still_pause_and_secret_exposure_stays_blocked(tmp_path):
+    policy = _policy(tmp_path)
+
+    system_change = policy.decide(
+        {"name": "system_execute"},
+        {"action": "exec", "command": "sudo systemctl restart hsx"},
+        "system-change",
+    )
+    assert system_change["status"] == "waiting_approval"
+    assert policy.decide(
+        {"name": "system_execute"},
+        {"action": "read_file", "path": "/opt/hsx/.env"},
+        "secret-read",
+    )["status"] == "denied"
+    assert policy.decide(
+        {"name": "read_file"},
+        {"path": "config/.env"},
+        "secret-read-tool",
+    )["status"] == "denied"
+    assert policy.decide(
+        {"name": "read_file"},
+        {"path": r"C:\Hsx\secrets\api.txt"},
+        "secret-read-windows",
+    )["status"] == "denied"
 
 
 def test_command_classification_handles_quoted_and_base64_commands():

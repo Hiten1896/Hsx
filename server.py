@@ -19,7 +19,7 @@ import copy
 import uuid
 from collections.abc import Callable
 from http.cookies import SimpleCookie
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
@@ -52,6 +52,7 @@ from agent.ml.log_recorder import LOG_RECORDER
 from agent.mesh.node_gateway import MeshGateway
 from agent.ml.memory import EXPERIENCE_MEMORY
 from agent.memory import MemoryManager
+from agent.retention import RETENTION_DAYS, RETENTION_INTERVAL_SECONDS, run_retention_maintenance
 from agent.music_catalog import MUSIC_CATALOG
 from agent.notifier import NOTIFIER
 from agent.orchestrator import _vision_request, run_agent
@@ -111,6 +112,7 @@ else:
 set_runtime_registry(TOOLS, SKILL_MAP)
 HISTORY = []
 SESSION_HISTORIES = {}
+SESSION_HISTORY_UPDATED: dict[str, datetime] = {}
 SESSION_LAST_JOBS = {}
 SESSION_LOCKS = {}
 SESSION_LOCKS_GUARD = threading.Lock()
@@ -133,6 +135,9 @@ DEVICES = DeviceRegistry(approval_guard=APPROVAL_GUARD)
 WORKSPACE = Workspace(WORKSPACE_DIR, WORK_DIR)
 FEEDBACK_STORE = FeedbackStore(DATA_DIR / "feedback.db")
 CONVERSATIONS = ConversationStore(DATA_DIR / "conversations.db")
+def _store_session_history(session_id: str, history: list) -> None:
+    SESSION_HISTORIES[session_id] = history
+    SESSION_HISTORY_UPDATED[session_id] = datetime.now(UTC)
 _RESOURCE_ALERT_LOCK = threading.Lock()
 _RESOURCE_ALERT_STATE = {"cpu": False, "memory": False, "disk": False}
 _ACTIVITY_IMAGE_LOCK = threading.Lock()
@@ -611,12 +616,12 @@ def _camera_status_payload(include_host: bool = True, session_id: str = "") -> d
 
 
 def _session_artifacts(session_id: str) -> list[dict]:
+    ARTIFACTS.migrate_from_workspace(WORKSPACE, session_id, ASK_JOBS, ARTIFACT_SUFFIXES)
     artifacts = ARTIFACTS.list(session_id)
-    if not artifacts:
-        ARTIFACTS.migrate_from_workspace(WORKSPACE, session_id, ASK_JOBS, ARTIFACT_SUFFIXES)
-        artifacts = ARTIFACTS.list(session_id)
     visible = []
     for artifact in artifacts:
+        if _is_user_upload_path(artifact["path"]):
+            continue
         try:
             path = WORKSPACE.resolve_read(artifact["path"])
         except (OSError, ValueError):
@@ -720,7 +725,7 @@ def _resume_ask_job(job_id: str) -> None:
                 else "waiting_for_approval"
             ),
         )
-        SESSION_HISTORIES[job["session_id"]] = approval.checkpoint
+        _store_session_history(job["session_id"], approval.checkpoint)
         ASK_JOBS.save_device_actions(job_id, device_actions)
         _emit_chat_event(job_id, "job", _ask_job_payload(updated))
         permission_request = approval.approval_request.get("request_type") == "permission_request"
@@ -736,7 +741,7 @@ def _resume_ask_job(job_id: str) -> None:
         return
     except AskUserRequest as question:
         updated = ASK_JOBS.pause(job_id, question)
-        SESSION_HISTORIES[job["session_id"]] = question.checkpoint
+        _store_session_history(job["session_id"], question.checkpoint)
         ASK_JOBS.save_device_actions(job_id, device_actions)
         if updated["state"] == "waiting_for_user":
             POLICY.audit_event("needs_input", job["session_id"], job_id, "waiting_for_user")
@@ -750,15 +755,15 @@ def _resume_ask_job(job_id: str) -> None:
         POLICY.audit_event("question_limit", job["session_id"], job_id, "cancelled")
         return
     except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
-        SESSION_HISTORIES[job["session_id"]] = resume_history
+        _store_session_history(job["session_id"], resume_history)
         _fail_job(job_id, job, error, started_at=started_at)
         return
     except Exception as error:
-        SESSION_HISTORIES[job["session_id"]] = resume_history
+        _store_session_history(job["session_id"], resume_history)
         _fail_job(job_id, job, error, started_at=started_at)
         return
     else:
-        SESSION_HISTORIES[job["session_id"]] = history
+        _store_session_history(job["session_id"], history)
         ASK_JOBS.complete(job_id, response, device_actions)
         _record_job_telemetry(
             job,
@@ -923,7 +928,7 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
                 else "waiting_for_approval"
             ),
         )
-        SESSION_HISTORIES[job["session_id"]] = next_approval.checkpoint
+        _store_session_history(job["session_id"], next_approval.checkpoint)
         ASK_JOBS.save_device_actions(job_id, device_actions)
         _emit_chat_event(job_id, "job", _ask_job_payload(updated))
         request_type = next_approval.approval_request.get("request_type")
@@ -941,7 +946,7 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
         return
     except AskUserRequest as question:
         updated = ASK_JOBS.pause(job_id, question)
-        SESSION_HISTORIES[job["session_id"]] = question.checkpoint
+        _store_session_history(job["session_id"], question.checkpoint)
         ASK_JOBS.save_device_actions(job_id, device_actions)
         _emit_chat_event(job_id, "job", _ask_job_payload(updated))
         if updated["state"] == "waiting_for_user":
@@ -956,15 +961,15 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
             POLICY.audit_event("question_limit", job["session_id"], job_id, "cancelled")
         return
     except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
-        SESSION_HISTORIES[job["session_id"]] = resume_history
+        _store_session_history(job["session_id"], resume_history)
         _fail_job(job_id, job, error, started_at=started_at)
         return
     except Exception as error:
-        SESSION_HISTORIES[job["session_id"]] = resume_history
+        _store_session_history(job["session_id"], resume_history)
         _fail_job(job_id, job, error, started_at=started_at)
         return
 
-    SESSION_HISTORIES[job["session_id"]] = history
+    _store_session_history(job["session_id"], history)
     ASK_JOBS.complete(job_id, response, device_actions)
     _record_job_telemetry(
         job,
@@ -1117,7 +1122,7 @@ def _run_chat_job(
                 else "waiting_for_approval"
             ),
         )
-        SESSION_HISTORIES[job["session_id"]] = approval.checkpoint
+        _store_session_history(job["session_id"], approval.checkpoint)
         ASK_JOBS.save_device_actions(job_id, device_actions)
         _emit_chat_event(job_id, "job", _ask_job_payload(updated))
         _emit_chat_event(job_id, "done", {})
@@ -1141,7 +1146,7 @@ def _run_chat_job(
         return
     except AskUserRequest as question:
         updated = ASK_JOBS.pause(job_id, question)
-        SESSION_HISTORIES[job["session_id"]] = question.checkpoint
+        _store_session_history(job["session_id"], question.checkpoint)
         ASK_JOBS.save_device_actions(job_id, device_actions)
         _emit_chat_event(job_id, "job", _ask_job_payload(updated))
         _emit_chat_event(job_id, "done", {})
@@ -1168,7 +1173,7 @@ def _run_chat_job(
         latest = ASK_JOBS.get(job_id)
         if latest is None or latest["state"] != "running":
             return
-        SESSION_HISTORIES[job["session_id"]] = updated_history
+        _store_session_history(job["session_id"], updated_history)
         completed = ASK_JOBS.complete(job_id, response, device_actions)
         if completed is None or completed["state"] != "done":
             return
@@ -1637,7 +1642,11 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif path == "/api/outputs":
             session_id = str(query.get("session_id", [""])[0])[:100]
             files = _session_artifacts(session_id)
-            self._json({"files": files})
+            self._json({
+                "files": files,
+                "storage_path": str(WORK_DIR),
+                "storage_available": WORK_DIR.is_dir(),
+            })
         elif self.path == "/api/video/jobs":
             self._json({"jobs": list_video_jobs()})
         elif path.startswith("/api/video/jobs/"):
@@ -2556,8 +2565,38 @@ def create_http_server() -> ThreadingHTTPServer:
         raise
 
 
+def _run_retention_maintenance() -> None:
+    try:
+        counts = run_retention_maintenance(
+            feedback_store=FEEDBACK_STORE,
+            conversations=CONVERSATIONS,
+            memory=MEMORY,
+            ask_jobs=ASK_JOBS,
+            jobs=JOBS,
+            data_dir=DATA_DIR,
+            logs_dir=BASE_DIR / "logs",
+            memory_dir=BASE_DIR / "memory",
+        )
+        cutoff = datetime.now(UTC) - timedelta(days=RETENTION_DAYS)
+        for session_id, updated_at in list(SESSION_HISTORY_UPDATED.items()):
+            if updated_at < cutoff:
+                SESSION_HISTORIES.pop(session_id, None)
+                SESSION_HISTORY_UPDATED.pop(session_id, None)
+        LOGGER.info("Local seven-day retention and personalization refresh completed: %s", counts)
+    except (OSError, sqlite3.Error, ValueError):
+        LOGGER.exception("Local retention and personalization refresh failed.")
+
+
+def _retention_worker() -> None:
+    while True:
+        time.sleep(RETENTION_INTERVAL_SECONDS)
+        _run_retention_maintenance()
+
+
 if __name__ == "__main__":
     http_server = create_http_server()
+    _run_retention_maintenance()
+    threading.Thread(target=_retention_worker, name="hsx-retention", daemon=True).start()
     if GROQ_API_KEY:
         try:
             GroqProvider(GROQ_API_KEY, GROQ_MODEL)

@@ -133,12 +133,13 @@ def test_web_chat_stream_with_strict_fake_provider(provider_kind, tmp_path, monk
 
     stream = body.decode()
     assert status == 200
-    assert "waiting_for_approval" in stream
-    assert '"request_type":"tool_consent"' in stream
-    assert '"success": true' not in stream
+    assert '"state":"done"' in stream
+    assert '"request_type":"tool_consent"' not in stream
+    assert '"status":"completed"' in stream
     assert "event: tool_start" in stream
     assert "event: tool_end" in stream
-    assert len(StrictProviderHandler.requests) == 1
+    assert "The tool returned from tool." in stream
+    assert len(StrictProviderHandler.requests) == 2
 
 
 def test_authenticated_stream_creates_workspace_artifact(tmp_path: Path, monkeypatch):

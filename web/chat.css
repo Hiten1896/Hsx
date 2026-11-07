@@ -323,6 +323,7 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 .artifacts-panel, .activity-panel { overflow: hidden; margin-top: 13px; border: 1px solid #354038; border-radius: 13px; background: #1c231e; }
 .artifacts-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 13px 15px; border-bottom: 1px solid #313a33; }
 .artifacts-heading h2 { margin: 5px 0 0; font-size: 13px; font-weight: 650; }
+.artifacts-location { max-width: 260px; margin: 4px 0 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .artifacts-list { display: grid; gap: 7px; padding: 10px; }
 .artifacts-empty { margin: 5px; color: #8d998f; font-size: 10px; line-height: 1.5; }
 .artifact-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 9px; border: 1px solid #303a33; border-radius: 9px; background: #202722; }

@@ -128,3 +128,21 @@ it does not imply live hardware or production-provider verification.
 - HP deployment, Tailscale routing, systemd behavior, and camera/microphone hardware
   remain not verified from this Windows development host. Provider behavior is
   tested against local fakes, not live external services.
+
+## Latest follow-up: shared artifacts, memory, feedback, and retention
+
+| Area | Status | Notes / Evidence |
+|---|---|---|
+| Routine permissions and host-change approvals | **DONE + TESTED** | Routine actions no longer require repeated approval; host-impacting actions remain policy-gated. Windows-style secret paths are covered by policy tests. |
+| Shared Hsx Work artifacts | **DONE + TESTED** | Artifact listings are shared across chat sessions, and uploaded files are excluded from generated artifacts. Access from another device depends on the configured Hsx Work network share being mounted and reachable. |
+| Persistent personalization facts | **DONE + TESTED** | Explicit memory facts are mirrored to `memory/facts.json`; transcript retention can be pruned independently. |
+| One-click thumbs feedback | **DONE + TESTED** | Ratings submit immediately without opening a feedback dialog. Stored conversation context is redacted by default, and tool outputs/file contents are omitted unless explicitly enabled. |
+| Seven-day local retention and learning summaries | **PARTLY** | Hourly local maintenance summarizes ratings/tool usage and training-example counts, then prunes expired chats, feedback, transcripts, job records, and JSONL data. This does not fine-tune provider model weights. |
+| Uploaded image/document viewer | **DONE + TESTED** | Uploaded files open in the in-app preview; authenticated PDFs use blob URLs, and viewer URLs are revoked on close or tab change. |
+
+Final validation for this follow-up:
+
+- `ruff check .` exited 0.
+- `.\.venv\Scripts\python.exe -m pytest -q` exited 0; platform-dependent tests were skipped as expected.
+- `node --check web\chat.js` and `git diff --check` exited 0.
+- Browser/API behavior and provider flows were tested locally with the repository test harness and fake providers. Physical hardware, external network-share access, and live provider services were not tested.

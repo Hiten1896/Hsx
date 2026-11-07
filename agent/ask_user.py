@@ -404,6 +404,16 @@ class AskUserJobs:
                 (now, now),
             ).rowcount
 
+    def prune_before(self, cutoff: str) -> int:
+        self.expire()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM ask_jobs WHERE created < ? "
+                "AND state IN ('done', 'failed', 'cancelled')",
+                (cutoff,),
+            )
+        return cursor.rowcount
+
     def start_expiration_worker(self) -> None:
         if self._expirer is not None and self._expirer.is_alive():
             return

@@ -20,7 +20,11 @@ _HARD_DENY = re.compile(
     r"|(?:\.env|api[_-]?key|bearer[_-]?token).{0,100}(?:\bcurl\b|\bwget\b|\bnc\b|\bsocat\b|\bssh\b)",
     re.IGNORECASE | re.DOTALL,
 )
-_SECRET_READ = re.compile(r"(?:\.env\b|/\.ssh/|/secrets?/|\bprintenv\b|\benv\b|owner\.pin)", re.IGNORECASE)
+_SECRET_READ = re.compile(
+    r"(?:\.env\b|[\\/]\.ssh[\\/]|[\\/]secrets?[\\/]|"
+    r"\bprintenv\b|\benv\b|owner\.pin)",
+    re.IGNORECASE,
+)
 _PIPE_TO_SHELL = re.compile(r"\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b", re.IGNORECASE)
 _PRIVILEGED_COMMANDS = re.compile(r"\b(?:sudo|su|reboot|shutdown|poweroff|halt)\b", re.IGNORECASE)
 _DELETIONS = re.compile(r"\b(?:rm|rmdir|unlink|del|erase)\b", re.IGNORECASE)
@@ -106,6 +110,13 @@ def remove_always_allow(pattern: str, *, path: Path | None = None) -> dict:
 def classify_action(tool_name: str, arguments: dict) -> str:
     name = tool_name.casefold()
     action = str(arguments.get("action", "")).casefold()
+    if name in {"read_file", "search_files", "list_files", "workspace"}:
+        target = "\n".join(
+            str(arguments.get(key, ""))
+            for key in ("path", "file_path", "filename", "directory")
+        )
+        if _SECRET_READ.search(target):
+            return "read_secrets"
     if name in {"system_execute", "shell"}:
         if name == "shell" and not action:
             action = "exec"
@@ -132,9 +143,9 @@ def classify_action(tool_name: str, arguments: dict) -> str:
             if _PRIVILEGED_COMMANDS.search(inspected_command):
                 return "sudo" if re.search(r"\b(?:sudo|su)\b", inspected_command, re.I) else "shutdown_reboot"
             if _DELETIONS.search(inspected_command):
-                return "delete_owner_files"
+                return "" if _shell_targets_hsx_work(command, arguments) else "delete_owner_files"
             if _WRITES.search(inspected_command):
-                return "overwrite_owner_files"
+                return "" if _shell_targets_hsx_work(command, arguments) else "overwrite_owner_files"
             if executable == "systemctl" or re.search(r"\b(?:service|systemctl)\b", command, re.I):
                 return "system_services"
             return ""
@@ -143,10 +154,8 @@ def classify_action(tool_name: str, arguments: dict) -> str:
         if action == "write_file":
             raw_path = str(arguments.get("path", ""))
             candidate = Path(raw_path) if Path(raw_path).is_absolute() else WORKSPACE_DIR / raw_path
-            if candidate.exists():
-                return "overwrite_owner_files"
-            if not _within(candidate, (WORKSPACE_DIR, WORK_DIR)):
-                return "system_services"
+            if not _within(candidate, (WORK_DIR,)):
+                return "overwrite_owner_files" if candidate.exists() else "system_services"
         if action == "service_action":
             return "system_services"
     if name in {"camera_snapshot", "vision_capture", "camera_record"}:
@@ -161,10 +170,55 @@ def classify_action(tool_name: str, arguments: dict) -> str:
         return "external_services"
     if name in {"create_text_file", "make_docx", "make_csv", "make_markdown", "make_website", "report", "make_pdf"}:
         filename = str(arguments.get("filename", arguments.get("path", "")))
-        candidate = Path(filename) if Path(filename).is_absolute() else WORKSPACE_DIR / filename
-        if candidate.exists():
-            return "overwrite_owner_files"
+        candidate = Path(filename) if Path(filename).is_absolute() else WORK_DIR / filename
+        if not _within(candidate, (WORK_DIR,)):
+            return "overwrite_owner_files" if candidate.exists() else "system_services"
     return ""
+
+
+def _shell_targets_hsx_work(command: str, arguments: dict) -> bool:
+    """Only exempt simple, explicit mutations wholly contained in Hsx Work."""
+    try:
+        tokens = shlex.split(command, posix=os.name != "nt")
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+
+    executable = tokens[0].replace("\\", "/").rsplit("/", 1)[-1].removesuffix(".exe").casefold()
+    if executable in {"rm", "rmdir", "unlink", "del", "erase"}:
+        targets = [
+            token for token in tokens[1:]
+            if not token.startswith("-") and token != "--"
+        ]
+    elif executable in {"mv", "cp"}:
+        targets = [tokens[-1]] if len(tokens) >= 3 else []
+    elif executable == "tee":
+        targets = [token for token in tokens[1:] if not token.startswith("-")]
+    elif executable == "truncate":
+        targets = [
+            token.split("=", 1)[1]
+            for token in tokens[1:]
+            if token.startswith("--") and token.split("=", 1)[0] in {"--size", "--reference"}
+        ]
+    else:
+        return False
+
+    if not targets or any(
+        any(character in target for character in ";|><$`()")
+        for target in targets
+    ):
+        return False
+    working_directory = Path(str(arguments.get("cwd") or WORKSPACE_DIR)).expanduser()
+    return all(
+        _within(
+            Path(target.strip("\"'"))
+            if Path(target.strip("\"'")).is_absolute()
+            else working_directory / target.strip("\"'"),
+            (WORK_DIR,),
+        )
+        for target in targets
+    )
 
 
 def is_hard_denied(tool_name: str, arguments: dict) -> bool:

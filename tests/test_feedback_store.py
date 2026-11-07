@@ -8,6 +8,7 @@ from agent.feedback import FeedbackStore
 
 def test_feedback_write_read_export_redacts_private_values(tmp_path):
     store = FeedbackStore(tmp_path / "feedback.sqlite")
+    store.update_settings(save_feedback=True, include_full_conversation=False)
     assert store.record(
         conversation_id="conversation-1",
         message_id="message-1",
@@ -44,6 +45,33 @@ def test_feedback_rating_update_is_idempotent(tmp_path):
     assert store.export_records()[0]["note"] == "Changed my mind"
 
 
+def test_feedback_keeps_redacted_tool_calls_but_not_tool_output_and_prunes_by_cutoff(tmp_path):
+    store = FeedbackStore(tmp_path / "feedback.sqlite")
+    assert store.settings()["include_full_conversation"] is True
+    store.record(
+        conversation_id="conversation-1",
+        message_id="message-1",
+        rating="up",
+        tool_names=["shell"],
+        full_conversation=[
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "name": "shell", "input": {"command": "ls"}}],
+            },
+            {"role": "tool", "tool_call_id": "call-1", "content": "private file contents"},
+        ],
+    )
+    serialized = json.dumps(store.export_records()[0])
+    assert '"command": "ls"' in serialized
+    assert "TOOL_RESULT_OMITTED" in serialized
+    assert "private file contents" not in serialized
+
+    with store._connect() as connection:
+        connection.execute("UPDATE feedback SET created_at = ?", ("2000-01-01T00:00:00+00:00",))
+    assert store.prune_before("2025-01-01T00:00:00+00:00") == 1
+    assert store.settings()["count"] == 0
+
+
 def test_feedback_opt_out_and_delete_all(tmp_path):
     store = FeedbackStore(tmp_path / "feedback.sqlite")
     store.update_settings(
@@ -68,6 +96,7 @@ def test_feedback_opt_out_and_delete_all(tmp_path):
 
 def test_feedback_export_full_conversation_requires_setting_and_file_opt_in(tmp_path):
     store = FeedbackStore(tmp_path / "feedback.sqlite")
+    store.update_settings(save_feedback=True, include_full_conversation=False)
     store.record(
         conversation_id="conversation-1",
         message_id="message-1",
@@ -106,6 +135,7 @@ def test_feedback_export_full_conversation_requires_setting_and_file_opt_in(tmp_
 
 def test_feedback_redacts_structured_secret_values(tmp_path):
     store = FeedbackStore(tmp_path / "feedback.sqlite")
+    store.update_settings(save_feedback=True, include_full_conversation=False)
     store.record(
         conversation_id="conversation-1",
         message_id="message-1",
@@ -133,6 +163,7 @@ def test_feedback_export_cli_writes_redacted_jsonl_without_file_contents(tmp_pat
     database = tmp_path / "feedback.sqlite"
     output = tmp_path / "feedback.jsonl"
     store = FeedbackStore(database)
+    store.update_settings(save_feedback=True, include_full_conversation=False)
     store.record(
         conversation_id="conversation-1",
         message_id="message-1",

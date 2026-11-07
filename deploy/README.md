@@ -20,6 +20,10 @@ cannot be found; installing a package does not prove that speakers are
 connected or audible.
 
 Set `HSX_WORKSPACE=/home/hsxshare` and `HSX_WORK_DIR=Hsx Work` in `/opt/hsx/.env`. Create `Hsx Work` from the Samba owner account before starting Hsx so that it retains the intended ownership. Grant `hsx` read/traverse ACLs on the share and write ACLs only on `Hsx Work` (the README includes example `setfacl` commands). Verify with `getfacl`; do not solve write failures by granting the agent write access to the share root.
+The Artifacts panel indexes files from this shared `Hsx Work` directory on refresh and
+serves them through the authenticated Hsx web app. Connect other devices to the same
+Hsx server to browse and download the same deliverables; the network share must remain
+mounted at the configured path on the HP host.
 
 Install `deploy/hsx.service` with systemd. To enable Web Push, run `sudo sh deploy/generate-vapid.sh` after installing the requirements. This creates `/etc/hsx/secrets.env` with VAPID keys and `root:hsx` ownership, mode `0640`; the service loads it as an optional environment file. Keep Hsx bound to loopback. Brave requires **Use Google Services for push messaging** to receive Web Push; Chrome and Edge work by default.
 
@@ -38,5 +42,7 @@ authorization to deploy code.
 
 The included Docker Compose port mapping exposes the container listener and is not
 covered by the loopback-only systemd deployment guidance; do not use it to publish
-the API. Back up `memory/`, `data/`, and the shared `Hsx Work/` results before
-updating the installation.
+the API. Chat, feedback, and training records older than seven days are summarized
+locally and pruned hourly; explicit facts in `memory/facts.json` and generated files
+in the shared `Hsx Work/` folder are not removed by that retention job. Back up
+`memory/`, `data/`, and the shared `Hsx Work/` results before updating the installation.

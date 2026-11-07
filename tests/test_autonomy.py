@@ -45,7 +45,27 @@ def test_write_path_symlink_outside_workspace_is_permissioned(tmp_path, monkeypa
     monkeypatch.setattr(autonomy, "WORKSPACE_DIR", workspace)
     monkeypatch.setattr(autonomy, "WORK_DIR", workspace / "Hsx Work")
     assert classify_action("system_execute", {"action": "write_file", "path": "escape/new.txt"}) == "system_services"
-    assert classify_action("system_execute", {"action": "write_file", "path": "new.txt"}) == ""
+    assert classify_action("system_execute", {"action": "write_file", "path": "new.txt"}) == "system_services"
+    assert classify_action("system_execute", {"action": "write_file", "path": "Hsx Work/new.txt"}) == ""
+
+
+def test_shell_delete_inside_hsx_work_is_in_scope_but_system_paths_are_not(tmp_path, monkeypatch):
+    import agent.autonomy as autonomy
+
+    workspace = tmp_path / "share"
+    work_dir = workspace / "Hsx Work"
+    work_dir.mkdir(parents=True)
+    monkeypatch.setattr(autonomy, "WORKSPACE_DIR", workspace)
+    monkeypatch.setattr(autonomy, "WORK_DIR", work_dir)
+
+    assert classify_action(
+        "system_execute",
+        {"action": "exec", "command": f'rm -f "{work_dir / "old file.txt"}"'},
+    ) == ""
+    assert classify_action(
+        "system_execute",
+        {"action": "exec", "command": "rm -f /etc/hsx/hsx.service"},
+    ) == "delete_owner_files"
 
 
 def test_approval_answer_normalizes_typos():
