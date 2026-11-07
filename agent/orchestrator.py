@@ -112,6 +112,17 @@ def _text_from_response(response) -> str:
     return "\n".join(block.text for block in response.content if getattr(block, "type", "") == "text")
 
 
+def _image_path_was_named(user_input: str, path: str) -> bool:
+    normalized_path = path.strip().replace("\\", "/").casefold()
+    normalized_request = user_input.replace("\\", "/").casefold()
+    if not normalized_path:
+        return False
+    return re.search(
+        rf"(?<![\w/-])(?<!\w\.){re.escape(normalized_path)}(?![\w/-]|\.\w)",
+        normalized_request,
+    ) is not None
+
+
 def _friendly_structured_answer(value: object) -> str:
     """Keep tool payloads out of chat when a model echoes raw JSON."""
     try:
@@ -822,6 +833,13 @@ def run_agent(
                 tool_input = dict(call.input)
                 if call.name in {"audio_play", "camera_record"}:
                     tool_input["target_device"] = target_device
+                if call.name == "describe_image" and not _image_path_was_named(
+                    user_input,
+                    str(tool_input.get("path", "")),
+                ):
+                    raise PermissionError(
+                        "Only an image named or attached in your message can be sent for description."
+                    )
                 result = skill_map[call.name](**tool_input)
             except AskUserRequest as question:
                 if on_activity_event is not None:

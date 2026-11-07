@@ -16,6 +16,12 @@ def run(package: str, capability: str) -> dict:
     if not recipe:
         raise ValueError("That package is not in Hsx's reviewed recipe catalog.")
     requirement = f"{package}=={recipe['version']}"
+    if sys.prefix == sys.base_prefix:
+        POLICY.audit_event("package_install", "capability-resolver", package, "blocked_no_venv")
+        return {
+            "success": False,
+            "error": "Hsx must be restarted from its project virtual environment before installing packages.",
+        }
     POLICY.audit_event("package_install", "capability-resolver", package, "started")
     try:
         result = subprocess.run(
@@ -27,7 +33,7 @@ def run(package: str, capability: str) -> dict:
         module = importlib.import_module(IMPORT_NAMES[package])
         if package == "yt-dlp":
             module.version.__version__
-    except (OSError, ImportError, RuntimeError, subprocess.SubprocessError) as error:
+    except (AttributeError, OSError, ImportError, RuntimeError, subprocess.SubprocessError) as error:
         POLICY.audit_event("package_install", "capability-resolver", package, "failed")
         return {"success": False, "error": f"I couldn't install {requirement} into the Hsx environment: {error}"}
     POLICY.audit_event("package_install", "capability-resolver", package, "self_test_passed")

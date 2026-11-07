@@ -113,6 +113,44 @@ def test_weather_request_calls_registered_web_search(monkeypatch):
     assert "Sunny" in answer
 
 
+def test_describe_image_rejects_an_unmentioned_path_before_tool_execution(monkeypatch):
+    _setup(monkeypatch, "describe_image", 0.1)
+    responses = iter([
+        NormalizedResponse([
+            NormalizedBlock(
+                type="tool_use",
+                name="describe_image",
+                input={"path": "private/secret.png", "question": "What is shown?"},
+                id="image-call",
+            ),
+        ]),
+        NormalizedResponse([NormalizedBlock(type="text", text="I can only describe images you name or attach.")]),
+    ])
+    monkeypatch.setattr(orchestrator, "call_llm", lambda *args, **kwargs: next(responses))
+    calls = []
+
+    answer, _ = orchestrator.run_agent(
+        "Describe the screenshot.",
+        [],
+        [{
+            "name": "describe_image",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "question": {"type": "string"},
+                },
+                "required": ["path", "question"],
+            },
+        }],
+        {"describe_image": lambda **kwargs: calls.append(kwargs)},
+        job_id="unmentioned-image",
+    )
+
+    assert calls == []
+    assert answer == "I can only describe images you name or attach."
+
+
 def test_router_is_not_called_when_no_tools_are_available(monkeypatch):
     class UnexpectedIntentRouter:
         def predict_with_confidence(self, prompt):

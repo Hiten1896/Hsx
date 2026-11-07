@@ -36,7 +36,7 @@ it does not imply live hardware or production-provider verification.
 | UI data/source audit and bounded “Checking” states | DONE + TESTED | `docs/ui-audit.md`, `server.py`, `web/chat.js`; displayed states are tied to live endpoints or browser facts, and API requests have an 8-second timeout with explicit unavailable states. |
 | Server-backed history, new-chat persistence, feedback and settings tabs | DONE + TESTED | `agent/conversations.py`, `server.py`, `web/chat.js`, `tests/test_conversations.py`, `tests/test_browser_ui.py`; browser tests cover reload/another-browser history, rename/delete, feedback, and settings tabs. |
 
-## Phase 4: Truthful capabilities and personal voice — PARTLY
+## Phase 4: Truthful capabilities and personal voice — DONE + TESTED
 
 | Requirement | Status | Evidence |
 |---|---|---|
@@ -48,9 +48,9 @@ it does not imply live hardware or production-provider verification.
 
 | Requirement | Status | Evidence |
 |---|---|---|
-| Safe capability-gap resolver with pinned catalog, approval, install, self-test and continuation | PARTLY | `agent/package_catalog.py`, `skills/capability_resolver/`, `agent/tools/dynamic_registry.py`, `tests/test_dynamic_tool_creation.py`; pinned, audited installation and end-to-end continuation are not established. |
-| Image description restricted to named/attached files, resized/converted and provider-tested | PARTLY | `skills/describe_image/`, `agent/tools/vision_capture.py`, `tests/test_hardware_routing.py`; provider image-part enforcement was not verified. |
-| Music search/play, bounded cache, range endpoint, player card, mobile gesture and settings updater | NOT STARTED | No music skills, authenticated audio endpoint, or player implementation found. |
+| Safe capability-gap resolver with pinned catalog, approval, install, self-test and continuation | PARTLY | `agent/package_catalog.py`, `skills/capability_resolver/`, `agent/tools/dynamic_registry.py`, `tests/test_dynamic_tool_creation.py`, and `tests/test_capability_resolver.py`; pinned installs are constrained to an active virtual environment and tested with mocks, but plan-card approval and end-to-end continuation are not established. |
+| Image description restricted to named/attached files, resized/converted and provider-tested | DONE + TESTED | `skills/describe_image/skill.py` limits and resizes images to the provider cap, converts to JPEG, uses Gemini, and `agent/orchestrator.py` enforces explicit path boundaries; `tests/test_describe_image.py` and `tests/test_orchestrator_router.py` check the image part and reject unmentioned or path-confusable files. Provider and image inputs are simulated. |
+| Music search/play, bounded cache, range endpoint, player card, mobile gesture and settings updater | NOT STARTED | No music-specific search/play skills, authenticated audio endpoint, bounded cache, player card, or updater found. Existing generic media-download support is not the requested music workflow. |
 
 ## Phase 6: Web access and hardening — PARTLY
 
