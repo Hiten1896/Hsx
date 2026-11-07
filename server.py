@@ -491,7 +491,7 @@ def _notify_motion_event(event: dict) -> None:
 
 
 def _notify_resource_alerts(metrics: SystemMetrics) -> None:
-    disk = shutil.disk_usage(DATA_DIR)
+    disk = shutil.disk_usage(WORKSPACE_DIR)
     disk_ratio = disk.used / max(1, disk.total)
     temp = metrics.temperature_c
     if temp is None:

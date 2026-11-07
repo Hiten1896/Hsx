@@ -26,7 +26,7 @@ def _cpu_model() -> str:
 
 def system_info() -> dict:
     memory = psutil.virtual_memory()
-    workspace_disk = psutil.disk_usage(WORKSPACE_DIR)
+    workspace_disk = psutil.disk_usage(str(WORKSPACE_DIR))
     system_disk = psutil.disk_usage(os.path.abspath(os.sep))
     now = datetime.now().astimezone()
     return {
