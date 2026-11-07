@@ -204,6 +204,37 @@ def test_camera_status_is_read_only_and_does_not_start_camera(monkeypatch):
     assert camera.started is False
 
 
+def test_main_keeps_camera_off_when_no_camera_service_is_enabled(monkeypatch):
+    import main
+
+    class Service:
+        def __init__(self, is_enabled=False):
+            self.is_enabled = is_enabled
+            self.starts = 0
+
+        def start(self):
+            self.starts += 1
+
+        def enabled(self):
+            return self.is_enabled
+
+    camera = Service()
+    speaker = Service()
+    camera_stream = Service()
+    motion_monitor = Service()
+    monkeypatch.setattr(main, "CAMERA", camera)
+    monkeypatch.setattr(main, "SPEAKER", speaker)
+    monkeypatch.setattr(main, "CAMERA_STREAM", camera_stream)
+    monkeypatch.setattr(main, "MOTION_MONITOR", motion_monitor)
+
+    main._start_hardware_services()
+
+    assert camera.starts == 0
+    assert speaker.starts == 1
+    assert camera_stream.starts == 0
+    assert motion_monitor.starts == 0
+
+
 def test_microphone_service_discards_audio_and_releases_last_owner(monkeypatch):
     import sys
     from types import ModuleType

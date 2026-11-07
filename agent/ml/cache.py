@@ -10,6 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from agent.feedback import redact_text
 from config import DATA_DIR
 from .storage import atomic_write_json
 
@@ -249,8 +250,8 @@ class SemanticCache:
             }
 
     def put(self, query: str, response: str, *, metadata: dict[str, Any] | None = None) -> bool:
-        clean_query = query.strip()[:2000]
-        clean_response = response.strip()[:MAX_RESPONSE_CHARS]
+        clean_query = redact_text(query.strip())[:2000]
+        clean_response = redact_text(response.strip())[:MAX_RESPONSE_CHARS]
         shingles = _shingles(clean_query, self.ngram_range)
         if (
             not clean_query

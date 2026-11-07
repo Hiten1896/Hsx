@@ -7,6 +7,7 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
+from agent.feedback import redact_text
 from config import DATA_DIR
 
 LOGGER = logging.getLogger("hsx.ml.intent_learning")
@@ -17,7 +18,7 @@ SECRET_PATTERN = re.compile(
 
 def _redact_prompt(prompt: str) -> str:
     prompt = prompt.strip()[:1200]
-    return SECRET_PATTERN.sub(r"\1=[REDACTED]", prompt)
+    return redact_text(SECRET_PATTERN.sub(r"\1=[REDACTED]", prompt))
 
 
 class UncertainIntentQueue:

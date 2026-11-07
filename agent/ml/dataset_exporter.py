@@ -4,11 +4,13 @@ import json
 import logging
 import os
 import re
+import tempfile
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from agent.feedback import redact_text
 from config import DATA_DIR
 
 LOGGER = logging.getLogger("hsx.ml.dataset_exporter")
@@ -27,7 +29,7 @@ MAX_TRAJECTORY_ITEMS = 128
 
 def _redact(value: str, limit: int) -> str:
     value = SECRET_PATTERN.sub(r"\1[REDACTED]", value.strip())
-    return BEARER_PATTERN.sub(r"\1[REDACTED]", value)[:limit]
+    return redact_text(BEARER_PATTERN.sub(r"\1[REDACTED]", value))[:limit]
 
 
 def _tool_trajectory(history: list | None) -> list[dict[str, str]]:
@@ -147,6 +149,42 @@ class DatasetExporter:
             finally:
                 os.close(descriptor)
         return True
+
+    def remove_job(self, job_id: str) -> int:
+        if not job_id or not self.path.is_file():
+            return 0
+        with self._lock:
+            retained = []
+            removed = 0
+            with self.path.open(encoding="utf-8") as source:
+                for line in source:
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        retained.append(line)
+                        continue
+                    if isinstance(entry, dict) and entry.get("job_id") == job_id:
+                        removed += 1
+                    else:
+                        retained.append(line)
+            if not removed:
+                return 0
+            descriptor, temporary_name = tempfile.mkstemp(
+                dir=self.path.parent,
+                prefix=f".{self.path.name}-",
+                suffix=".tmp",
+                text=True,
+            )
+            temporary_path = Path(temporary_name)
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as destination:
+                    destination.writelines(retained)
+                    destination.flush()
+                    os.fsync(destination.fileno())
+                os.replace(temporary_path, self.path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
+            return removed
 
 
 SFT_DATASET = DatasetExporter()

@@ -14,7 +14,14 @@ from agent.ml.log_recorder import LOG_RECORDER
 from agent.memory.knowledge_graph import KNOWLEDGE_GRAPH
 from agent.mesh import MeshDiscoveryService
 from config import DATA_DIR, GROQ_API_KEY, GROQ_MODEL, HOST, PORT
-from server import APPROVAL_GUARD, MESH_GATEWAY, TOOLS, HsxHandler
+from server import (
+    APPROVAL_GUARD,
+    MESH_GATEWAY,
+    TOOLS,
+    HsxHandler,
+    _retention_worker,
+    _run_retention_maintenance,
+)
 
 LOGGER = logging.getLogger("hsx.main")
 
@@ -58,10 +65,7 @@ def _start_hardware_services() -> None:
         )
         return
     if not camera_enabled and not motion_enabled:
-        try:
-            CAMERA.start()
-        except (OSError, RuntimeError, ValueError):
-            LOGGER.exception("Could not start the live camera service.")
+        return
     for service in (CAMERA_STREAM, MOTION_MONITOR):
         if not service.enabled():
             continue
@@ -69,6 +73,13 @@ def _start_hardware_services() -> None:
             service.start()
         except (OSError, RuntimeError, ValueError):
             LOGGER.exception("Could not start opt-in hardware service %s.", type(service).__name__)
+
+
+def _start_retention_services() -> threading.Thread:
+    _run_retention_maintenance()
+    worker = threading.Thread(target=_retention_worker, name="hsx-retention", daemon=True)
+    worker.start()
+    return worker
 
 
 if __name__ == "__main__":
@@ -97,6 +108,7 @@ if __name__ == "__main__":
         discovery_service = MeshDiscoveryService(MESH_GATEWAY)
         print(f"Secure HSX mesh API ready at https://{MESH_GATEWAY.host}:{MESH_GATEWAY.port}")
     LOG_RECORDER.install()
+    _start_retention_services()
     if discovery_service is not None:
         try:
             discovery_service.start()

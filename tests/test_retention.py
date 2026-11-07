@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import UTC, datetime, timedelta
 
 from agent.ask_user import AskUserJobs
@@ -70,6 +71,13 @@ def test_retention_analyzes_recent_feedback_then_prunes_old_chat_records(tmp_pat
         + json.dumps({"timestamp": recent, "prompt": "recent"}) + "\n",
         encoding="utf-8",
     )
+    workload_file = data_dir / "workload_history.jsonl"
+    workload_file.write_text(
+        json.dumps({"timestamp": (now - timedelta(days=8)).timestamp(), "kind": "job", "category": "shell"}) + "\n"
+        + json.dumps({"timestamp": (now - timedelta(days=2)).timestamp(), "kind": "job", "category": "shell"}) + "\n",
+        encoding="utf-8",
+    )
+    os.utime(workload_file, (now.timestamp(), now.timestamp()))
 
     removed = run_retention_maintenance(
         feedback_store=feedback,
@@ -105,3 +113,34 @@ def test_retention_analyzes_recent_feedback_then_prunes_old_chat_records(tmp_pat
     assert artifact.read_bytes() == b"generated"
     assert '"prompt": "recent"' in training_file.read_text(encoding="utf-8")
     assert '"prompt": "old"' not in training_file.read_text(encoding="utf-8")
+    workload_records = workload_file.read_text(encoding="utf-8").splitlines()
+    assert len(workload_records) == 1
+    assert json.loads(workload_records[0])["timestamp"] == (now - timedelta(days=2)).timestamp()
+
+
+def test_main_entrypoint_runs_retention_and_starts_hourly_worker(monkeypatch):
+    import main
+
+    events = []
+
+    class ThreadStub:
+        def __init__(self, *, target, name, daemon):
+            events.append(("thread", target, name, daemon))
+
+        def start(self):
+            events.append(("start",))
+
+    def run_maintenance():
+        events.append(("maintenance",))
+
+    monkeypatch.setattr(main, "_run_retention_maintenance", run_maintenance)
+    monkeypatch.setattr(main, "_retention_worker", lambda: None)
+    monkeypatch.setattr(main.threading, "Thread", ThreadStub)
+
+    main._start_retention_services()
+
+    assert events == [
+        ("maintenance",),
+        ("thread", main._retention_worker, "hsx-retention", True),
+        ("start",),
+    ]

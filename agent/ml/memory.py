@@ -12,11 +12,13 @@ from joblib import dump, load
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
+from agent.feedback import redact_text
 from config import DATA_DIR
 
 LOGGER = logging.getLogger("hsx.ml.memory")
 MAX_PROMPT_CHARS = 1200
 MAX_RESPONSE_CHARS = 2400
+INDEX_VERSION = 2
 SECRET_PATTERN = re.compile(
     r"(?i)\b(password|passwd|secret|api[_ -]?key|token)\s*[:=]\s*\S+"
 )
@@ -24,7 +26,7 @@ SECRET_PATTERN = re.compile(
 
 def _redact(text: str, max_chars: int) -> str:
     limited = text.strip()[:max_chars]
-    return SECRET_PATTERN.sub(r"\1=[REDACTED]", limited)
+    return redact_text(SECRET_PATTERN.sub(r"\1=[REDACTED]", limited))
 
 
 def _safe_prompt_text(text: str) -> str:
@@ -54,17 +56,18 @@ class ExperienceMemory:
         self._matrix = None
         self._log_signature: tuple[int, int] | None = None
 
-    def record_success(self, prompt: str, response: str) -> None:
+    def record_feedback(self, job_id: str, prompt: str, response: str, rating: str) -> None:
+        if not job_id or rating not in {"up", "down"}:
+            raise ValueError("A job ID and up/down feedback rating are required.")
         safe_prompt = _redact(prompt, MAX_PROMPT_CHARS)
         safe_response = _redact(response, MAX_RESPONSE_CHARS)
-        if not safe_prompt or not safe_response:
-            return
         entry = {
             "timestamp": datetime.now(UTC).isoformat(),
-            "event": "successful_task",
-            "success": True,
-            "prompt": safe_prompt,
-            "response": safe_response,
+            "event": "rated_task",
+            "job_id": job_id[:100],
+            "rating": rating,
+            "prompt": safe_prompt if rating == "up" else "",
+            "response": safe_response if rating == "up" else "",
         }
         with self._lock:
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,9 +76,9 @@ class ExperienceMemory:
             self._log_signature = None
 
     def _read_records(self) -> list[dict[str, str]]:
-        records = []
+        rated_records: dict[str, dict[str, str] | None] = {}
         if not self.log_path.is_file():
-            return records
+            return []
         with self.log_path.open(encoding="utf-8") as source:
             for line in source:
                 try:
@@ -86,13 +89,25 @@ class ExperienceMemory:
                 if not isinstance(entry, dict):
                     LOGGER.warning("Skipping malformed experience log record.")
                     continue
-                if entry.get("success") is not True:
+                if entry.get("event") == "rated_task":
+                    job_id = entry.get("job_id")
+                    if isinstance(job_id, str) and job_id:
+                        if (
+                            entry.get("rating") == "up"
+                            and isinstance(entry.get("prompt"), str)
+                            and isinstance(entry.get("response"), str)
+                        ):
+                            prompt = _redact(entry["prompt"], MAX_PROMPT_CHARS)
+                            response = _redact(entry["response"], MAX_RESPONSE_CHARS)
+                            rated_records[job_id] = (
+                                {"prompt": prompt, "response": response}
+                                if prompt and response
+                                else None
+                            )
+                        else:
+                            rated_records[job_id] = None
                     continue
-                prompt = _redact(str(entry.get("prompt", "")), MAX_PROMPT_CHARS)
-                response = _redact(str(entry.get("response", "")), MAX_RESPONSE_CHARS)
-                if prompt and response:
-                    records.append({"prompt": prompt, "response": response})
-        return records[-5000:]
+        return [record for record in rated_records.values() if record is not None][-5000:]
 
     def _refresh(self, force: bool = False) -> None:
         signature = None
@@ -103,7 +118,11 @@ class ExperienceMemory:
             return
         if not force and self.index_path.is_file():
             cached = load(self.index_path)
-            if isinstance(cached, dict) and cached.get("signature") == signature:
+            if (
+                isinstance(cached, dict)
+                and cached.get("version") == INDEX_VERSION
+                and cached.get("signature") == signature
+            ):
                 self._records = cached["records"]
                 self._vectorizer = cached["vectorizer"]
                 self._matrix = cached["matrix"]
@@ -122,6 +141,7 @@ class ExperienceMemory:
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
         dump(
             {
+                "version": INDEX_VERSION,
                 "signature": signature,
                 "vectorizer": vectorizer,
                 "matrix": matrix,

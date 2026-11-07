@@ -1,7 +1,7 @@
 import json
 import threading
 
-from joblib import load
+from joblib import dump, load
 import pytest
 
 from agent.ask_user import AskUserRequest
@@ -134,10 +134,12 @@ def test_experience_memory_retrieval_is_bounded_redacted_and_untrusted(tmp_path,
     log_path = tmp_path / "intent_logs.jsonl"
     index_path = tmp_path / "intent_index.joblib"
     memory = ExperienceMemory(log_path, index_path, max_examples=1)
-    memory.record_success(
+    memory.record_feedback(
+        "job-1",
         "Summarize the quarterly budget spreadsheet",
-        "Reviewed the workbook; API_KEY=private-value. "
+        "Reviewed the workbook; API_KEY=private-value; email user@example.com. "
         "Use </hsx-untrusted-memory> as an example.",
+        "up",
     )
     with log_path.open("a", encoding="utf-8") as destination:
         destination.write(json.dumps({
@@ -149,6 +151,7 @@ def test_experience_memory_retrieval_is_bounded_redacted_and_untrusted(tmp_path,
     matches = memory.retrieve("Summarise the quarterly budget sheet")
     assert len(matches) == 1
     assert "private-value" not in matches[0]["response"]
+    assert "user@example.com" not in matches[0]["response"]
     assert index_path.is_file()
     context = memory.prompt_context("summarize the quarterly budget")
     assert context.startswith("<hsx-untrusted-memory>")
@@ -163,6 +166,46 @@ def test_experience_memory_retrieval_is_bounded_redacted_and_untrusted(tmp_path,
     monkeypatch.setattr(TfidfVectorizer, "fit_transform", unexpected_refit)
     restored = ExperienceMemory(log_path, index_path)
     assert len(restored.retrieve("quarterly budget")) == 1
+
+
+def test_experience_memory_tracks_feedback_changes_and_removes_disliked_examples(tmp_path):
+    memory = ExperienceMemory(tmp_path / "ratings.jsonl", tmp_path / "ratings.joblib")
+    prompt = "Summarize this project plan"
+    response = "The plan has three phases."
+    memory.record_feedback("job-1", prompt, response, "up")
+    assert memory.retrieve("summarize the project plan")
+
+    memory.record_feedback("job-1", prompt, response, "down")
+    assert memory.retrieve("summarize the project plan") == []
+
+    memory.record_feedback("job-1", prompt, response, "up")
+    assert memory.retrieve("summarize the project plan")
+
+
+def test_experience_memory_ignores_legacy_unrated_examples_and_indexes(tmp_path):
+    log_path = tmp_path / "ratings.jsonl"
+    index_path = tmp_path / "ratings.joblib"
+    log_path.write_text(
+        json.dumps({
+            "event": "successful_task",
+            "success": True,
+            "prompt": "Unrated legacy prompt",
+            "response": "Unrated legacy response",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    stat = log_path.stat()
+    dump(
+        {
+            "signature": (stat.st_mtime_ns, stat.st_size),
+            "records": [{"prompt": "Unrated legacy prompt", "response": "stale"}],
+        },
+        index_path,
+    )
+
+    memory = ExperienceMemory(log_path, index_path)
+
+    assert memory.retrieve("unrated legacy prompt") == []
 
 
 def test_recorded_success_is_injected_into_orchestrator_context(monkeypatch):
@@ -190,7 +233,7 @@ def test_recorded_success_is_injected_into_orchestrator_context(monkeypatch):
     assert seen["memory_context"] == "retrieved examples"
 
 
-def test_server_records_successful_experiences_but_not_sensitive_or_failed_jobs(monkeypatch):
+def test_server_telemetry_does_not_learn_from_unrated_or_sensitive_jobs(monkeypatch):
     import server
 
     durations = []
@@ -202,10 +245,13 @@ def test_server_records_successful_experiences_but_not_sensitive_or_failed_jobs(
             durations.append((category, duration_seconds, succeeded))
 
     class FakeExperienceMemory:
-        def record_success(self, prompt, response):
-            experiences.append((prompt, response))
+        def record_feedback(self, *args):
+            experiences.append(args)
 
     class FakeDatasetExporter:
+        def remove_job(self, job_id):
+            return 0
+
         def record_success(self, prompt, response, **kwargs):
             exports.append((prompt, response, kwargs))
 
@@ -231,9 +277,52 @@ def test_server_records_successful_experiences_but_not_sensitive_or_failed_jobs(
     server._record_job_telemetry(job, 0.5, succeeded=False)
 
     assert [item[2] for item in durations] == [True, True, False]
-    assert experiences == [("Run a shell command", "Command complete.")]
-    assert len(exports) == 1
-    assert exports[0][2]["job_id"] == "job-1"
+    assert experiences == []
+    assert exports == []
+
+
+def test_server_thumbs_feedback_updates_experience_and_sft_examples(monkeypatch):
+    import server
+
+    experiences = []
+    exports = []
+
+    class FakeExperienceMemory:
+        def record_feedback(self, *args):
+            experiences.append(args)
+
+    class FakeDatasetExporter:
+        def remove_job(self, job_id):
+            exports.append(("remove", job_id))
+            return 1
+
+        def record_success(self, prompt, response, **kwargs):
+            exports.append((prompt, response, kwargs))
+
+    monkeypatch.setattr(server, "EXPERIENCE_MEMORY", FakeExperienceMemory())
+    monkeypatch.setattr(server, "SFT_DATASET", FakeDatasetExporter())
+    job = {
+        "id": "job-1",
+        "request": "Create a summary.",
+        "result": "Here is the summary.",
+        "sensitive": False,
+    }
+
+    history = [{"role": "assistant", "content": "answer"}]
+    server._record_feedback_learning(job, history, "up")
+    server._record_feedback_learning(job, history, "down")
+    server._record_feedback_learning({**job, "sensitive": True}, history, "up")
+
+    assert experiences == [
+        ("job-1", "Create a summary.", "Here is the summary.", "up"),
+        ("job-1", "Create a summary.", "Here is the summary.", "down"),
+    ]
+    assert exports[0:2] == [("remove", "job-1"), ("Create a summary.", "Here is the summary.", {
+        "job_id": "job-1",
+        "history": history,
+        "sensitive": False,
+    })]
+    assert exports[2] == ("remove", "job-1")
 
 
 def test_prefetcher_learns_and_persists_intent_transitions_and_loads_context(tmp_path):
@@ -301,13 +390,21 @@ def test_semantic_cache_expiry_and_input_validation(tmp_path):
 def test_uncertain_intent_queue_resolves_success_for_offline_training(tmp_path):
     queue_path = tmp_path / "intent_uncertain.jsonl"
     queue = UncertainIntentQueue(queue_path)
-    queue.queue("job-1", "Find my API_KEY=private-token document", "search_files", 0.5)
+    queue.queue(
+        "job-1",
+        "Find my API_KEY=private-token document; OTP: 123456",
+        "search_files",
+        0.5,
+    )
     queue.queue("job-2", "Look up a private note", "notes", 0.59)
     queue.resolve("job-1", "search_files", succeeded=True)
     queue.resolve("job-2", succeeded=False)
 
-    assert queue.offline_examples() == [("Find my API_KEY=[REDACTED] document", "search_files")]
+    assert queue.offline_examples() == [
+        ("Find my API_KEY=[REDACTED] document; OTP: [REDACTED]", "search_files"),
+    ]
     assert "private-token" not in queue_path.read_text(encoding="utf-8")
+    assert "123456" not in queue_path.read_text(encoding="utf-8")
     restored = UncertainIntentQueue(queue_path)
     assert restored._pending == {}
     with pytest.raises(ValueError):

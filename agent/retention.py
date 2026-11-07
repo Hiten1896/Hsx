@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 from collections import Counter
@@ -24,7 +25,21 @@ def _record_is_expired(line: str, cutoff: datetime, fallback_time: datetime) -> 
         return fallback_time < cutoff
     if not isinstance(record, dict):
         return fallback_time < cutoff
-    timestamp = record.get("timestamp") or record.get("created_at") or record.get("created")
+    timestamp = next(
+        (
+            record[key]
+            for key in ("timestamp", "created_at", "created")
+            if record.get(key) is not None
+        ),
+        None,
+    )
+    if isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool):
+        if not math.isfinite(timestamp):
+            return fallback_time < cutoff
+        try:
+            return datetime.fromtimestamp(timestamp, UTC) < cutoff
+        except (OverflowError, OSError, ValueError):
+            return fallback_time < cutoff
     if not isinstance(timestamp, str):
         return fallback_time < cutoff
     try:

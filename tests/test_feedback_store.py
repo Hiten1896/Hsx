@@ -4,6 +4,7 @@ import sqlite3
 import pytest
 
 from agent.feedback import FeedbackStore
+from agent.feedback import feedback_context_metadata
 
 
 def test_feedback_write_read_export_redacts_private_values(tmp_path):
@@ -70,6 +71,75 @@ def test_feedback_keeps_redacted_tool_calls_but_not_tool_output_and_prunes_by_cu
         connection.execute("UPDATE feedback SET created_at = ?", ("2000-01-01T00:00:00+00:00",))
     assert store.prune_before("2025-01-01T00:00:00+00:00") == 1
     assert store.settings()["count"] == 0
+
+
+def test_feedback_omits_nested_tool_result_content_by_default(tmp_path):
+    store = FeedbackStore(tmp_path / "feedback.sqlite")
+    store.record(
+        conversation_id="conversation-1",
+        message_id="message-1",
+        rating="up",
+        full_conversation=[
+            {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "read-1",
+                    "content": '{"success": true, "content": "private document text"}',
+                }],
+            },
+        ],
+    )
+
+    exported = json.dumps(store.export_records()[0])
+    assert "private document text" not in exported
+    assert "TOOL_RESULT_OMITTED" in exported
+
+
+def test_feedback_context_records_file_and_tool_references_without_media_bytes(tmp_path):
+    history = [{
+        "role": "assistant",
+        "content": [
+            {
+                "type": "tool_use",
+                "name": "make_docx",
+                "input": {"filename": "Hsx Work/report.docx"},
+            },
+            {
+                "type": "tool_use",
+                "name": "create_dynamic_tool",
+                "input": {"name": "summarize_csv", "code": "private implementation"},
+            },
+            {
+                "type": "tool_use",
+                "name": "camera_snapshot",
+                "input": {"output_path": "data/snapshots/latest.jpg"},
+            },
+        ],
+    }]
+    context = feedback_context_metadata(
+        "Review this.\n\nUploaded workspace files:\n- Uploads/notes.txt",
+        history,
+        ["make_docx", "create_dynamic_tool", "camera_snapshot"],
+    )
+    store = FeedbackStore(tmp_path / "feedback.sqlite")
+    store.record(
+        conversation_id="conversation-1",
+        message_id="message-1",
+        rating="up",
+        context_metadata=context,
+        full_conversation=history,
+    )
+
+    metadata = store.export_records()[0]["metadata"]["context"]
+    assert metadata["uploaded_files"] == ["Uploads/notes.txt"]
+    assert metadata["generated_files"] == ["Hsx Work/report.docx"]
+    assert metadata["tools_created"] == ["summarize_csv"]
+    assert "camera_snapshot" in metadata["tools_used"]
+    assert metadata["camera_capture_references"] == ["data/snapshots/latest.jpg"]
+    assert metadata["camera_footage_retained"] is False
+    exported = json.dumps(store.export_records()[0])
+    assert "private implementation" not in exported
 
 
 def test_feedback_opt_out_and_delete_all(tmp_path):
@@ -155,6 +225,30 @@ def test_feedback_redacts_structured_secret_values(tmp_path):
     assert "must-not-export" not in serialized
     assert record["prompt_messages"][0]["content"]["api_key"] == "[REDACTED]"
     assert record["prompt_messages"][0]["content"]["Authorization"] == "[REDACTED]"
+
+
+def test_feedback_redacts_labeled_identity_codes_and_account_numbers(tmp_path):
+    store = FeedbackStore(tmp_path / "feedback.sqlite")
+    store.update_settings(save_feedback=True, include_full_conversation=False)
+    store.record(
+        conversation_id="conversation-1",
+        message_id="message-1",
+        rating="up",
+        prompt_messages=[{
+            "role": "user",
+            "content": (
+                "Username is hiten, OTP: 123456, account number=12345678, "
+                "card number: 4111111111111111"
+            ),
+        }],
+    )
+
+    content = store.export_records()[0]["prompt_messages"][0]["content"]
+    assert "hiten" not in content
+    assert "123456" not in content
+    assert "12345678" not in content
+    assert "4111111111111111" not in content
+    assert content.count("[REDACTED]") == 4
 
 
 def test_feedback_export_cli_writes_redacted_jsonl_without_file_contents(tmp_path):

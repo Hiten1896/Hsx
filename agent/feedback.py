@@ -11,8 +11,11 @@ from typing import Any
 
 DEFAULT_REDACTIONS = (
     re.compile(
-        r"(?i)\b(?:api[_ -]?key|token|password|secret|authorization)\s*[:=]\s*"
-        r"(?:bearer\s+)?[^\s,;]+"
+        r"(?i)(\b(?:api[_ -]?key|token|password|secret|authorization|username|user[_ -]?name|"
+        r"login|otp|one[_ -]?time[_ -]?(?:password|code)|verification[_ -]?code|"
+        r"mobile|phone|account[_ -]?(?:number|no)|card[_ -]?(?:number|no)|"
+        r"credit[_ -]?card|cvv|cvc|ssn)\s*(?::|=|\bis\b)\s*)"
+        r"(?:bearer\s+)?(?!\[REDACTED\])[^\s,;]+"
     ),
     re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+=*"),
     re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
@@ -29,12 +32,51 @@ _SECRET_FIELD_NAMES = {
     "privatekey",
     "secret",
     "token",
+    "username",
+    "mobile",
+    "mobilenumber",
+    "phone",
+    "phonenumber",
+    "accountnumber",
+    "cardnumber",
+    "creditcard",
+    "otp",
+    "cvv",
+    "cvc",
+    "ssn",
+}
+_FILE_TOOLS = {
+    "create_text_file",
+    "make_csv",
+    "make_docx",
+    "make_markdown",
+    "make_pdf",
+    "make_pptx",
+    "make_website",
+    "report",
+}
+_CAMERA_TOOLS = {"camera_snapshot", "camera_record", "vision_capture"}
+_FILE_CONTENT_KEYS = {
+    "attachment_content",
+    "attachment_contents",
+    "code",
+    "content",
+    "data",
+    "file",
+    "file_content",
+    "file_contents",
+    "implementation",
+    "script",
+    "source",
+    "source_code",
+    "text",
 }
 
 
 def redact_text(value: str) -> str:
     result = str(value)
-    for pattern in DEFAULT_REDACTIONS:
+    result = DEFAULT_REDACTIONS[0].sub(r"\1[REDACTED]", result)
+    for pattern in DEFAULT_REDACTIONS[1:]:
         result = pattern.sub("[REDACTED]", result)
     for source in os.getenv("HSX_FEEDBACK_REDACT_PATTERNS", "").split("||"):
         if not source.strip():
@@ -86,6 +128,10 @@ class FeedbackStore:
                 connection.execute(
                     "ALTER TABLE feedback ADD COLUMN provider_calls TEXT NOT NULL DEFAULT '[]'"
                 )
+            if "context_metadata" not in columns:
+                connection.execute(
+                    "ALTER TABLE feedback ADD COLUMN context_metadata TEXT NOT NULL DEFAULT '{}'"
+                )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10)
@@ -101,7 +147,14 @@ class FeedbackStore:
             "include_full_conversation": rows.get("include_full_conversation", "0") == "1",
             "include_file_contents": rows.get("include_file_contents", "0") == "1",
             "count": count,
-            "storage": "Stored locally; chat and feedback history is summarized and pruned after 7 days. File contents are excluded.",
+            "storage": (
+                "Stored locally; chat and feedback history is summarized and pruned after 7 days. "
+                + (
+                    "File contents are included when requested."
+                    if rows.get("include_file_contents", "0") == "1"
+                    else "File contents are excluded."
+                )
+            ),
         }
 
     def update_settings(
@@ -140,6 +193,7 @@ class FeedbackStore:
         prompt_messages: list[dict] | None = None,
         response: str = "",
         full_conversation: list[dict] | None = None,
+        context_metadata: dict[str, Any] | None = None,
     ) -> bool:
         if rating not in {"up", "down"}:
             raise ValueError("Feedback rating must be up or down.")
@@ -157,6 +211,9 @@ class FeedbackStore:
         calls = provider_calls or []
         if not isinstance(calls, list) or not all(isinstance(item, dict) for item in calls):
             raise ValueError("Feedback provider_calls must be a list of provider/model objects.")
+        context = context_metadata or {}
+        if not isinstance(context, dict):
+            raise ValueError("Feedback context_metadata must be an object.")
         full = (
             _redact_value(full_conversation, include_data=settings["include_file_contents"])
             if settings["include_full_conversation"]
@@ -169,8 +226,8 @@ class FeedbackStore:
                 """INSERT INTO feedback (
                     created_at, conversation_id, message_id, rating, reason, note,
                     provider, model, provider_calls, tool_names, app_version, client,
-                    prompt_messages, response, full_conversation
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    prompt_messages, response, full_conversation, context_metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(conversation_id, message_id) DO UPDATE SET
                     created_at = excluded.created_at,
                     rating = excluded.rating, reason = excluded.reason, note = excluded.note,
@@ -178,7 +235,8 @@ class FeedbackStore:
                     provider_calls = excluded.provider_calls,
                     tool_names = excluded.tool_names, app_version = excluded.app_version,
                     client = excluded.client, prompt_messages = excluded.prompt_messages,
-                    response = excluded.response, full_conversation = excluded.full_conversation""",
+                    response = excluded.response, full_conversation = excluded.full_conversation,
+                    context_metadata = excluded.context_metadata""",
                 (
                     datetime.now(UTC).isoformat(),
                     conversation_id[:100],
@@ -195,6 +253,7 @@ class FeedbackStore:
                     json.dumps(prompts, ensure_ascii=False),
                     redact_text(response[:100_000]),
                     json.dumps(full, ensure_ascii=False),
+                    json.dumps(_redact_value(context), ensure_ascii=False),
                 ),
             )
         return True
@@ -252,6 +311,7 @@ class FeedbackStore:
                     "model": row["model"],
                     "provider_calls": json.loads(row["provider_calls"]),
                     "tool_names": json.loads(row["tool_names"]),
+                    "context": _redact_value(json.loads(row["context_metadata"])),
                     "app_version": row["app_version"],
                     "client": row["client"],
                 }),
@@ -295,6 +355,21 @@ def _without_file_contents(value):
     if isinstance(value, list):
         return [_without_file_contents(item) for item in value]
     if isinstance(value, dict):
+        if value.get("type") == "tool_result":
+            return {
+                key: _without_file_contents(item)
+                for key, item in value.items()
+                if key != "content"
+            } | {"content": "[TOOL_RESULT_OMITTED]"}
+        if value.get("type") == "tool_use" and isinstance(value.get("input"), dict):
+            return {
+                **{
+                    key: _without_file_contents(item)
+                    for key, item in value.items()
+                    if key != "input"
+                },
+                "input": _without_tool_input_contents(value["input"]),
+            }
         if str(value.get("role", "")).lower() in {"tool", "function"}:
             return {
                 key: _without_file_contents(item)
@@ -314,3 +389,63 @@ def _without_file_contents(value):
             }
         }
     return value
+
+
+def _without_tool_input_contents(value):
+    if isinstance(value, list):
+        return [_without_tool_input_contents(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _without_tool_input_contents(item)
+            for key, item in value.items()
+            if key.casefold() not in _FILE_CONTENT_KEYS
+        }
+    return value
+
+
+def feedback_context_metadata(
+    request: str,
+    history: list[dict] | None,
+    tool_names: list[str] | None,
+) -> dict[str, Any]:
+    tools = set(tool_names or [])
+    uploaded_files = set()
+    generated_files = set()
+    created_tools = set()
+    camera_references = set()
+    for line in request.splitlines():
+        candidate = line.strip().removeprefix("- ").replace("\\", "/")
+        if candidate.startswith(("Uploads/", "Browser Media/")):
+            uploaded_files.add(redact_text(candidate)[:500])
+    for message in history or []:
+        if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+            continue
+        for block in message["content"]:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            name = block.get("name")
+            arguments = block.get("input")
+            if not isinstance(name, str) or not isinstance(arguments, dict):
+                continue
+            tools.add(name)
+            path_values = [
+                arguments[key]
+                for key in ("filename", "path", "file_path", "output_path")
+                if isinstance(arguments.get(key), str) and arguments[key].strip()
+            ]
+            if name in _FILE_TOOLS:
+                generated_files.update(redact_text(path.replace("\\", "/"))[:500] for path in path_values)
+            if name in _CAMERA_TOOLS:
+                camera_references.update(redact_text(path.replace("\\", "/"))[:500] for path in path_values)
+            if name in {"tool_creator", "create_dynamic_tool"}:
+                created_name = arguments.get("name")
+                if isinstance(created_name, str) and created_name.strip():
+                    created_tools.add(redact_text(created_name.strip())[:100])
+    return {
+        "uploaded_files": sorted(uploaded_files),
+        "generated_files": sorted(generated_files),
+        "tools_used": sorted(tools),
+        "tools_created": sorted(created_tools),
+        "camera_capture_references": sorted(camera_references),
+        "camera_footage_retained": False,
+    }

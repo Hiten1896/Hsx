@@ -14,6 +14,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Any
 
+from agent.feedback import redact_text
 from config import DATA_DIR
 
 LOGGER = logging.getLogger("hsx.ml.log_recorder")
@@ -45,7 +46,7 @@ def _redact_text(value: str) -> str:
     value = ASSIGNMENT_SECRET.sub(r"\1[REDACTED]", value)
     for secret in KNOWN_SECRETS:
         value = value.replace(secret, "[REDACTED]")
-    return value[:MAX_MESSAGE_CHARS]
+    return redact_text(value)[:MAX_MESSAGE_CHARS]
 
 
 def _safe_value(value: Any, key: str = "", depth: int = 0) -> Any:

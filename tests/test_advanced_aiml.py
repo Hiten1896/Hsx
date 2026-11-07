@@ -57,7 +57,10 @@ def test_rag_limits_retrieval_and_skips_unsupported_files(tmp_path):
 def test_dataset_exporter_redacts_secrets_and_keeps_only_safe_trajectory(tmp_path):
     path = tmp_path / "sft.jsonl"
     exporter = DatasetExporter(path)
-    prompt = "Count these words; OPENAI_API_KEY=credential-value-123"
+    prompt = (
+        "Count these words; OPENAI_API_KEY=credential-value-123, "
+        "contact user@example.com, OTP: 123456"
+    )
     history = [
         {"role": "user", "content": prompt},
         {"role": "assistant", "content": [{
@@ -85,6 +88,8 @@ def test_dataset_exporter_redacts_secrets_and_keeps_only_safe_trajectory(tmp_pat
 
     assert record["format"] == "sharegpt"
     assert "credential-value-123" not in json.dumps(record)
+    assert "user@example.com" not in json.dumps(record)
+    assert "123456" not in json.dumps(record)
     assert "another-secret-value" not in json.dumps(record)
     assert "private argument" not in json.dumps(record)
     assert record["tool_trajectory"] == [
@@ -101,6 +106,16 @@ def test_dataset_exporter_ignores_empty_and_incomplete_examples(tmp_path):
     assert not exporter.record_success("", "answer")
     assert not exporter.record_success("prompt", "")
     assert not exporter.path.exists()
+
+
+def test_dataset_exporter_can_replace_or_remove_feedback_rated_job(tmp_path):
+    exporter = DatasetExporter(tmp_path / "sft.jsonl")
+    exporter.record_success("first prompt", "first response", job_id="job-1")
+    exporter.record_success("second prompt", "second response", job_id="job-2")
+
+    assert exporter.remove_job("job-1") == 1
+    records = [json.loads(line) for line in exporter.path.read_text(encoding="utf-8").splitlines()]
+    assert [record["job_id"] for record in records] == ["job-2"]
 
 
 def test_dynamic_registry_registers_only_vetted_operations_and_restores(tmp_path):

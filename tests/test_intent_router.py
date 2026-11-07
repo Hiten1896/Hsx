@@ -49,6 +49,19 @@ def test_intent_router_can_train_from_positive_local_feedback(tmp_path):
     assert examples == [("search the workspace", "search_files")]
 
 
+def test_intent_router_feedback_loader_skips_missing_or_malformed_logs(tmp_path):
+    router = IntentRouter(tmp_path / "router.joblib")
+    missing = tmp_path / "missing.jsonl"
+    malformed = tmp_path / "malformed.jsonl"
+    malformed.write_text(
+        '{invalid json}\nnull\n{"event":"tool_predicted","job_id":[],"tool":[]}\n',
+        encoding="utf-8",
+    )
+
+    assert router._feedback_examples(missing, {"search_files"}) == []
+    assert router._feedback_examples(malformed, {"search_files"}) == []
+
+
 def test_intent_router_requires_at_least_two_intents(tmp_path):
     with pytest.raises(ValueError, match="at least two intents"):
         IntentRouter(tmp_path / "router.joblib").train([("search files", "search_files")])

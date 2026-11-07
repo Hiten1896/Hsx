@@ -35,7 +35,7 @@ from agent.capabilities import run as _capabilities
 from agent.jobs import JobQueue
 from agent.approval import ApprovalGuard
 from agent.devices import DeviceRegistry, system_body_state
-from agent.feedback import FeedbackStore
+from agent.feedback import FeedbackStore, feedback_context_metadata
 from agent.conversations import ConversationStore
 from agent.hardware import AUDIO_ALERTS, CAMERA, MICROPHONE, MOTION_MONITOR
 from agent.hardware.camera import MAX_FRAME_AGE_SECONDS, camera_session_owner
@@ -105,10 +105,7 @@ TOOLS.append({
     "input_schema": {"type": "object", "properties": {}, "required": []},
 })
 SKILL_MAP["capabilities"] = _capabilities
-if INTENT_ROUTER.model_path.is_file():
-    INTENT_ROUTER.load()
-else:
-    INTENT_ROUTER.train_from_tools(TOOLS)
+INTENT_ROUTER.train_from_tools(TOOLS, feedback_log=ROUTER_LOGGER.feedback_path)
 set_runtime_registry(TOOLS, SKILL_MAP)
 HISTORY = []
 SESSION_HISTORIES = {}
@@ -459,17 +456,33 @@ def _record_job_telemetry(
             duration_seconds,
             succeeded=succeeded,
         )
-        if succeeded and not sensitive:
-            EXPERIENCE_MEMORY.record_success(job["request"], response)
-            SFT_DATASET.record_success(
-                job["request"],
-                response,
-                job_id=job["id"],
-                history=history,
-                sensitive=sensitive,
-            )
     except (OSError, RuntimeError, TypeError, ValueError):
         LOGGER.exception("Could not persist local ML task telemetry for job %s.", job["id"])
+
+
+def _record_feedback_learning(job: dict, history: list, rating: str) -> None:
+    normalized_rating = "up" if rating in {"good", "up"} else "down" if rating in {"bad", "down"} else ""
+    if not normalized_rating or job.get("sensitive"):
+        return
+    try:
+        job_id = job.get("id", "")
+        EXPERIENCE_MEMORY.record_feedback(
+            job_id,
+            job.get("request", ""),
+            job.get("result", ""),
+            normalized_rating,
+        )
+        SFT_DATASET.remove_job(job_id)
+        if normalized_rating == "up":
+            SFT_DATASET.record_success(
+                job.get("request", ""),
+                job.get("result", ""),
+                job_id=job_id,
+                history=history,
+                sensitive=False,
+            )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        LOGGER.exception("Could not persist feedback learning data for job %s.", job.get("id", ""))
 
 
 def _notify_motion_event(event: dict) -> None:
@@ -1874,6 +1887,11 @@ class HsxHandler(BaseHTTPRequestHandler):
                         prompt_messages=prompt_messages,
                         response=str(job.get("result", "")),
                         full_conversation=full_conversation,
+                        context_metadata=feedback_context_metadata(
+                            str(job.get("request", "")),
+                            full_conversation,
+                            tool_names,
+                        ),
                     )
                 except (OSError, sqlite3.Error, TypeError, ValueError) as error:
                     self._json({"error": str(error)}, 400)
@@ -1881,6 +1899,11 @@ class HsxHandler(BaseHTTPRequestHandler):
                 if saved:
                     ROUTER_LOGGER.log_feedback(conversation_id, message_id, "good" if feedback in {"good", "up"} else "bad")
                     record_provider_feedback(job_id, "good" if feedback in {"good", "up"} else "bad")
+                    _record_feedback_learning(
+                        job,
+                        full_conversation,
+                        "up" if feedback in {"good", "up"} else "down",
+                    )
             else:
                 saved = False
             self._json({"success": True, "saved": saved, "job_id": job_id, "feedback": feedback}, 201)
@@ -2582,6 +2605,10 @@ def _run_retention_maintenance() -> None:
             if updated_at < cutoff:
                 SESSION_HISTORIES.pop(session_id, None)
                 SESSION_HISTORY_UPDATED.pop(session_id, None)
+        try:
+            INTENT_ROUTER.train_from_tools(TOOLS, feedback_log=ROUTER_LOGGER.feedback_path)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            LOGGER.exception("Could not refresh the intent model from recent feedback.")
         LOGGER.info("Local seven-day retention and personalization refresh completed: %s", counts)
     except (OSError, sqlite3.Error, ValueError):
         LOGGER.exception("Local retention and personalization refresh failed.")

@@ -10,6 +10,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 
+from agent.feedback import redact_text
 from agent.ml.log_recorder import LOG_RECORDER
 
 _FAST_PATH_EXAMPLES = {
@@ -90,7 +91,7 @@ class RouterEventLogger:
             "user_prompt",
             session_id,
             job_id,
-            prompt="[REDACTED]" if sensitive else prompt,
+            prompt="[REDACTED]" if sensitive else redact_text(prompt),
         )
 
     def log_tool_prediction(
@@ -151,6 +152,7 @@ class IntentRouter:
     def __init__(self, model_path: Path | None = None):
         self.model_path = model_path or (BASE_DIR / "models" / "intent_router.joblib")
         self.pipeline: Pipeline | None = None
+        self._lock = threading.RLock()
 
     def train(self, examples: list[tuple[str, str]]) -> "IntentRouter":
         usable = [(text.strip(), label.strip()) for text, label in examples if text.strip() and label.strip()]
@@ -158,16 +160,18 @@ class IntentRouter:
         if len(labels) < 2:
             raise ValueError("Intent routing requires examples for at least two intents.")
 
-        self.pipeline = Pipeline([
+        pipeline = Pipeline([
             ("tfidf", TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))),
             ("classifier", LogisticRegression(class_weight="balanced", max_iter=1000, C=20)),
         ])
-        self.pipeline.fit(
+        pipeline.fit(
             [text for text, _ in usable],
             [label for _, label in usable],
         )
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
-        dump(self.pipeline, self.model_path)
+        dump(pipeline, self.model_path)
+        with self._lock:
+            self.pipeline = pipeline
         return self
 
     def train_from_tools(
@@ -205,43 +209,59 @@ class IntentRouter:
 
     @staticmethod
     def _feedback_examples(path: Path, tool_names: set[str]) -> list[tuple[str, str]]:
+        if not path.is_file():
+            return []
         prompts: dict[str, str] = {}
         predictions: dict[str, set[str]] = {}
         feedback: dict[str, str] = {}
         with path.open(encoding="utf-8") as log:
             for line in log:
-                entry = json.loads(line)
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
                 job_id = entry.get("job_id", "")
-                if not job_id:
+                if not isinstance(job_id, str) or not job_id:
                     continue
                 if entry.get("event") == "user_prompt":
                     prompts[job_id] = str(entry.get("prompt", "")).strip()
                 elif entry.get("event") == "tool_predicted":
                     tool = entry.get("tool")
-                    if tool in tool_names:
+                    if isinstance(tool, str) and tool in tool_names:
                         predictions.setdefault(job_id, set()).add(tool)
                 elif entry.get("event") == "user_feedback":
-                    feedback[job_id] = entry.get("feedback", "")
+                    value = entry.get("feedback", "")
+                    if isinstance(value, str):
+                        feedback[job_id] = value
         return [
             (prompts[job_id], next(iter(tools)))
             for job_id, tools in predictions.items()
             if feedback.get(job_id) == "good"
             and prompts.get(job_id)
+            and prompts[job_id] != "[REDACTED]"
             and len(tools) == 1
         ]
 
     def load(self) -> "IntentRouter":
-        self.pipeline = load(self.model_path)
+        pipeline = load(self.model_path)
+        with self._lock:
+            self.pipeline = pipeline
         return self
 
     def predict_with_confidence(self, prompt: str) -> tuple[str, float]:
-        if self.pipeline is None:
+        with self._lock:
+            pipeline = self.pipeline
+        if pipeline is None:
             self.load()
-        if self.pipeline is None:
+            with self._lock:
+                pipeline = self.pipeline
+        if pipeline is None:
             raise RuntimeError("The intent router model is not loaded.")
-        probabilities = self.pipeline.predict_proba([prompt])[0]
+        probabilities = pipeline.predict_proba([prompt])[0]
         best_index = int(probabilities.argmax())
-        classifier = self.pipeline.named_steps["classifier"]
+        classifier = pipeline.named_steps["classifier"]
         return str(classifier.classes_[best_index]), float(probabilities[best_index])
 
     def predict(self, prompt: str) -> str:
