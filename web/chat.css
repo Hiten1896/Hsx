@@ -433,7 +433,7 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 @media (max-width: 700px) {
   .chat-controls { top: auto; right: auto; left: auto; gap: 2px; padding: 0 8px; }
   .message-stream { padding-top: 14px; scroll-padding-top: 14px; scroll-padding-bottom: 190px; }
-  .connections-popover { inset: auto 0 0; width: 100vw; max-height: min(72dvh, 560px); margin: 0; padding-bottom: max(16px, env(safe-area-inset-bottom)); border-radius: 16px 16px 0 0; }
+  .connections-popover { inset: auto 12px 0; width: min(340px, calc(100vw - 24px)); max-height: min(72dvh, 560px); margin: 0; padding-bottom: max(16px, env(safe-area-inset-bottom)); border-radius: 16px 16px 0 0; }
 }
 @media (max-width: 390px) {
   .composer-icon-button { width: 44px; min-width: 44px; height: 44px; }

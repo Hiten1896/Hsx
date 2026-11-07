@@ -228,6 +228,9 @@ def test_browser_history_survives_reload_and_another_browser_and_supports_action
     second.get_by_text("Test answer from fake provider.").wait_for()
     assert second.locator("#chat-stream .message-card").count() == 2
     search = second.locator("#chat-history-search")
+    history_row = second.locator(".chat-history-row").first
+    assert history_row.bounding_box()["height"] == 40
+    assert abs(search.bounding_box()["width"] - second.locator("#chat-history-list").bounding_box()["width"]) < 1
     search.fill("does not match")
     assert second.get_by_text("No matching chats.").is_visible()
     search.fill("History survives")
@@ -303,6 +306,8 @@ def test_browser_layout_contracts_and_connection_popover(browser_app, browser_pa
     assert popover.is_visible()
     bounds = popover.bounding_box()
     assert bounds["x"] >= 0 and bounds["x"] + bounds["width"] <= 360
+    assert bounds["width"] <= 336
+    assert popover.locator(".connection-note").evaluate("el => el.scrollWidth <= el.clientWidth")
     page.keyboard.press("Escape")
     assert page.evaluate("document.activeElement.id") == "connection-toggle"
     page.locator("#connection-toggle").click()
@@ -359,6 +364,7 @@ def test_browser_layout_screenshots_at_requested_widths(browser_app, browser_pag
         bounds = popover.bounding_box()
         assert bounds["x"] >= 0 and bounds["x"] + bounds["width"] <= width
         assert bounds["y"] >= 0 and bounds["y"] + bounds["height"] <= 900
+        assert bounds["width"] <= min(340, width - 24)
         for row in popover.locator(".connection-list li").all():
             assert row.evaluate("el => el.scrollWidth <= el.clientWidth")
         page.screenshot(path=str(screenshots / f"after-{width}-connections-open.png"))
@@ -389,7 +395,7 @@ def test_browser_layout_screenshots_at_requested_widths(browser_app, browser_pag
         composer.fill(f"Long conversation message {index}: " + ("detail " * 80))
         page.locator("#send-button").click()
         page.locator('.message-card[data-role="assistant"]').nth(assistant_count).wait_for()
-    for width in (360, 1280):
+    for width in (360, 768, 1280):
         page.set_viewport_size({"width": width, "height": 900})
         page.wait_for_timeout(250)
         stream = page.locator(".message-stream").bounding_box()

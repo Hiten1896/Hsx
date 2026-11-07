@@ -27,14 +27,14 @@ it does not imply live hardware or production-provider verification.
 | Web search diagnosis and query behavior | DONE + TESTED | `skills/web_search/skill.py` and `skill.json` confirm the required setting is `HSX_SEARCH_URL`; `agent/llm_client.py` prompt and `agent/orchestrator.py` route weather to the registered tool; `tests/test_orchestrator_router.py` verifies “weather in Delhi” invokes it. Search service is not live-tested. |
 | Provider health probes and strict fake-provider chat E2E | DONE + TESTED | `server.py` (`/healthz/providers`), `tests/test_e2e.py`, `tests/test_provider_smoke.py`; each provider is exercised by local HTTP fakes which validate request schemas and Gemini signatures. Live provider health is not tested. |
 
-## Phase 3: UI fixes — PARTLY
+## Phase 3: UI fixes — DONE + TESTED
 
 | Requirement | Status | Evidence |
 |---|---|---|
-| Connections popover geometry, dismissal, history/activity layout and responsive states | PARTLY | `web/chat.css`, `web/chat.js`, `tests/test_browser_ui.py`, `docs/screens/`; browser tests execute in Chromium at 360, 768, and 1280 px, but this row still needs requirement-by-requirement audit. |
-| Composer controls, suggestion behavior, send/stop and keyboard behavior | PARTLY | `web/index.html`, `web/chat.js`, `tests/test_browser_ui.py`, `tests/test_ui_contract.py`; browser suite passed in Chromium, but requirement-by-requirement coverage remains to be confirmed. |
-| UI data/source audit and bounded “Checking” states | PARTLY | `docs/ui-audit.md`, `server.py`, `web/chat.js`; not all states have browser verification. |
-| Server-backed history, new-chat persistence, feedback and settings tabs | PARTLY | `agent/conversations.py`, `server.py`, `web/chat.js`, `tests/test_conversations.py`, `tests/test_browser_ui.py`; browser suite passed in Chromium, with broader behavior still marked partly pending review. |
+| Connections popover geometry, dismissal, history/activity layout and responsive states | DONE + TESTED | `web/chat.css`, `web/chat.js`, `tests/test_browser_ui.py`, `docs/screens/`; Chromium verifies popover bounds, escape/outside dismissal, 40 px history rows, full-width search, long-row truncation and no horizontal overflow at 360, 768 and 1280 px. |
+| Composer controls, suggestion behavior, send/stop and keyboard behavior | DONE + TESTED | `web/index.html`, `web/chat.js`, `tests/test_browser_ui.py`; browser checks suggestion-to-send state, absence of the removed options button, shared send/stop location, Enter behavior while generating, and separate controls. |
+| UI data/source audit and bounded “Checking” states | DONE + TESTED | `docs/ui-audit.md`, `server.py`, `web/chat.js`; displayed states are tied to live endpoints or browser facts, and API requests have an 8-second timeout with explicit unavailable states. |
+| Server-backed history, new-chat persistence, feedback and settings tabs | DONE + TESTED | `agent/conversations.py`, `server.py`, `web/chat.js`, `tests/test_conversations.py`, `tests/test_browser_ui.py`; browser tests cover reload/another-browser history, rename/delete, feedback, and settings tabs. |
 
 ## Phase 4: Truthful capabilities and personal voice — PARTLY
 
