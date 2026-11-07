@@ -40,12 +40,12 @@ def _build_css() -> str:
     }}
     #brand {{
         width: 1fr;
-        color: {_COLORS["blue"]};
+        color: {_COLORS["accent"]};
         text-style: bold;
     }}
     #connection {{
         width: 14;
-        color: {_COLORS["teal"]};
+        color: {_COLORS["success"]};
     }}
     .metric {{
         width: 18;
@@ -83,7 +83,7 @@ def _build_css() -> str:
     }}
     .message-heading {{
         height: 1;
-        color: {_COLORS["blue"]};
+        color: {_COLORS["accent"]};
         text-style: bold;
     }}
     .message-body {{
@@ -108,7 +108,7 @@ def _build_css() -> str:
     }}
     .feedback-status {{
         width: 1fr;
-        color: {_COLORS["teal"]};
+        color: {_COLORS["success"]};
     }}
     #composer-dock {{
         width: 100%;
@@ -133,8 +133,8 @@ def _build_css() -> str:
         min-width: 12;
         height: 3;
         margin-left: 1;
-        border: round {_COLORS["blue"]};
-        background: {_COLORS["blue"]};
+        border: round {_COLORS["accent"]};
+        background: {_COLORS["accent"]};
         color: {_COLORS["background"]};
         text-style: bold;
     }}

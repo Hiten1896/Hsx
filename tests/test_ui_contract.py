@@ -154,6 +154,9 @@ def test_web_and_tui_load_the_same_design_and_api_contract():
 
     assert tui._TOKENS == web_tokens
     assert tui._API == web_api
+    assert web_tokens["colors"]["background"] == "#1e1e1e"
+    assert web_tokens["colors"]["accent"] == "#d2d2d2"
+    assert "blue" not in web_tokens["colors"]
     assert web_api["endpoints"]["chat_stream"] == "/api/chat/stream"
     assert web_api["endpoints"]["feedback"] == "/api/feedback"
     assert web_api["endpoints"]["telemetry"] == "/api/telemetry"
@@ -293,8 +296,11 @@ def test_web_user_actions_accordion_state_and_camera_stream_are_wired():
     assert ".panel-collapse-button[aria-expanded=\"false\"] svg { transform: none; }" in css
     assert 'aria-expanded="false"' in html
     assert 'access-token' not in html
-    assert "sessionStorage', 'hsx-api-token'" in script
-    assert "headers.set('Authorization'" in script
+    assert "hsx-api-token" not in script
+    assert 'id="auth-dialog"' not in html
+    assert "hsx-theme" in script
+    assert "prefers-color-scheme: light" in script
+    assert "Authorization" not in script
     assert 'id="emergency-banner"' in html
     assert "Emergency stop is active" in html
     assert "emergency_stop" in script

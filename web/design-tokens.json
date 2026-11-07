@@ -1,17 +1,17 @@
 {
   "colors": {
-    "background": "#111513",
-    "surface": "#1c231e",
-    "surface_raised": "#242d28",
-    "surface_input": "#1b211e",
-    "border": "#303a34",
-    "text": "#edf2eb",
-    "muted": "#9aa79d",
-    "blue": "#b2d8b7",
-    "teal": "#87c99a",
+    "background": "#1e1e1e",
+    "surface": "#242424",
+    "surface_raised": "#2d2d2d",
+    "surface_input": "#222222",
+    "border": "#3a3a3a",
+    "text": "#ededed",
+    "muted": "#a5a5a5",
+    "accent": "#d2d2d2",
+    "success": "#87c99a",
     "warning": "#e6bd77",
     "danger": "#e28e88",
-    "code_background": "#101411"
+    "code_background": "#151515"
   },
   "typography": {
     "body": "Inter, Segoe UI, sans-serif",
