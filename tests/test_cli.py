@@ -1,4 +1,7 @@
+from io import StringIO
+
 import cli
+from rich.console import Console
 
 
 def test_approval_card_is_human_readable_and_contains_no_payload_json(capsys):
@@ -137,3 +140,74 @@ def test_cli_activity_and_artifact_commands_show_server_data(monkeypatch, capsys
     assert "running: Build a weekly report" in output
     assert "report.pdf (pdf): Hsx Work/report.pdf" in output
     assert requests == ["/api/activity?session_id=tty-session", "/api/outputs"]
+
+
+def test_cli_activity_trace_steps_render_diffs_and_terminal_output_at_fixed_widths(monkeypatch):
+    for width in (60, 80, 120):
+        output = StringIO()
+        monkeypatch.setattr(cli, "ACTIVITY_CONSOLE", Console(file=output, width=width, no_color=True))
+        monkeypatch.setattr(cli, "ACTIVITY_STEPS", [])
+        monkeypatch.setattr(cli, "ACTIVITY_STATUSES", {})
+        cli._render_activity_event("tool_start", {
+            "tool_call_id": "edit-1",
+            "tool": "create_text_file",
+            "icon": "pencil",
+            "present": "Editing",
+            "past": "Edited",
+            "target": "report.txt",
+            "status": "running",
+        })
+        cli._render_activity_event("tool_end", {
+            "tool_call_id": "edit-1",
+            "tool": "create_text_file",
+            "icon": "pencil",
+            "present": "Editing",
+            "past": "Edited",
+            "target": "report.txt",
+            "status": "completed",
+            "duration_ms": 1200,
+            "diff": {
+                "path": "report.txt",
+                "added": 1,
+                "removed": 1,
+                "hunks": [{
+                    "header": "@@ -1 +1 @@",
+                    "lines": [
+                        {"kind": "removed", "text": "old"},
+                        {"kind": "added", "text": "new"},
+                    ],
+                }],
+            },
+        })
+        cli._show_steps(1)
+        cli._render_activity_event("tool_start", {
+            "tool_call_id": "run-1",
+            "tool": "run_code",
+            "icon": "terminal",
+            "present": "Running",
+            "past": "Ran",
+            "target": "python task.py",
+            "status": "running",
+        })
+        cli._render_activity_event("tool_end", {
+            "tool_call_id": "run-1",
+            "tool": "run_code",
+            "icon": "terminal",
+            "present": "Running",
+            "past": "Ran",
+            "target": "python task.py",
+            "status": "completed",
+            "duration_ms": 800,
+            "details": {
+                "command": "python task.py",
+                "exit_status": 0,
+                "output_lines": ["done"],
+            },
+        })
+        cli._show_steps(2)
+        rendered = output.getvalue()
+        assert "+1" in rendered and "-1" in rendered
+        assert "old" in rendered and "new" in rendered
+        assert "python task.py" in rendered and "Exit status: 0" in rendered and "done" in rendered
+        assert "\x1b[" not in rendered
+        assert all(len(line) <= width for line in rendered.splitlines())

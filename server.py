@@ -23,7 +23,7 @@ from api.chat import ChatStreamRegistry
 from api.devices import resolve_target_device
 from api.files import resolve_output
 from api.jobs import ask_job_payload
-from agent.activity_trace import redact_activity_text, redact_activity_value
+from agent.activity_trace import redact_activity_text, redact_activity_value, tool_end_event
 from agent.ask_user import ApprovalRequest, AskUserJobs, AskUserRequest
 from agent.jobs import JobQueue
 from agent.approval import ApprovalGuard
@@ -351,7 +351,11 @@ def _retry_activity_tool(job_id: str, call_id: str) -> tuple[dict, int]:
     safe_activity = redact_activity_value(activity)
     _persist_activity_event(retry.get("task_dir", ""), "tool_end", safe_activity)
     with _ACTIVITY_RETRY_LOCK:
-        _ACTIVITY_RETRY_CALLS.pop(call_id, None)
+        if failed:
+            retry["created_at"] = time.time()
+            _ACTIVITY_RETRY_CALLS[call_id] = retry
+        else:
+            _ACTIVITY_RETRY_CALLS.pop(call_id, None)
     return {"activity": safe_activity, "status": "failed" if failed else "completed"}, 200
 
 

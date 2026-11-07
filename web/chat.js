@@ -592,6 +592,18 @@ function appendActivity(label) {
   const fragment = elements.activityTemplate.content.cloneNode(true);
   const activity = fragment.querySelector('.activity-trace');
   activity.querySelector('.activity-thinking span').textContent = label.replace(/…$/, '');
+  activity.addEventListener('click', (event) => {
+    if (event.target.closest('.activity-file-target')) return;
+    const toggle = event.target.closest('.activity-row-toggle');
+    if (!toggle) return;
+    event.preventDefault();
+    const step = toggle.closest('.activity-step');
+    const details = step?.querySelector('.activity-details');
+    if (step && details) {
+      const expanded = details.hidden;
+      queueMicrotask(() => toggleActivityDetails(step, toggle, details, expanded));
+    }
+  }, true);
   const summary = activity.querySelector('.activity-group-summary');
   summary.addEventListener('click', () => {
     activity.dataset.groupsExpanded = String(summary.getAttribute('aria-expanded') !== 'true');
@@ -641,7 +653,7 @@ function toggleActivityDetails(step, toggle, details, expanded = !details.hidden
   step.dataset.expanded = String(expanded);
 }
 
-async function openActivityFileViewer(path, imageId = '') {
+async function openActivityFileViewer(path, imageId = '', binary = false) {
   const dialog = document.getElementById('activity-file-viewer');
   const title = document.getElementById('activity-viewer-title');
   const content = document.getElementById('activity-viewer-content');
@@ -656,6 +668,21 @@ async function openActivityFileViewer(path, imageId = '') {
       image.src = URL.createObjectURL(await response.blob());
       activityImageObjectUrls.add(image.src);
       content.append(image);
+    } else if (binary) {
+      const query = new URLSearchParams({ path });
+      const response = await apiFetch(`/api/files/content?${query}`);
+      if (!response.ok) {
+        const result = await response.json();
+        throw new Error(result.error || 'File preview is unavailable.');
+      }
+      const objectUrl = URL.createObjectURL(await response.blob());
+      activityImageObjectUrls.add(objectUrl);
+      const openLink = document.createElement('a');
+      openLink.href = objectUrl;
+      openLink.target = '_blank';
+      openLink.rel = 'noopener';
+      openLink.textContent = 'Open binary file in a new tab';
+      content.append(openLink);
     } else {
       const query = new URLSearchParams({ path });
       const response = await apiFetch(`/api/files/preview?${query}`);
@@ -711,7 +738,7 @@ function appendDiffCard(details, data) {
     const binary = document.createElement('p');
     binary.textContent = `Binary file, ${Math.max(1, Math.round((diff.size_bytes || 0) / 1024))} KB`;
     card.append(binary);
-    appendActionButton(card, 'Open', () => openActivityFileViewer(diff.path || data.file_path));
+    appendActionButton(card, 'Open', () => openActivityFileViewer(diff.path || data.file_path, '', true));
   } else {
     const list = document.createElement('div');
     list.className = 'activity-diff-lines';
@@ -853,6 +880,18 @@ function renderActivityEvent(trace, event, data) {
     verb.className = 'activity-verb';
     const target = document.createElement('span');
     target.className = 'activity-target-chip';
+    target.addEventListener('click', (event) => {
+      if (!target.dataset.filePath) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openActivityFileViewer(target.dataset.filePath);
+    });
+    target.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' || !target.dataset.filePath) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openActivityFileViewer(target.dataset.filePath);
+    });
     const spinner = activityIcon('spinner', 'activity-running-spinner');
     const metadata = document.createElement('span');
     metadata.className = 'activity-metadata';
@@ -863,9 +902,6 @@ function renderActivityEvent(trace, event, data) {
     const details = document.createElement('div');
     details.className = 'activity-details';
     details.hidden = true;
-    toggle.addEventListener('click', () => {
-      toggleActivityDetails(step, toggle, details);
-    });
     step.append(toggle, details);
     steps.append(step);
   }
@@ -879,7 +915,18 @@ function renderActivityEvent(trace, event, data) {
   step.querySelector('.activity-verb').textContent = event === 'tool_start' ? data.present || 'Working' : data.status === 'failed' ? 'Failed' : data.past || 'Completed';
   const target = step.querySelector('.activity-target-chip');
   target.textContent = data.target || data.tool || 'request';
+  target.dataset.filePath = data.file_path || '';
   target.title = data.file_path || data.target || data.tool || '';
+  target.classList.toggle('activity-file-target', Boolean(data.file_path));
+  if (data.file_path) {
+    target.setAttribute('role', 'link');
+    target.setAttribute('tabindex', '0');
+    target.setAttribute('aria-label', `Open ${data.file_path}`);
+  } else {
+    target.removeAttribute('role');
+    target.removeAttribute('tabindex');
+    target.removeAttribute('aria-label');
+  }
   step.querySelector('.activity-running-spinner').hidden = event !== 'tool_start';
   const diff = data.diff;
   step.querySelector('.activity-metadata').textContent = event === 'tool_start'
@@ -952,13 +999,26 @@ function renderActivityEvent(trace, event, data) {
 }
 
 async function retryActivityStep(data, trace) {
-  const prompt = trace?.dataset.retryPrompt || elements.prompt.value.trim();
-  if (!prompt) {
-    elements.composerStatus.textContent = 'Restore the original request before retrying this step.';
+  if (!trace?.dataset.jobId || !data.tool_call_id) {
+    elements.composerStatus.textContent = 'This failed step is no longer available to retry.';
     return;
   }
-  elements.prompt.value = prompt;
-  await submitPrompt();
+  const button = [...trace.querySelectorAll('.activity-detail-action')]
+    .find((item) => item.textContent === 'Retry step');
+  if (button) button.disabled = true;
+  try {
+    const response = await apiFetch(apiContract.endpoints.activity_retry, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: trace.dataset.jobId, tool_call_id: data.tool_call_id }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'The failed step could not be retried.');
+    renderActivityEvent(trace, 'tool_end', result.activity);
+  } catch (error) {
+    elements.composerStatus.textContent = error.message || 'The failed step could not be retried.';
+    if (button) button.disabled = false;
+  }
 }
 
 async function submitFeedback(article, feedback) {
@@ -1552,6 +1612,7 @@ async function submitPrompt() {
     await readStream(response, ({ event, data }) => {
       if (event === 'message_start') {
         activeRunId = data.run_id || '';
+        activity.dataset.jobId = activeRunId;
         setBusy(true);
       } else if (event === 'provider_notice') {
         elements.providerNotice.textContent = data.message || '';
@@ -1574,6 +1635,7 @@ async function submitPrompt() {
       } else if (event === 'job' && data.id) {
         currentJob = data;
         activeRunId = data.id;
+        activity.dataset.jobId = data.id;
         if (data.state === 'waiting_for_user') {
           pendingQuestion = data;
           if (!activity?.querySelector('.activity-step')) activity?.remove();

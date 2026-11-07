@@ -19,3 +19,4 @@ python-pptx
 # Optional notification channel; used when Web Push is configured.
 pywebpush
 textual
+rich

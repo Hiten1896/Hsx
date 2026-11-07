@@ -456,6 +456,8 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 .activity-step-icon { color: #b6c6b8; }
 .activity-verb { color: var(--text); white-space: nowrap; }
 .activity-target-chip { min-width: 0; overflow: hidden; padding: 2px 6px; border-radius: 4px; color: var(--muted); background: #1b211e; font: 10px var(--font-code); text-overflow: ellipsis; white-space: nowrap; }
+.activity-file-target { text-decoration: underline; text-decoration-color: #78857b; text-underline-offset: 2px; cursor: pointer; }
+.activity-file-target:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
 .activity-running-spinner { visibility: hidden; color: var(--accent); }
 .activity-running-spinner:not([hidden]) { visibility: visible; }
 .activity-metadata, .activity-change-count { justify-self: end; color: #89968c; font: 9px var(--font-code); white-space: nowrap; }

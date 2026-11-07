@@ -59,7 +59,7 @@ it does not imply live hardware or production-provider verification.
 | Exact allowed origins and token-gated no-Origin requests | PARTLY | `server.py`, `tests/test_phase13b_security.py`; exhaustive look-alike and deployment checks not established. |
 | Mic dictation controls and safe recognition behavior | NOT STARTED | No `SpeechRecognition`/`webkitSpeechRecognition` implementation found in the web client. |
 | SSE heartbeats/resume and idempotent client message IDs | PARTLY | `server.py`, `web/chat.js`, `web/api-contract.json`, `tests/test_e2e.py`; reconnect/resume behavior not established end-to-end. |
-| Versioned service worker; token storage and log redaction | PARTLY | `web/` and `server.py`; no service worker was found; token handling requires further verification. |
+| Versioned service worker; token storage and log redaction | PARTLY | `web/service-worker.js` now versions the shell cache as `hsx-shell-v13`; `web/chat.js` and `server.py` still need a separate token/logging audit. |
 | Security headers/CSP, sanitized markdown and port-conflict messaging | PARTLY | `server.py`, `web/chat.js`, `tests/test_phase13b_security.py`; full header and rendering validation not established. |
 | Health endpoint, check script, rotating logs, systemd memory/restart policy | PARTLY | `server.py`, `scripts/check.sh`, `deploy/hsx.logrotate`, `deploy/hsx.service`; deployment-unit requirements are not all verified. |
 
@@ -80,14 +80,25 @@ it does not imply live hardware or production-provider verification.
 | Scheduler, spreadsheet tools, camera motion, health watch and workspace backup | PARTLY | `agent/jobs.py`, `agent/hardware/motion_monitor.py`, existing CSV skill, and related tests provide partial components; the requested integrated features and tests are absent. |
 | Long-running plans/progress/Stop, memory settings and 30-task eval | NOT STARTED | No complete implementation or fixed 30-task evaluation suite was found. |
 
+## Part E: Activity trace — PARTLY
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Typed tool rows, live/final verbs, icon mapping, grouping and narration | DONE + TESTED | `agent/activity_trace.py`, `agent/orchestrator.py`, `server.py`, `web/index.html`, `web/chat.js`, `tests/test_activity_trace.py`, and the Activity Trace browser test; registered tools are checked against the mapping. |
+| Redacted file diffs, command details, image thumbnails, file viewer and retry | DONE + TESTED | `server.py`, `web/chat.js`, `web/chat.css`, `tests/test_activity_trace.py`, and `tests/test_browser_ui.py`; retry rechecks policy, and thumbnail paths are jailed. |
+| Rich CLI rows, spinner, `/steps N`, Syntax diffs and width/no-color behavior | DONE + TESTED | `cli.py`, `requirements-core.txt`, `tests/test_cli.py`; tests render at 60, 80 and 120 columns with colors disabled. |
+| Exact comparison to reference screenshots and live camera/attached-image sources | PARTLY | No files were present under `docs/design/`; `docs/screens/after-{360,768,1280}-activity-trace.png` are generated from the implemented UI. Exact screenshot matching and live device streams remain unverified. |
+
 ## Baseline verification
 
 - Initial full-suite attempt exited 1 because Playwright Chromium was not yet
   installed; after installing the project browser runtime, full-suite runs
   passed, including Chromium interactions and viewport screenshots.
 - Latest complete-suite verification: `.\.venv\Scripts\python.exe -m pytest -q`
-  exited 0 after Phase 2 changes and the strict fake-provider web-chat test.
-- Ruff: `.\.venv\Scripts\ruff.exe check .` exited 0: “All checks passed!”
+  exited 0 after the Activity Trace browser, backend, and CLI tests were added.
+- Ruff: `ruff check .` exited 0: “All checks passed!”
 - `node --check web\chat.js` exited 0.
-- Live hardware and external provider behavior were not verified; camera and
-  provider services are simulated in tests.
+- Browser UI checks ran locally in Chromium, including Activity Trace
+  screenshots at 360, 768, and 1280 px. Live camera/audio hardware and
+  external provider behavior were not verified; device/provider services
+  are simulated in tests.

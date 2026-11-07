@@ -3,6 +3,7 @@ from datetime import datetime
 import json
 import os
 import re
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -10,8 +11,151 @@ import uuid
 from pathlib import Path
 from urllib.parse import quote
 
+from rich.console import Console
+from rich.syntax import Syntax
+from rich.status import Status
+from rich.text import Text
+
 BASE_URL = os.getenv("HSX_URL", "http://127.0.0.1:8000").rstrip("/")
 SESSION_ID = os.getenv("HSX_SESSION_ID", "").strip()
+ACTIVITY_CONSOLE = Console(no_color=bool(os.getenv("NO_COLOR")))
+ACTIVITY_STEPS: list[dict] = []
+ACTIVITY_STATUSES: dict[str, Status] = {}
+ACTIVITY_GLYPHS = {
+    "terminal": ("›_", ">_"),
+    "pencil": ("✎", "E"),
+    "book": ("▤", "R"),
+    "images": ("▣", "I"),
+    "file-plus": ("⊕", "+"),
+    "search": ("⌕", "?"),
+    "globe": ("◎", "@"),
+    "camera": ("◉", "C"),
+    "music": ("♫", "M"),
+    "download": ("↓", "v"),
+    "list": ("≡", "="),
+    "question": ("?", "?"),
+    "shield": ("⬡", "!"),
+    "clock": ("◷", "o"),
+    "package": ("▣", "[]"),
+    "palette": ("◍", "*"),
+    "brain": ("✧", "~"),
+    "save": ("▣", "S"),
+    "gear": ("⚙", "*"),
+}
+
+
+def _activity_text(icon: str, verb: str, target: str, *, data: dict | None = None) -> Text:
+    glyph, ascii_glyph = ACTIVITY_GLYPHS.get(icon, ACTIVITY_GLYPHS["gear"])
+    try:
+        (sys.stdout.encoding or "utf-8").encode(glyph)
+    except (LookupError, UnicodeEncodeError):
+        glyph = ascii_glyph
+    status = (data or {}).get("status")
+    style = "bold red" if status == "failed" else "bold"
+    row = Text(f"{glyph} ", style="cyan")
+    row.append(verb, style=style)
+    row.append(" ")
+    row.append(target or "request", style="cyan")
+    if data and data.get("duration_ms") is not None:
+        row.append(f"  {data['duration_ms'] / 1000:.1f}s", style="dim")
+    diff = (data or {}).get("diff")
+    if diff and not diff.get("binary"):
+        row.append(f"  +{diff.get('added', 0)}", style="green")
+        row.append(f" -{diff.get('removed', 0)}", style="red")
+    row.overflow = "ellipsis"
+    return row
+
+
+def _render_activity_event(event: str, data: dict) -> None:
+    if event == "activity_narration":
+        ACTIVITY_CONSOLE.print(Text(str(data.get("text", "")), style="dim italic"))
+        return
+    call_id = str(data.get("tool_call_id", ""))
+    if event == "tool_start":
+        ACTIVITY_STEPS.append(dict(data))
+        status = ACTIVITY_CONSOLE.status(
+            _activity_text(data.get("icon", "gear"), data.get("present", "Working"), data.get("target", "")),
+            spinner="dots",
+        )
+        status.start()
+        ACTIVITY_STATUSES[call_id] = status
+        return
+    if event != "tool_end":
+        return
+    status = ACTIVITY_STATUSES.pop(call_id, None)
+    if status is not None:
+        status.stop()
+    existing = next((index for index, step in enumerate(ACTIVITY_STEPS) if step.get("tool_call_id") == call_id), None)
+    if existing is None:
+        ACTIVITY_STEPS.append(dict(data))
+        existing = len(ACTIVITY_STEPS) - 1
+    else:
+        ACTIVITY_STEPS[existing].update(data)
+    ACTIVITY_CONSOLE.print(_activity_text(
+        data.get("icon", "gear"),
+        "Failed" if data.get("status") == "failed" else data.get("past", "Completed"),
+        data.get("target", ""),
+        data=data,
+    ))
+
+
+def _stop_activity_statuses() -> None:
+    for status in ACTIVITY_STATUSES.values():
+        status.stop()
+    ACTIVITY_STATUSES.clear()
+
+
+def _show_steps(index: int | None = None) -> None:
+    if not ACTIVITY_STEPS:
+        print("HSX > There are no activity steps to show.")
+        return
+    if index is None:
+        for number, step in enumerate(ACTIVITY_STEPS, start=1):
+            ACTIVITY_CONSOLE.print(_activity_text(
+                step.get("icon", "gear"),
+                "Failed" if step.get("status") == "failed" else step.get("past", step.get("present", "Working")),
+                step.get("target", ""),
+                data=step if step.get("status") != "running" else None,
+            ))
+        print("Use /steps N to expand a step.")
+        return
+    if index < 1 or index > len(ACTIVITY_STEPS):
+        print(f"HSX > Step must be between 1 and {len(ACTIVITY_STEPS)}.")
+        return
+    step = ACTIVITY_STEPS[index - 1]
+    ACTIVITY_CONSOLE.print(_activity_text(
+        step.get("icon", "gear"),
+        "Failed" if step.get("status") == "failed" else step.get("past", step.get("present", "Working")),
+        step.get("target", ""),
+        data=step,
+    ))
+    diff = step.get("diff")
+    if isinstance(diff, dict) and diff.get("binary"):
+        ACTIVITY_CONSOLE.print(f"Binary file, {max(1, round(diff.get('size_bytes', 0) / 1024))} KB")
+        ACTIVITY_CONSOLE.print(f"Open: {diff.get('path', step.get('file_path', ''))}")
+        return
+    if isinstance(diff, dict):
+        lines = []
+        for hunk in diff.get("hunks", []):
+            lines.append(str(hunk.get("header", "")))
+            for line in hunk.get("lines", []):
+                prefix = "+" if line.get("kind") == "added" else "-" if line.get("kind") == "removed" else " "
+                lines.append(prefix + str(line.get("text", "")))
+        ACTIVITY_CONSOLE.print(Syntax("\\n".join(lines[:200]), "diff", line_numbers=True, word_wrap=False))
+        return
+    details = step.get("details") or {}
+    if step.get("icon") == "terminal":
+        command = str(details.get("command") or step.get("target") or "")
+        ACTIVITY_CONSOLE.print(Syntax(command, "bash", line_numbers=False, word_wrap=True))
+        ACTIVITY_CONSOLE.print(f"Exit status: {details.get('exit_status', 'unknown')}")
+        output = details.get("output_lines") or []
+        ACTIVITY_CONSOLE.print("\\n".join(str(line) for line in output[:200]) or "No output.")
+        if len(output) > 200:
+            ACTIVITY_CONSOLE.print(f"Showing 200 of {len(output)} output lines.")
+        return
+    ACTIVITY_CONSOLE.print(f"Tool: {step.get('tool', 'unknown')}")
+    ACTIVITY_CONSOLE.print_json(data=details.get("arguments") or {})
+    ACTIVITY_CONSOLE.print(str(step.get("output") or "No additional output."))
 
 
 def _session_id() -> str:
@@ -58,6 +202,8 @@ def _request(path: str, payload: dict | None = None) -> dict:
 
 
 def _request_stream(path: str, payload: dict) -> dict:
+    _stop_activity_statuses()
+    ACTIVITY_STEPS.clear()
     request = urllib.request.Request(
         f"{BASE_URL}{path}",
         data=json.dumps(payload).encode("utf-8"),
@@ -80,21 +226,27 @@ def _request_stream(path: str, payload: dict) -> dict:
                         text = data.get("text", "")
                         streamed_text.append(text)
                         if not output_started:
-                            print("HSX > ", end="", flush=True)
+                            ACTIVITY_CONSOLE.print("HSX > ", end="", flush=True)
                             output_started = True
-                        print(text, end="", flush=True)
+                        ACTIVITY_CONSOLE.print(text, end="", flush=True)
+                    elif event_name in {"tool_start", "tool_end", "activity_narration"}:
+                        _render_activity_event(event_name, data)
                     elif event_name == "job":
                         job = data
                     elif event_name == "done":
+                        _stop_activity_statuses()
                         break
                 elif not line:
                     event_name = ""
     except urllib.error.HTTPError as error:
+        _stop_activity_statuses()
         detail = error.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"HSX returned HTTP {error.code}: {detail}") from error
     except (OSError, json.JSONDecodeError) as error:
+        _stop_activity_statuses()
         raise RuntimeError(f"Could not stream from HSX at {BASE_URL}: {error}") from error
-    print(flush=True)
+    _stop_activity_statuses()
+    ACTIVITY_CONSOLE.print()
     return {"job": job, "streamed_text": "".join(streamed_text)}
 
 
@@ -313,6 +465,16 @@ def main(argv: list[str] | None = None) -> None:
                 _show_activity()
             except (RuntimeError, ValueError) as error:
                 print(f"HSX > {error}")
+            continue
+        if message.lower() == "/steps":
+            _show_steps()
+            continue
+        if message.lower().startswith("/steps "):
+            step_number = message[7:].strip()
+            if not step_number.isdigit():
+                print("HSX > Use /steps N to expand a numbered step.")
+            else:
+                _show_steps(int(step_number))
             continue
         if message.lower() == "/artifacts":
             try:

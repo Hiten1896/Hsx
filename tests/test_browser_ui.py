@@ -1,3 +1,4 @@
+import base64
 import json
 import threading
 import time
@@ -13,6 +14,30 @@ from agent.notifier import Notifier
 
 
 class BrowserFakeHandler(server.HsxHandler):
+    def do_GET(self):
+        if self._request_path() == "/api/activity/image":
+            image = base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l3sAAAAASUVORK5CYII="
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(image)))
+            self.end_headers()
+            self.wfile.write(image)
+            return
+        if self._request_path() == "/api/files/preview":
+            self._json({"content": "one\ntwo\nthree"})
+            return
+        if self._request_path() == "/api/files/content":
+            content = b"%PDF-1.4"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+            return
+        return super().do_GET()
+
     def do_POST(self):
         if self._request_path() == "/api/feedback":
             self._json({"success": True, "saved": True}, 201)
@@ -40,12 +65,93 @@ class BrowserFakeHandler(server.HsxHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        events = [
-            ("message_start", {"run_id": "browser-fake-run"}),
-            ("text_delta", {"text": "Test answer from fake provider."}),
-            ("job", {"id": "browser-fake-job", "state": "done", "result": "Test answer from fake provider."}),
-            ("done", {}),
-        ]
+        if payload.get("message") == "activity trace":
+            events = [("message_start", {"run_id": "activity-trace-run"})]
+            for index in range(7):
+                tool = "create_text_file" if index == 0 else "run_code"
+                call_id = f"trace-{index}"
+                target = (
+                    "Hsx Work/a-very-long-report-name-that-is-truncated-without-widening-the-360-pixel-layout.txt"
+                    if index == 0 else f"python step_{index}.py"
+                )
+                events.append(("tool_start", {
+                    "tool_call_id": call_id, "tool": tool, "icon": "pencil" if index == 0 else "terminal",
+                    "present": "Editing" if index == 0 else "Running", "past": "Edited" if index == 0 else "Ran",
+                    "target": target, "file_path": "Hsx Work/report.txt" if index == 0 else "",
+                    "arguments": {"path": "Hsx Work/report.txt", "content": "[REDACTED]"} if index == 0 else {"command": target},
+                    "status": "running",
+                }))
+                completed = {
+                    "tool_call_id": call_id, "tool": tool, "icon": "pencil" if index == 0 else "terminal",
+                    "present": "Editing" if index == 0 else "Running", "past": "Edited" if index == 0 else "Ran",
+                    "target": target, "file_path": "Hsx Work/report.txt" if index == 0 else "",
+                    "status": "completed", "duration_ms": 1200, "output": "Completed successfully.",
+                    "details": {"arguments": {}, "command": target, "output_lines": [], "exit_status": 0},
+                    "images": [{"id": f"image-{image}", "path": f"image-{image}.png"} for image in range(6)] if index == 0 else [],
+                }
+                if index == 0:
+                    completed["diff"] = {
+                        "path": "Hsx Work/report.txt", "added": 1, "removed": 1, "hunks": [{
+                            "header": "@@ -1,3 +1,3 @@", "lines": [
+                                {"kind": "context", "old_line": 1, "new_line": 1, "text": "first"},
+                                {"kind": "removed", "old_line": 2, "text": "old"},
+                                {"kind": "added", "new_line": 2, "text": "new"},
+                                {"kind": "context", "old_line": 3, "new_line": 3, "text": "last"},
+                            ],
+                        }],
+                    }
+                events.append(("tool_end", completed))
+            events.extend([
+                ("text_delta", {"text": "Activity trace complete."}),
+                ("job", {"id": "activity-trace-job", "state": "done", "result": "Activity trace complete."}),
+                ("done", {}),
+            ])
+        elif payload.get("message") == "activity failure":
+            events = [
+                ("message_start", {"run_id": "activity-failure-run"}),
+                ("tool_start", {
+                    "tool_call_id": "failed-step", "tool": "shell", "icon": "terminal",
+                    "present": "Running", "past": "Ran", "target": "python failing.py",
+                    "arguments": {"command": "python failing.py"}, "status": "running",
+                }),
+                ("tool_end", {
+                    "tool_call_id": "failed-step", "tool": "shell", "icon": "terminal",
+                    "present": "Running", "past": "Ran", "target": "python failing.py",
+                    "arguments": {"command": "python failing.py"}, "status": "failed",
+                    "duration_ms": 15, "output": "Process returned an error.",
+                    "details": {"command": "python failing.py", "exit_status": 1, "output_lines": ["failed"], "arguments": {"command": "python failing.py"}},
+                    "images": [],
+                }),
+                ("text_delta", {"text": "The step failed."}),
+                ("job", {"id": "activity-failure-job", "state": "done", "result": "The step failed."}),
+                ("done", {}),
+            ]
+        elif payload.get("message") == "activity binary":
+            events = [
+                ("message_start", {"run_id": "activity-binary-run"}),
+                ("tool_start", {
+                    "tool_call_id": "binary-step", "tool": "create_text_file", "icon": "pencil",
+                    "present": "Editing", "past": "Edited", "target": "report.pdf",
+                    "file_path": "Hsx Work/report.pdf", "status": "running",
+                }),
+                ("tool_end", {
+                    "tool_call_id": "binary-step", "tool": "create_text_file", "icon": "pencil",
+                    "present": "Editing", "past": "Edited", "target": "report.pdf",
+                    "file_path": "Hsx Work/report.pdf", "status": "completed", "duration_ms": 5,
+                    "diff": {"path": "Hsx Work/report.pdf", "binary": True, "size_bytes": 2048},
+                    "details": {"arguments": {}}, "images": [],
+                }),
+                ("text_delta", {"text": "Binary file ready."}),
+                ("job", {"id": "activity-binary-job", "state": "done", "result": "Binary file ready."}),
+                ("done", {}),
+            ]
+        else:
+            events = [
+                ("message_start", {"run_id": "browser-fake-run"}),
+                ("text_delta", {"text": "Test answer from fake provider."}),
+                ("job", {"id": "browser-fake-job", "state": "done", "result": "Test answer from fake provider."}),
+                ("done", {}),
+            ]
         for name, data in events:
             self.wfile.write(f"event: {name}\ndata: {json.dumps(data)}\n\n".encode())
         self.wfile.flush()
@@ -300,6 +406,88 @@ def test_browser_layout_screenshots_at_requested_widths(browser_app, browser_pag
             horizontal_overlap = icon["x"] < first_message["x"] + first_message["width"] and first_message["x"] < icon["x"] + icon["width"]
             assert not (vertical_overlap and horizontal_overlap)
         page.screenshot(path=str(screenshots / f"after-{width}-long-conversation.png"))
+
+
+def test_browser_activity_trace_diff_images_grouping_and_failure(browser_app, browser_page):
+    base_url, _ = browser_app
+    browser, page = browser_page
+    page.set_default_timeout(5000)
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+    page.locator("#prompt-input").fill("activity trace")
+    page.locator("#send-button").click()
+    trace = page.locator(".activity-trace").last
+    summary = trace.locator(".activity-group-summary")
+    summary.wait_for()
+    assert summary.inner_text() == "Completed 7 steps"
+    summary.click()
+    assert trace.locator(".activity-step").count() == 7
+    first = trace.locator(".activity-step").first
+    assert first.locator(".activity-target-chip").get_attribute("title").startswith("Hsx Work/")
+    assert first.locator(".activity-target-chip").evaluate("el => getComputedStyle(el).textOverflow") == "ellipsis"
+    first.locator(".activity-target-chip").click()
+    page.locator("#activity-file-viewer[open]").wait_for()
+    assert page.locator("#activity-viewer-title").inner_text() == "Hsx Work/report.txt"
+    page.locator("#activity-viewer-close").click()
+    first.locator(".activity-verb").click()
+    assert first.locator(".activity-row-toggle").get_attribute("aria-expanded") == "true", first.inner_html()
+    diff = first.locator(".activity-diff-card")
+    assert diff.is_visible()
+    assert diff.get_by_text("+1", exact=True).is_visible()
+    assert diff.get_by_text("-1", exact=True).is_visible()
+    assert diff.locator(".activity-diff-line-number").count() == 4
+    diff.get_by_role("button", name="Copy").click()
+    assert "new" in page.evaluate("navigator.clipboard.readText()")
+    gallery = first.locator(".activity-image-gallery")
+    assert gallery.locator("figure").count() == 5
+    assert gallery.get_by_text("+1 more").is_visible()
+    gallery.locator(".activity-image-open").first.click()
+    page.locator("#activity-file-viewer[open]").wait_for()
+    assert page.locator("#activity-viewer-title").inner_text() == "image-0.png"
+    page.locator("#activity-viewer-close").click()
+    for width in (360, 768, 1280):
+        page.set_viewport_size({"width": width, "height": 900})
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        page.screenshot(path=str(Path(__file__).resolve().parents[1] / "docs" / "screens" / f"after-{width}-activity-trace.png"))
+    second = trace.locator(".activity-step").nth(1)
+    second.locator(".activity-row-toggle").click()
+    assert "python step_1.py" in second.locator(".activity-command").inner_text()
+    icon_ids = page.locator("svg.activity-icon-sprite symbol").evaluate_all("items => items.map(item => item.id)")
+    assert page.locator("svg.activity-icon-sprite").count() == 1
+    assert len(icon_ids) == len(set(icon_ids))
+    assert {
+        "activity-icon-terminal", "activity-icon-pencil", "activity-icon-book", "activity-icon-images",
+        "activity-icon-file-plus", "activity-icon-search", "activity-icon-globe", "activity-icon-camera",
+        "activity-icon-music", "activity-icon-download", "activity-icon-list", "activity-icon-question",
+        "activity-icon-shield", "activity-icon-clock", "activity-icon-package", "activity-icon-palette",
+        "activity-icon-brain", "activity-icon-save", "activity-icon-gear",
+    } <= set(icon_ids)
+
+    page.locator("#prompt-input").fill("activity failure")
+    page.locator("#send-button").click()
+    failed = page.locator(".activity-step.is-failed").last
+    failed.wait_for()
+    assert failed.locator(".activity-row-toggle").get_attribute("aria-expanded") == "true"
+    assert failed.get_by_role("button", name="Retry step").is_visible()
+
+
+def test_browser_activity_binary_file_opens_in_the_file_viewer(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    page.set_default_timeout(5000)
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.locator("#prompt-input").fill("activity binary")
+    page.locator("#send-button").click()
+    step = page.locator(".activity-step").last
+    step.locator(".activity-verb").click()
+    card = step.locator(".activity-diff-card")
+    card.wait_for()
+    assert card.get_by_text("Binary file, 2 KB").is_visible()
+    card.get_by_role("button", name="Open").click()
+    page.locator("#activity-file-viewer[open]").wait_for()
+    assert page.get_by_role("link", name="Open binary file in a new tab").is_visible()
 
 
 def test_browser_empty_history_and_permissions_settings(browser_app, browser_page):
