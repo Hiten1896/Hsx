@@ -73,7 +73,7 @@ const elements = {
   cameraSidebar: document.getElementById('camera-sidebar'),
   panelBackdrop: document.getElementById('panel-backdrop'),
   artifactsList: document.getElementById('artifacts-list'),
-  activityList: document.getElementById('agent-activity-list'),
+  activityList: document.getElementById('agent-activity-strip'),
   notificationPanel: document.getElementById('notifications-panel'),
   notificationsList: document.getElementById('notifications-list'),
   permissionDialog: document.getElementById('permission-dialog'),
@@ -198,7 +198,20 @@ function renderChatHistory() {
     return;
   }
   const fragment = document.createDocumentFragment();
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let currentGroup = '';
   for (const [id, session] of sessions) {
+    const updated = new Date(session.updatedAt || now);
+    const age = Math.floor((today - new Date(updated.getFullYear(), updated.getMonth(), updated.getDate())) / 86400000);
+    const group = age <= 0 ? 'Today' : age === 1 ? 'Yesterday' : age <= 7 ? 'Previous 7 days' : 'Older';
+    if (group !== currentGroup) {
+      const heading = document.createElement('h2');
+      heading.className = 'chat-history-group';
+      heading.textContent = group;
+      fragment.append(heading);
+      currentGroup = group;
+    }
     const row = document.createElement('div');
     row.className = 'chat-history-row';
     row.dataset.active = String(id === sessionId);
@@ -221,7 +234,8 @@ function renderChatHistory() {
     const rename = document.createElement('button');
     rename.type = 'button';
     rename.className = 'chat-history-action';
-    rename.textContent = '✎';
+    rename.setAttribute('aria-hidden', 'true');
+    rename.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5 5 5M4 20l4-.8L20 7a2.1 2.1 0 0 0-3-3L5 16l-1 4Z"></path></svg>';
     rename.title = 'Rename chat';
     rename.setAttribute('aria-label', `Rename chat: ${session.title || 'New chat'}`);
     rename.addEventListener('click', () => {
@@ -238,7 +252,8 @@ function renderChatHistory() {
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'chat-history-action';
-    remove.textContent = '×';
+    remove.setAttribute('aria-hidden', 'true');
+    remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 3v6m4-6v6"></path></svg>';
     remove.title = 'Delete chat';
     remove.setAttribute('aria-label', `Delete chat: ${session.title || 'New chat'}`);
     remove.addEventListener('click', () => {
@@ -2778,104 +2793,22 @@ function updateActivityElapsed() {
 }
 
 async function refreshAgentActivity() {
-  const previousScrollTop = elements.activityList.scrollTop;
-  const empty = document.createElement('p');
-  empty.className = 'artifacts-empty';
-  empty.textContent = 'Checking for agent tasks…';
   try {
     const query = new URLSearchParams({ session_id: sessionId });
     const response = await apiFetch(`${apiContract.endpoints.activity}?${query}`);
     if (!response.ok) throw new Error('Could not load agent activity.');
     const data = await response.json();
     const tasks = Array.isArray(data.tasks) ? data.tasks : [];
-    document.getElementById('activity-count').textContent =
-      `${tasks.filter((task) => ['queued', 'running', 'waiting_for_user', 'waiting_for_approval', 'permission_request'].includes(task.state)).length} active`;
-    if (!tasks.length) {
-      empty.textContent = 'No agent tasks in this session yet.';
-      elements.activityList.replaceChildren(empty);
+    const activeTask = tasks.find((task) => task.state === 'running');
+    if (!activeTask) {
+      elements.activityList.hidden = true;
       return;
     }
-    const fragment = document.createDocumentFragment();
-    for (const task of tasks) {
-      const item = document.createElement('div');
-      item.className = 'activity-item';
-      item.dataset.state = String(task.state || 'unknown');
-      const toggle = document.createElement('button');
-      toggle.type = 'button';
-      toggle.className = 'activity-item-toggle';
-      toggle.setAttribute('aria-expanded', 'false');
-      const taskTool = String(task.tool_name || task.last_tool || task.tool || '').toLowerCase();
-      const iconName = task.state === 'running'
-        ? 'spinner'
-        : /(shell|terminal|command|run_code|execute)/.test(taskTool)
-          ? 'terminal'
-          : /(edit|write|patch|file)/.test(taskTool)
-            ? 'pencil'
-            : 'brain';
-      const taskIcon = activityIcon(iconName, iconName === 'spinner' ? 'activity-spinner' : '');
-      taskIcon.classList.add('activity-task-icon');
-      const chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      chevron.setAttribute('viewBox', '0 0 24 24');
-      chevron.setAttribute('aria-hidden', 'true');
-      const chevronPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      chevronPath.setAttribute('d', 'm6 9 6 6 6-6');
-      chevron.append(chevronPath);
-      const summary = document.createElement('span');
-      summary.className = 'activity-summary';
-      summary.textContent = String(task.summary || 'Agent task');
-      const meta = document.createElement('span');
-      meta.className = 'activity-meta';
-      const state = document.createElement('span');
-      state.className = 'activity-state';
-      state.dataset.state = String(task.state || 'unknown');
-      state.textContent = String(task.state || 'unknown').replaceAll('_', ' ');
-      meta.append(state);
-      toggle.setAttribute('aria-label', `${state.textContent}: ${summary.textContent}`);
-      toggle.append(taskIcon, summary, meta, chevron);
-      const details = document.createElement('div');
-      details.className = 'activity-card-details';
-      details.hidden = true;
-      toggle.addEventListener('click', () => {
-        const expanded = toggle.getAttribute('aria-expanded') !== 'true';
-        toggle.setAttribute('aria-expanded', String(expanded));
-        details.hidden = !expanded;
-      });
-      const addDetail = (label, value) => {
-        const detail = document.createElement('div');
-        detail.className = 'activity-detail';
-        const key = document.createElement('span');
-        key.textContent = label;
-        const text = document.createElement('strong');
-        text.textContent = value;
-        detail.append(key, text);
-        details.append(detail);
-        return text;
-      };
-      addDetail('Agent', `${task.agent_role || 'Assistant'} · ${task.agent_name || 'Hsx'}`);
-      addDetail('Sub-task', task.subtask || task.task_description || task.summary || 'Task details unavailable');
-      const targetPaths = Array.isArray(task.file_paths) ? task.file_paths.filter(Boolean).join(', ')
-        : (task.file_paths || task.task_path || 'No target path reported');
-      addDetail('Target', String(targetPaths));
-      if (['running', 'queued'].includes(task.state)) {
-        const elapsed = addDetail('Elapsed', formatElapsed(Number(task.elapsed_seconds)));
-        elapsed.dataset.elapsedStart = String(Date.now() - Math.max(0, Number(task.elapsed_seconds) || 0) * 1000);
-        addDetail(
-          'ETA',
-          Number.isFinite(Number(task.eta_seconds)) && task.eta_seconds !== null
-            ? formatElapsed(Number(task.eta_seconds))
-            : 'Estimating',
-        );
-      }
-      item.append(toggle, details);
-      fragment.append(item);
-    }
-    elements.activityList.replaceChildren(fragment);
-    elements.activityList.scrollTop = previousScrollTop;
-    updateActivityElapsed();
+    document.getElementById('activity-running-title').textContent = String(activeTask.summary || 'Working on your request');
+    elements.activityList.dataset.runId = String(activeTask.id || '');
+    elements.activityList.hidden = false;
   } catch {
-    document.getElementById('activity-count').textContent = 'Unavailable';
-    empty.textContent = 'Agent activity is unavailable right now.';
-    elements.activityList.replaceChildren(empty);
+    elements.activityList.hidden = true;
   }
 }
 
@@ -3042,23 +2975,20 @@ async function initialize() {
   });
   document.getElementById('refresh-artifacts').addEventListener('click', refreshArtifacts);
   document.getElementById('camera-retry').addEventListener('click', retryCamera);
-  document.getElementById('activity-toggle').addEventListener('click', (event) => {
-    const button = event.currentTarget;
-    const expanded = button.getAttribute('aria-expanded') === 'true';
-    button.setAttribute('aria-expanded', String(!expanded));
-    button.setAttribute('aria-label', expanded ? 'Expand agent activity' : 'Collapse agent activity');
-    button.title = expanded ? 'Expand agent activity' : 'Collapse agent activity';
-    elements.activityList.hidden = expanded;
-    event.currentTarget.closest('.activity-panel').classList.toggle('is-expanded', !expanded);
-  });
-  document.getElementById('history-toggle').addEventListener('click', (event) => {
-    const button = event.currentTarget;
-    const expanded = button.getAttribute('aria-expanded') === 'true';
-    button.setAttribute('aria-expanded', String(!expanded));
-    button.setAttribute('aria-label', expanded ? 'Expand chat history' : 'Collapse chat history');
-    button.title = expanded ? 'Expand chat history' : 'Collapse chat history';
-    document.getElementById('chat-history-list').hidden = expanded;
-    event.currentTarget.closest('.history-panel').classList.toggle('is-expanded', !expanded);
+  document.getElementById('activity-stop').addEventListener('click', async () => {
+    const runId = elements.activityList.dataset.runId;
+    if (!runId) return;
+    try {
+      const response = await apiFetch(apiContract.endpoints.stop, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ run_id: runId }),
+      });
+      if (!response.ok) throw new Error('The active task could not be stopped.');
+      await refreshAgentActivity();
+    } catch (error) {
+      document.getElementById('activity-stop').title = error.message || 'The active task could not be stopped.';
+    }
   });
   document.getElementById('chat-history-search').addEventListener('input', renderChatHistory);
   document.getElementById('connection-toggle').addEventListener('click', () => {
