@@ -28,7 +28,9 @@ def write_proposal(
 ) -> str:
     prompt = (
         "You are the Coder/Executor specialist. Propose a small, reviewable implementation "
-        "for one task step. Do not execute it or claim files were changed. If code is needed, "
+        "for one task step. Dedicated tools (read_content, extract_style, make_pdf, make_docx, "
+        "make_pptx, make_csv, make_markdown, create_text_file) are always preferred over code. "
+        "Generated code is a last resort. If code is needed, "
         "include a Python code block and focused tests. Do not include secrets.\n"
         f"Overall goal: {goal[:1000]}\nTask step: {step[:1000]}"
     )
@@ -36,6 +38,52 @@ def write_proposal(
     if not isinstance(proposal, str) or not proposal.strip():
         raise ValueError("Coder specialist returned an empty proposal.")
     return proposal.strip()[:MAX_PROPOSAL_CHARS]
+
+
+def write_proposal_with_repair(
+    goal: str,
+    step: str,
+    coder_call: Callable[[str], str],
+    validator_call: Callable[[str], str],
+    max_retries: int = 4,
+) -> str:
+    """Repair loop: retry up to max_retries times feeding exact validator rejection reasons back."""
+    prompt = (
+        "You are the Coder/Executor specialist. Propose a small, reviewable implementation "
+        "for one task step. Dedicated tools (read_content, extract_style, make_pdf, make_docx, "
+        "make_pptx, make_csv, make_markdown, create_text_file) are always preferred over code. "
+        "Generated code is a last resort. If code is needed, include a standard Python block without "
+        "dynamic exec/eval/compile, forbidden imports, or restricted dunder operations.\n"
+        f"Overall goal: {goal[:1000]}\nTask step: {step[:1000]}"
+    )
+    last_reason = ""
+    for attempt in range(1, max_retries + 1):
+        if attempt > 1:
+            step_prompt = (
+                f"{prompt}\n\nYour proposal attempt {attempt - 1} was rejected with error:\n{last_reason}\n"
+                "Rule broken: Dynamic code execution (exec, eval, compile, getattr on dunder), forbidden imports, "
+                "or restricted attributes are forbidden. Write safe Python code adhering strictly to these rules, "
+                "or specify a dedicated tool. Do not repeat the rejected proposal."
+            )
+        else:
+            step_prompt = prompt
+
+        proposal = coder_call(step_prompt)
+        if not isinstance(proposal, str) or not proposal.strip():
+            last_reason = "Coder specialist returned an empty proposal."
+            continue
+        proposal = proposal.strip()[:MAX_PROPOSAL_CHARS]
+        try:
+            review_proposal(goal, step, proposal, validator_call)
+            return proposal
+        except ValueError as error:
+            last_reason = str(error)
+            LOGGER.warning("Coder proposal attempt %d rejected: %s", attempt, last_reason)
+            if attempt == max_retries:
+                raise ValueError(
+                    f"Coder proposal rejected after {max_retries} attempt(s): {last_reason}"
+                ) from error
+    raise ValueError(f"Coder proposal rejected after {max_retries} attempt(s): {last_reason}")
 
 
 def _literal_code_source(node: ast.AST, default_mode: str) -> tuple[str, str] | None:

@@ -49,11 +49,38 @@ class PlanExecutionError(RuntimeError):
 
 def is_complex_task(prompt: str) -> bool:
     text = prompt.strip().lower()
-    if len(text) < 80:
+    if len(text) < 40:
         return False
-    if re.search(r"(?m)^\s*(?:\d+[.)]|[-*])\s+\S", text):
-        return True
-    return len(re.findall(r"\b(?:then|after that|next|finally|first|second|third)\b", text)) >= 2
+
+    # Never plan preferences, conversation, questions, or camera controls
+    if any(text.startswith(prefix) for prefix in [
+        "always remember", "remember that", "remember:", "please remember",
+        "note that", "keep in mind", "don't forget", "dont forget", "standing rule",
+    ]):
+        return False
+
+    if any(text.startswith(greeting) for greeting in [
+        "hi", "hello", "hey", "how are you", "who are you", "thanks", "thank you",
+        "good morning", "good evening", "good afternoon",
+    ]):
+        return False
+
+    if any(keyword in text for keyword in [
+        "turn on the camera", "show me the room", "turn off the camera", "what do you see",
+        "camera on", "camera off",
+    ]):
+        return False
+
+    # Only multi-step file or document jobs use the planner
+    document_keywords = [
+        "file", "document", "pdf", "docx", "pptx", "csv", "markdown",
+        "report", "spreadsheet", "website", "html", "archive", "zip",
+    ]
+    has_doc_intent = any(kw in text for kw in document_keywords)
+    has_numbered_steps = bool(re.search(r"(?m)^\s*(?:\d+[.)]|[-*])\s+\S", text))
+    has_sequence_words = len(re.findall(r"\b(?:then|after that|next|finally|first|second|third)\b", text)) >= 2
+
+    return has_doc_intent and (has_numbered_steps or has_sequence_words)
 
 
 def parse_plan(payload: str, goal: str) -> TaskPlan:

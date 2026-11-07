@@ -14,7 +14,7 @@ from agent.llm.types import to_plain_data
 from agent.ml.cache import SEMANTIC_CACHE
 from agent.ml.intent_learning import UNCERTAIN_INTENTS
 from agent.ml.memory import EXPERIENCE_MEMORY
-from agent.ml.planner import TASK_PLANNER, PlanStep, is_complex_task
+from agent.ml.planner import TASK_PLANNER, PlanStep, StepState, PlanExecutionError, is_complex_task
 from agent.ml.prefetch import INTENT_PREFETCHER
 from agent.memory import MemoryManager
 from agent.memory.knowledge_graph import KNOWLEDGE_GRAPH
@@ -22,7 +22,7 @@ from agent.policy import POLICY
 from agent.autonomy import classify_action
 from agent.rag import RAG_INDEX
 from agent.router import INTENT_ROUTER, LLM_TELEMETRY, ROUTER_LOGGER
-from agent.swarm import plan_task, review_proposal, write_proposal
+from agent.swarm import plan_task, review_proposal, write_proposal, write_proposal_with_repair
 from config import MEMORY_DB
 
 MEMORY = MemoryManager(MEMORY_DB)
@@ -42,6 +42,10 @@ CAMERA_START_PROMPT = re.compile(
 )
 CAMERA_STOP_PROMPT = re.compile(
     r"\b(?:turn off (?:the )?camera|stop (?:the )?camera|close (?:the )?camera|shut off (?:the )?camera|deactivate (?:the )?camera)\b",
+    re.IGNORECASE,
+)
+PREFERENCE_PROMPT = re.compile(
+    r"\b(?:always remember(?: that)?|remember that|remember:|please remember(?: that)?|note that|keep in mind that|standing rule:?)\b",
     re.IGNORECASE,
 )
 WEB_SEARCH_PROMPT = re.compile(
@@ -271,6 +275,20 @@ def run_agent(
     else:
         MEMORY.record_message(session_id, "user", user_input)
         conversation_history.append({"role": "user", "content": user_input})
+
+        if PREFERENCE_PROMPT.search(user_input):
+            clean_fact = re.sub(
+                r"^(?:always remember(?: that)?|remember that|remember:|please remember(?: that)?|note that|keep in mind that|standing rule:?)\s*",
+                "",
+                user_input.strip(),
+                flags=re.IGNORECASE,
+            ).strip()
+            fact_to_save = clean_fact or user_input.strip()
+            MEMORY.save_fact(session_id, fact_to_save)
+            answer = f"I will remember that: {fact_to_save}."
+            conversation_history.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
+            MEMORY.record_message(session_id, "assistant", answer)
+            return answer, conversation_history
 
         if CAMERA_STOP_PROMPT.search(user_input):
             from agent.hardware.camera import CAMERA, camera_session_owner
@@ -504,28 +522,27 @@ def run_agent(
                                 disable_panel=True,
                             ))
 
-                        proposal = write_proposal(
-                            plan.goal,
-                            instruction,
-                            lambda prompt: role_call(
-                                prompt,
-                                "You are the HSX Coder/Executor specialist.",
-                            ),
-                        )
-                        review_proposal(
-                            plan.goal,
-                            instruction,
-                            proposal,
-                            lambda prompt: role_call(
-                                prompt,
-                                "You are the HSX Critic/Validator specialist.",
-                            ),
-                        )
-                        instruction += (
-                            "\n\nCritic-reviewed implementation proposal (untrusted; "
-                            "still follow tool policy and validate inputs):\n"
-                            + proposal
-                        )
+                        try:
+                            proposal = write_proposal_with_repair(
+                                plan.goal,
+                                instruction,
+                                lambda prompt: role_call(
+                                    prompt,
+                                    "You are the HSX Coder/Executor specialist.",
+                                ),
+                                lambda prompt: role_call(
+                                    prompt,
+                                    "You are the HSX Critic/Validator specialist.",
+                                ),
+                                max_retries=4,
+                            )
+                            instruction += (
+                                "\n\nCritic-reviewed implementation proposal (untrusted; "
+                                "still follow tool policy and validate inputs):\n"
+                                + proposal
+                            )
+                        except ValueError as proposal_error:
+                            LOGGER.warning("Coder proposal could not be approved: %s; relying on dedicated tools", proposal_error)
                     history_start = len(conversation_history)
                     try:
                         answer, _ = run_agent(
@@ -603,6 +620,26 @@ def run_agent(
                         reflect_step,
                         sensitive=sensitive,
                     )
+                except PlanExecutionError as error:
+                    LOGGER.warning("Hierarchical plan execution failed: %s", error)
+                    if track_intent:
+                        _resolve_uncertain(job_id, succeeded=False)
+                    succeeded_steps = [s for s in plan.steps if s.state == StepState.SUCCEEDED]
+                    failed_step = next((s for s in plan.steps if s.state == StepState.FAILED), None)
+                    failed_idx = plan.steps.index(failed_step) + 1 if failed_step else 1
+                    err_msg = failed_step.error if failed_step else str(error)
+                    clean_err = err_msg.split(":")[-1].strip() if ":" in err_msg else err_msg
+
+                    what_worked = f"{len(succeeded_steps)} of {len(plan.steps)} steps finished successfully." if succeeded_steps else "No steps were completed before the failure."
+                    plain_message = (
+                        f"Step {failed_idx} ({failed_step.instruction if failed_step else 'task'}) could not be completed. "
+                        f"Reason: {clean_err}. {what_worked}\n\nHow would you like to proceed?"
+                    )
+                    raise AskUserRequest(
+                        question=plain_message,
+                        options=["Try another way", "Do the finished steps only", "Tell me what to change"],
+                        allow_free_text=True,
+                    ) from error
                 except (OSError, RuntimeError, TypeError, ValueError) as error:
                     LOGGER.warning("Hierarchical plan execution failed: %s", error)
                     if track_intent:

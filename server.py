@@ -154,7 +154,14 @@ def _hardware_audio_alert(*, succeeded: bool, message: str = "") -> None:
         LOGGER.exception("Could not queue a hardware audio alert.")
 
 
+_FAILED_RUN_IDS: set[str] = set()
+
+
 def _emit_chat_event(job_id: str, event: str, payload: dict) -> None:
+    if event == "error":
+        if job_id in _FAILED_RUN_IDS:
+            return
+        _FAILED_RUN_IDS.add(job_id)
     CHAT_STREAMS.emit(job_id, event, payload)
     if event == "done":
         RUN_CANCEL_EVENTS.pop(job_id, None)
@@ -634,6 +641,9 @@ def _fail_job(
     stream: bool = False,
     started_at: float | None = None,
 ) -> None:
+    if job_id in _FAILED_RUN_IDS:
+        return
+    _FAILED_RUN_IDS.add(job_id)
     error_message = _job_error(error)
     try:
         UNCERTAIN_INTENTS.resolve(job_id, succeeded=False)
