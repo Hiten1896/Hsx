@@ -511,3 +511,13 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
   .activity-spinner, .activity-running-spinner { animation: none; }
   .activity-chevron { transition: none; }
 }
+.activity-capability-groups { display: grid; gap: 12px; }
+.activity-capability-group { display: grid; gap: 8px; }
+.activity-capability-group h4 { margin: 0; color: var(--text-muted); font-size: .78rem; font-weight: 600; }
+.activity-capability-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; padding: 9px 10px; border-radius: 9px; background: var(--surface-raised, rgba(255,255,255,.035)); }
+.activity-capability-card strong { min-width: 0; overflow-wrap: anywhere; font-size: .82rem; }
+.activity-capability-card p { grid-column: 1 / -1; margin: 0; color: var(--text-muted); font-size: .78rem; line-height: 1.45; }
+.activity-capability-status { align-self: start; color: var(--text-muted); font-size: .72rem; white-space: nowrap; }
+.activity-capability-status[data-status="works now"] { color: var(--success, #75c995); }
+.activity-capability-status[data-status="needs setup"] { color: var(--warning, #e0b56d); }
+.activity-capability-status[data-status="not possible yet"] { color: var(--text-muted); }

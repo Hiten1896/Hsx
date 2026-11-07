@@ -828,6 +828,37 @@ function appendActivityImages(details, images) {
   details.append(gallery);
 }
 
+function appendCapabilityCards(details, groups) {
+  if (!Array.isArray(groups)) return;
+  const cards = document.createElement('div');
+  cards.className = 'activity-capability-groups';
+  groups.forEach((group) => {
+    if (!group || typeof group.name !== 'string' || !Array.isArray(group.items)) return;
+    const section = document.createElement('section');
+    section.className = 'activity-capability-group';
+    const heading = document.createElement('h4');
+    heading.textContent = group.name;
+    section.append(heading);
+    group.items.forEach((item) => {
+      if (!item || typeof item.name !== 'string') return;
+      const card = document.createElement('article');
+      card.className = 'activity-capability-card';
+      const title = document.createElement('strong');
+      title.textContent = item.name;
+      const status = document.createElement('span');
+      status.className = 'activity-capability-status';
+      status.dataset.status = item.status || 'needs setup';
+      status.textContent = item.status || 'needs setup';
+      const detail = document.createElement('p');
+      detail.textContent = item.detail || 'No setup details are available.';
+      card.append(title, status, detail);
+      section.append(card);
+    });
+    cards.append(section);
+  });
+  details.append(cards);
+}
+
 function updateActivityGrouping(trace) {
   const completed = [...trace.querySelectorAll('.activity-step[data-status="completed"]')];
   const runningOrFailed = [...trace.querySelectorAll('.activity-step')]
@@ -922,6 +953,8 @@ function renderActivityEvent(trace, event, data) {
     target.setAttribute('role', 'link');
     target.setAttribute('tabindex', '0');
     target.setAttribute('aria-label', `Open ${data.file_path}`);
+  } else if (data.tool === 'capabilities' && data.capabilities) {
+    appendCapabilityCards(details, data.capabilities.groups);
   } else {
     target.removeAttribute('role');
     target.removeAttribute('tabindex');
@@ -972,6 +1005,8 @@ function renderActivityEvent(trace, event, data) {
           button.currentTarget.textContent = button.currentTarget.textContent === 'Show more' ? 'Show less' : 'Show more';
         });
       }
+    } else if (data.tool === 'capabilities' && data.capabilities) {
+      appendCapabilityCards(details, data.capabilities.groups);
     } else {
       const tool = document.createElement('p');
       tool.textContent = `Tool: ${data.tool || 'unknown'}`;

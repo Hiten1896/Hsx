@@ -25,6 +25,7 @@ from api.files import resolve_output
 from api.jobs import ask_job_payload
 from agent.activity_trace import redact_activity_text, redact_activity_value, tool_end_event
 from agent.ask_user import ApprovalRequest, AskUserJobs, AskUserRequest
+from agent.capabilities import run as _capabilities
 from agent.jobs import JobQueue
 from agent.approval import ApprovalGuard
 from agent.devices import DeviceRegistry, system_body_state
@@ -79,6 +80,12 @@ try:
     register_meta_tool(TOOLS, SKILL_MAP)
 except (OSError, RuntimeError, TypeError, ValueError):
     LOGGER.exception("Could not restore the constrained dynamic tool registry.")
+TOOLS.append({
+    "name": "capabilities",
+    "description": "Report Hsx's registered tools, live provider and device setup checks, and known gaps.",
+    "input_schema": {"type": "object", "properties": {}, "required": []},
+})
+SKILL_MAP["capabilities"] = _capabilities
 if INTENT_ROUTER.model_path.is_file():
     INTENT_ROUTER.load()
 else:

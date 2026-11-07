@@ -1,5 +1,6 @@
 import importlib.util
 import json
+from copy import deepcopy
 from pathlib import Path
 
 
@@ -49,6 +50,12 @@ def register_runtime_skill(folder: str | Path) -> dict:
     if _RUNTIME_TOOLS is None or _RUNTIME_SKILL_MAP is None:
         raise RuntimeError("The active Hsx skill registry is not configured.")
     return register_skill(_RUNTIME_TOOLS, _RUNTIME_SKILL_MAP, folder)
+
+
+def runtime_tool_registry() -> list[dict]:
+    if _RUNTIME_TOOLS is None:
+        raise RuntimeError("The active Hsx skill registry is not configured.")
+    return deepcopy(_RUNTIME_TOOLS)
 
 
 def load_skills(skills_dir: str = "skills") -> tuple[list, dict]:

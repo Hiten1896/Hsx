@@ -145,6 +145,37 @@ class BrowserFakeHandler(server.HsxHandler):
                 ("job", {"id": "activity-binary-job", "state": "done", "result": "Binary file ready."}),
                 ("done", {}),
             ]
+        elif payload.get("message") == "show capabilities":
+            events = [
+                ("message_start", {"run_id": "capabilities-run"}),
+                ("tool_start", {
+                    "tool_call_id": "capabilities-step", "tool": "capabilities", "icon": "gear",
+                    "present": "Checking", "past": "Checked", "target": "capabilities",
+                    "arguments": {}, "status": "running",
+                }),
+                ("tool_end", {
+                    "tool_call_id": "capabilities-step", "tool": "capabilities", "icon": "gear",
+                    "present": "Checking", "past": "Checked", "target": "capabilities",
+                    "status": "completed", "duration_ms": 8, "details": {"arguments": {}},
+                    "capabilities": {"groups": [{
+                        "name": "Providers",
+                        "items": [{
+                            "name": "Gemini", "status": "works now",
+                            "detail": "A no-tool health request succeeded.",
+                        }],
+                    }, {
+                        "name": "Known gaps",
+                        "items": [{
+                            "name": "OCR", "status": "not possible yet",
+                            "detail": "Add the OCR skill.",
+                        }],
+                    }]},
+                    "images": [],
+                }),
+                ("text_delta", {"text": "Hsx is ready for these tasks."}),
+                ("job", {"id": "capabilities-job", "state": "done", "result": "Hsx is ready for these tasks."}),
+                ("done", {}),
+            ]
         else:
             events = [
                 ("message_start", {"run_id": "browser-fake-run"}),
@@ -494,6 +525,23 @@ def test_browser_activity_binary_file_opens_in_the_file_viewer(browser_app, brow
     card.get_by_role("button", name="Open").click()
     page.locator("#activity-file-viewer[open]").wait_for()
     assert page.get_by_role("link", name="Open binary file in a new tab").is_visible()
+
+
+def test_browser_capabilities_render_as_grouped_cards(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.locator("#prompt-input").fill("show capabilities")
+    page.locator("#send-button").click()
+    step = page.locator(".activity-step").last
+    step.locator(".activity-row-toggle").click()
+
+    cards = step.locator(".activity-capability-card")
+    assert cards.count() == 2
+    assert step.get_by_role("heading", name="Providers").is_visible()
+    assert step.get_by_role("heading", name="Known gaps").is_visible()
+    assert cards.nth(1).locator(".activity-capability-status").inner_text() == "not possible yet"
 
 
 def test_browser_empty_history_and_permissions_settings(browser_app, browser_page):

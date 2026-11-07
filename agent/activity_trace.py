@@ -16,6 +16,7 @@ ACTIVITY_MAP = {
     "audio_play": ToolActivity("music", "Playing", "Played"),
     "ask_user": ToolActivity("question", "Asking", "Asked"),
     "camera_record": ToolActivity("camera", "Recording", "Recorded"),
+    "capabilities": ToolActivity("gear", "Checking", "Checked"),
     "capability_resolver": ToolActivity("package", "Preparing", "Prepared"),
     "compress_files": ToolActivity("package", "Building", "Built"),
     "create_dynamic_tool": ToolActivity("gear", "Creating", "Created"),
@@ -198,7 +199,7 @@ def tool_end_event(start: dict, result: Any, duration_ms: float, *, failed: bool
     exit_status = None
     if isinstance(result, dict):
         exit_status = result.get("exit_code", result.get("returncode"))
-    return {
+    event = {
         **start,
         "target": redact_activity_text(str(target), 240),
         "file_path": redact_activity_text(str(file_path), 500),
@@ -213,6 +214,11 @@ def tool_end_event(start: dict, result: Any, duration_ms: float, *, failed: bool
         },
         "images": images[:20],
     }
+    if start.get("tool") == "capabilities" and isinstance(result, dict):
+        event["capabilities"] = redact_activity_value(
+            {"groups": result.get("groups", []), "cannot_do": result.get("cannot_do", [])}
+        )
+    return event
 
 
 def format_duration(duration_ms: int | float) -> str:

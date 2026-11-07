@@ -36,6 +36,27 @@ def test_tool_end_event_reports_duration_failure_and_image_paths():
     assert failed["output"] == "Image unavailable"
 
 
+def test_capability_activity_event_carries_grouped_report():
+    start = tool_start_event("capabilities", {}, "capability-call")
+    report = {
+        "success": True,
+        "groups": [{
+            "name": "Providers",
+            "items": [{
+                "name": "Gemini",
+                "status": "needs setup",
+                "detail": "Add GEMINI_API_KEY.",
+            }],
+        }],
+        "cannot_do": [{"name": "OCR", "how_to_add": "Add OCR."}],
+    }
+
+    event = tool_end_event(start, report, 10)
+
+    assert event["capabilities"]["groups"][0]["items"][0]["status"] == "needs setup"
+    assert event["capabilities"]["cannot_do"][0]["how_to_add"] == "Add OCR."
+
+
 def test_activity_arguments_redact_credentials_and_bound_content():
     value = redact_activity_value({
         "command": "curl https://example.test?token=abc123",

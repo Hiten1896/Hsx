@@ -40,9 +40,9 @@ it does not imply live hardware or production-provider verification.
 
 | Requirement | Status | Evidence |
 |---|---|---|
-| Runtime capabilities tool with live checks and known gaps, no tier labels | NOT STARTED | No `capabilities` skill or equivalent registry-backed capability report was found in `skills/` or `agent/`. |
-| Grouped capability UI, including limitations and setup instructions | NOT STARTED | No capabilities-card implementation found in `web/`. |
-| Hsx personal voice and forbidden-phrase constraints | PARTLY | `agent/llm_client.py`; dedicated prompt/fake-provider tests were not found. |
+| Runtime capabilities tool with live checks and known gaps, no tier labels | DONE + TESTED | `agent/capabilities.py`, `agent/skill_loader.py`, `config/capability_gaps.json`, and `server.py` build the report from the current registry and probe providers, camera, audio devices, ffmpeg, disk, and workspace writability. `tests/test_capabilities.py` verifies registry updates, report statuses, gaps, and a no-tool provider health probe against a fake provider. Real provider, camera, microphone, and configured search-service availability were not tested on this host; search availability is checked by actual search requests. |
+| Grouped capability UI, including limitations and setup instructions | DONE + TESTED | `agent/activity_trace.py`, `web/chat.js`, and `web/chat.css` carry and render grouped capability cards through the existing activity event. `tests/test_activity_trace.py` and `tests/test_browser_ui.py` verify the typed event payload and browser cards. |
+| Hsx personal voice and forbidden-phrase constraints | DONE + TESTED | `agent/llm_client.py` directs Hsx to answer capability questions from the live report and list known gaps with setup steps while retaining the Hsx voice constraints; `tests/test_capabilities.py` checks the prompt and response with a fake provider. |
 
 ## Phase 5: Self-extending, vision, music — PARTLY
 

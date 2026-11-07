@@ -1,0 +1,29 @@
+{
+  "known_gaps": [
+    {
+      "name": "Music search and queue",
+      "detail": "Add the pinned music engine and music_search/music_play tools to enable queued playback.",
+      "requires_tools": ["music_search", "music_play"]
+    },
+    {
+      "name": "Document OCR and page-referenced comparison",
+      "detail": "Add the document conversion, OCR, and page-reference skills.",
+      "requires_tools": ["convert_document", "ocr_document"]
+    },
+    {
+      "name": "Semantic file search",
+      "detail": "Add a size-capped embedding index and semantic search tool.",
+      "requires_tools": ["semantic_file_search"]
+    },
+    {
+      "name": "Scheduled jobs and health monitoring",
+      "detail": "Add the scheduler and health-watch tools.",
+      "requires_tools": ["schedule_task", "health_watch"]
+    },
+    {
+      "name": "Workspace backup",
+      "detail": "Add the workspace backup tool and its restore verification.",
+      "requires_tools": ["backup_workspace"]
+    }
+  ]
+}
