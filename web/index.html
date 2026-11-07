@@ -199,7 +199,7 @@
             </button>
           </div>
           <div id="artifacts-list" class="artifacts-list" aria-live="polite">
-            <p class="artifacts-empty">Generated files will appear here.</p>
+            <p class="artifacts-empty">Files Hsx creates for you will appear here.</p>
           </div>
         </section>
       </aside>
@@ -328,6 +328,17 @@
     </template>
     <dialog id="activity-file-viewer" class="activity-file-viewer" aria-labelledby="activity-viewer-title">
       <header><h2 id="activity-viewer-title"></h2><button id="activity-viewer-close" type="button" aria-label="Close file viewer">×</button></header>
+      <div class="artifact-viewer-actions">
+        <label class="sr-only" for="artifact-version-select">Artifact version</label>
+        <select id="artifact-version-select" hidden></select>
+        <button id="artifact-copy" type="button">Copy</button>
+        <button id="artifact-download" type="button">Download</button>
+      </div>
+      <nav id="artifact-viewer-tabs" class="artifact-viewer-tabs" aria-label="Artifact view">
+        <button type="button" data-artifact-tab="preview" aria-selected="true">Preview</button>
+        <button type="button" data-artifact-tab="code" aria-selected="false">Code</button>
+        <button type="button" data-artifact-tab="details" aria-selected="false">Details</button>
+      </nav>
       <div id="activity-viewer-content"></div>
     </dialog>
     <dialog id="feedback-dialog" class="feedback-dialog">

@@ -13,4 +13,4 @@ def run(filename: str, headers: list, rows: list) -> dict:
         writer = csv.writer(file)
         writer.writerow(headers)
         writer.writerows(rows)
-    return {"success": True, "output_path": str(path)}
+    return {"success": True, "artifact": True, "output_path": str(path)}

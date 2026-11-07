@@ -47,6 +47,7 @@ def run(
     camera_snapshot(output_path=output)
     return {
         "success": True,
+        "artifact": True,
         "target_device": "local_host",
         "path": output.relative_to(WORKSPACE.work_dir).as_posix(),
         "bytes": output.stat().st_size,

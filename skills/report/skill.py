@@ -401,6 +401,7 @@ def make_pdf(workspace: Workspace, structure: dict, content, filename: str) -> d
     )
     return {
         "success": True,
+        "artifact": True,
         "output_path": str(output),
         "fidelity": fidelity,
     }

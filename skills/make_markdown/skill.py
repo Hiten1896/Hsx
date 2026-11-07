@@ -13,4 +13,4 @@ def run(filename: str, title: str, sections: list) -> dict:
         content.extend([f"## {section.get('heading', '')}", section.get('body', ''), ""])
     with path.open("x", encoding="utf-8") as output_file:
         output_file.write("\n".join(content))
-    return {"success": True, "output_path": str(path)}
+    return {"success": True, "artifact": True, "output_path": str(path)}

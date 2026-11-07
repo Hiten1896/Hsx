@@ -27,6 +27,10 @@ let cameraRetryDelay = 500;
 let cameraAvailable = false;
 let cameraHasFrame = false;
 let cameraEnabled = false;
+let artifactViewerFile = null;
+let artifactViewerTab = 'preview';
+let artifactViewerText = '';
+let artifactViewerObjectUrl = '';
 let cameraClockOffsetMs = 0;
 let cameraStreamStartedAt = 0;
 let cameraAutoOffTimer = null;
@@ -732,59 +736,190 @@ function toggleActivityDetails(step, toggle, details, expanded = !details.hidden
   step.dataset.expanded = String(expanded);
 }
 
-async function openActivityFileViewer(path, imageId = '', binary = false) {
+function getArtifactIcon(type) {
+  const t = (type || '').toLowerCase();
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'].includes(t)) {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>';
+  }
+  if (['xlsx', 'csv', 'tsv'].includes(t)) {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line><line x1="9" y1="3" x2="9" y2="21"></line><line x1="15" y1="3" x2="15" y2="21"></line></svg>';
+  }
+  if (['py', 'js', 'ts', 'jsx', 'tsx', 'html', 'htm', 'css', 'json', 'yaml', 'yml', 'toml', 'rs', 'go', 'java', 'c', 'cpp', 'cs', 'sh', 'sql'].includes(t)) {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>';
+  }
+  if (['zip', 'tar', 'gz', '7z'].includes(t)) {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>';
+  }
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>';
+}
+
+function formatArtifactTime(isoString) {
+  if (!isoString) return '';
+  try {
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
+function highlightCode(rawCode, ext = '') {
+  const escaped = String(rawCode || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  const re = /((\/\/[^\n]*|\/\*[\s\S]*?\*\/|#[^\n]*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|\b(def|class|return|import|from|as|if|elif|else|for|while|try|except|finally|with|async|await|function|const|let|var|yield|export|default|new|this|typeof|instanceof|switch|case|break|continue|None|True|False|true|false|null|undefined)\b|\b(\d+(?:\.\d+)?)\b)/g;
+  const highlighted = escaped.replace(re, (match, p1, comment, string, keyword, number) => {
+    if (comment) return `<span class="tok-comment">${comment}</span>`;
+    if (string) return `<span class="tok-string">${string}</span>`;
+    if (keyword) return `<span class="tok-keyword">${keyword}</span>`;
+    if (number) return `<span class="tok-number">${number}</span>`;
+    return match;
+  });
+  const lines = highlighted.split('\n');
+  return lines.map((line, idx) => `<div class="code-line"><span class="line-num">${idx + 1}</span><span class="line-text">${line || ' '}</span></div>`).join('');
+}
+
+async function openArtifactViewer(file, initialTab = 'preview') {
+  artifactViewerFile = file;
+  artifactViewerTab = initialTab;
   const dialog = document.getElementById('activity-file-viewer');
   const title = document.getElementById('activity-viewer-title');
+  const versionSelect = document.getElementById('artifact-version-select');
+  const tabsNav = document.getElementById('artifact-viewer-tabs');
+
+  title.textContent = file.name || 'Artifact';
+
+  const versions = Array.isArray(file.versions) && file.versions.length > 1 ? file.versions : [file];
+  if (versions.length > 1) {
+    versionSelect.hidden = false;
+    versionSelect.innerHTML = versions.map((v) => `<option value="${v.path}">v${v.version || 1}</option>`).join('');
+    versionSelect.value = file.path;
+    versionSelect.onchange = () => {
+      const selected = versions.find((v) => v.path === versionSelect.value) || file;
+      artifactViewerFile = { ...file, ...selected };
+      title.textContent = artifactViewerFile.name || file.name;
+      void renderArtifactViewerTab();
+    };
+  } else {
+    versionSelect.hidden = true;
+  }
+
+  tabsNav.querySelectorAll('button').forEach((btn) => {
+    btn.setAttribute('aria-selected', String(btn.dataset.artifactTab === artifactViewerTab));
+  });
+
+  if (!dialog.open) dialog.showModal();
+  await renderArtifactViewerTab();
+}
+
+async function renderArtifactViewerTab() {
+  const file = artifactViewerFile;
+  if (!file) return;
   const content = document.getElementById('activity-viewer-content');
-  title.textContent = path || 'File preview';
   content.replaceChildren();
+
+  if (artifactViewerTab === 'details') {
+    const dl = document.createElement('dl');
+    dl.className = 'artifact-details-grid';
+    const fields = [
+      ['Name', file.name],
+      ['Path', file.path],
+      ['Type', (file.type || '').toUpperCase()],
+      ['Version', `v${file.version || 1}`],
+      ['Created', file.created ? new Date(file.created).toLocaleString() : '—'],
+      ['Chat', chatSessions.get(file.session_id)?.title || file.session_id || 'Current session'],
+    ];
+    for (const [key, val] of fields) {
+      const dt = document.createElement('dt');
+      dt.textContent = key;
+      const dd = document.createElement('dd');
+      dd.textContent = String(val || '—');
+      dl.append(dt, dd);
+    }
+    content.append(dl);
+    return;
+  }
+
+  const isImage = /\.(?:png|jpe?g|gif|webp|bmp|svg)$/i.test(file.path || file.name);
+  if (file.imageId) {
+    const response = await apiFetch(`/api/activity/image?id=${encodeURIComponent(file.imageId)}&thumbnail=0`);
+    if (response.ok) {
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(await response.blob());
+      activityImageObjectUrls.add(img.src);
+      content.append(img);
+      return;
+    }
+  }
+
+  if (artifactViewerTab === 'preview' && isImage) {
+    const query = new URLSearchParams({ path: file.path });
+    const response = await apiFetch(`/api/files/content?${query}`);
+    if (response.ok) {
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(await response.blob());
+      activityImageObjectUrls.add(img.src);
+      content.append(img);
+      return;
+    }
+  }
+
+  if (artifactViewerTab === 'preview' && /\.(?:html|htm)$/i.test(file.path || file.name)) {
+    const query = new URLSearchParams({ path: file.path });
+    const iframe = document.createElement('iframe');
+    iframe.className = 'artifact-preview-frame';
+    iframe.src = `/api/files/content?${query}`;
+    iframe.sandbox = 'allow-scripts allow-same-origin';
+    content.append(iframe);
+    return;
+  }
+
+  if (artifactViewerTab === 'preview' && /\.pdf$/i.test(file.path || file.name)) {
+    const query = new URLSearchParams({ path: file.path });
+    const obj = document.createElement('object');
+    obj.data = `/api/files/content?${query}`;
+    obj.type = 'application/pdf';
+    obj.className = 'artifact-preview-object';
+    const fallback = document.createElement('p');
+    fallback.innerHTML = `PDF preview unavailable. <a href="/api/files/download?${query}">Download ${file.name}</a>`;
+    obj.append(fallback);
+    content.append(obj);
+    return;
+  }
+
   try {
-    if (imageId) {
-      const response = await apiFetch(`/api/activity/image?id=${encodeURIComponent(imageId)}&thumbnail=0`);
-      if (!response.ok) throw new Error('Image preview is unavailable.');
-      const image = document.createElement('img');
-      image.alt = path || 'Activity image';
-      image.src = URL.createObjectURL(await response.blob());
-      activityImageObjectUrls.add(image.src);
-      content.append(image);
-    } else if (binary) {
-      const query = new URLSearchParams({ path });
-      const response = await apiFetch(`/api/files/content?${query}`);
-      if (!response.ok) {
-        const result = await response.json();
-        throw new Error(result.error || 'File preview is unavailable.');
-      }
-      const objectUrl = URL.createObjectURL(await response.blob());
-      activityImageObjectUrls.add(objectUrl);
-      if (/\.(?:png|jpe?g|gif|webp|bmp)$/i.test(path)) {
-        const image = document.createElement('img');
-        image.src = objectUrl;
-        image.alt = path;
-        content.append(image);
-      } else {
-        const openLink = document.createElement('a');
-        openLink.href = objectUrl;
-        openLink.target = '_blank';
-        openLink.rel = 'noopener';
-        openLink.textContent = 'Open binary file in a new tab';
-        content.append(openLink);
-      }
+    const query = new URLSearchParams({ path: file.path });
+    const response = await apiFetch(`/api/files/preview?${query}`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'File preview is unavailable.');
+    artifactViewerText = result.content || '';
+    if (artifactViewerTab === 'code') {
+      const codeWrap = document.createElement('div');
+      codeWrap.className = 'code-viewer';
+      codeWrap.innerHTML = highlightCode(artifactViewerText, file.type);
+      content.append(codeWrap);
     } else {
-      const query = new URLSearchParams({ path });
-      const response = await apiFetch(`/api/files/preview?${query}`);
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'File preview is unavailable.');
       const pre = document.createElement('pre');
-      pre.textContent = result.content || '';
+      pre.className = 'artifact-preview-text';
+      pre.textContent = artifactViewerText;
       content.append(pre);
     }
-    if (!dialog.open) dialog.showModal();
   } catch (error) {
     const message = document.createElement('p');
+    message.className = 'artifacts-empty';
     message.textContent = error.message || 'File preview is unavailable.';
-    content.replaceChildren(message);
-    if (!dialog.open) dialog.showModal();
+    content.append(message);
   }
+}
+
+async function openActivityFileViewer(path, imageId = '', binary = false) {
+  const name = path ? path.replace(/\\/g, '/').split('/').pop() : 'Preview';
+  const type = path ? (path.split('.').pop() || 'file') : 'file';
+  const file = { name, path: path || '', type, created: new Date().toISOString(), versions: [] };
+  if (imageId) file.imageId = imageId;
+  await openArtifactViewer(file, binary ? 'preview' : 'code');
 }
 
 function appendDiffCard(details, data) {
@@ -2691,56 +2826,86 @@ async function refreshArtifacts() {
     if (requestId !== artifactsRequestId || requestedSessionId !== sessionId) return;
     const files = Array.isArray(data.files) ? data.files : [];
     if (!files.length) {
-      empty.textContent = 'No generated files yet. Files created by Hsx will appear here.';
+      empty.textContent = 'Files Hsx creates for you will appear here.';
       return;
     }
     const fragment = document.createDocumentFragment();
+    const grouped = new Map();
     for (const file of files) {
       if (typeof file.path !== 'string' || typeof file.name !== 'string') continue;
-      const item = document.createElement('div');
-      item.className = 'artifact-item';
-      item.dataset.name = file.name;
-      item.dataset.path = file.path;
-      const links = document.createElement('a');
-      const query = new URLSearchParams({ path: file.path });
-      links.href = '#';
-      links.setAttribute('aria-label', `Download ${file.name}`);
-      links.addEventListener('click', async (event) => {
-        event.preventDefault();
-        try {
-          const response = await apiFetch(`/api/files/download?${query}`);
-          if (!response.ok) throw new Error('The file download was rejected.');
-          const objectUrl = URL.createObjectURL(await response.blob());
-          const downloadLink = document.createElement('a');
-          downloadLink.href = objectUrl;
-          downloadLink.download = file.name;
-          downloadLink.click();
-          window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-        } catch {
-          elements.composerStatus.textContent = `Could not download ${file.name}. Check the Hsx connection and try again.`;
-        }
-      });
-      const name = document.createElement('span');
-      name.className = 'artifact-name';
-      name.textContent = file.name;
-      const meta = document.createElement('span');
-      meta.className = 'artifact-meta';
-      meta.textContent = file.path;
-      links.append(name, meta);
-      const type = document.createElement('span');
-      type.className = 'artifact-type';
-      type.textContent = String(file.type || 'file');
-      item.append(links, type);
-      fragment.append(item);
+      const sId = file.session_id || requestedSessionId;
+      if (!grouped.has(sId)) grouped.set(sId, []);
+      grouped.get(sId).push(file);
     }
+
+    for (const [sId, sessionFiles] of grouped.entries()) {
+      const groupEl = document.createElement('div');
+      groupEl.className = 'artifact-group';
+      if (grouped.size > 1) {
+        const title = document.createElement('h3');
+        title.className = 'artifact-group-title';
+        title.textContent = chatSessions.get(sId)?.title || (sId === requestedSessionId ? 'Current chat' : 'Saved chat');
+        groupEl.append(title);
+      }
+      for (const file of sessionFiles) {
+        const card = document.createElement('div');
+        card.className = 'artifact-card artifact-item';
+        card.tabIndex = 0;
+        card.role = 'button';
+        card.dataset.name = file.name;
+        card.dataset.path = file.path;
+        card.setAttribute('aria-label', `Open artifact ${file.name}`);
+
+        const iconEl = document.createElement('span');
+        iconEl.className = 'artifact-icon';
+        iconEl.innerHTML = getArtifactIcon(file.type || file.name.split('.').pop());
+
+        const bodyEl = document.createElement('div');
+        bodyEl.className = 'artifact-card-body';
+
+        const nameEl = document.createElement('span');
+        nameEl.className = 'artifact-name';
+        nameEl.textContent = file.name;
+
+        const metaEl = document.createElement('div');
+        metaEl.className = 'artifact-card-meta';
+
+        const chip = document.createElement('span');
+        chip.className = 'artifact-chip';
+        chip.textContent = (file.type || 'file').toUpperCase();
+
+        const timeEl = document.createElement('span');
+        timeEl.className = 'artifact-time';
+        timeEl.textContent = formatArtifactTime(file.created);
+
+        metaEl.append(chip, timeEl);
+        bodyEl.append(nameEl, metaEl);
+        card.append(iconEl, bodyEl);
+
+        const openViewer = () => {
+          const isCode = ['py', 'js', 'ts', 'jsx', 'tsx', 'html', 'css', 'json', 'yaml', 'yml', 'toml', 'sh', 'sql', 'c', 'cpp', 'rs', 'go', 'java'].includes((file.type || '').toLowerCase());
+          void openArtifactViewer(file, isCode ? 'code' : 'preview');
+        };
+        card.addEventListener('click', openViewer);
+        card.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            openViewer();
+          }
+        });
+        groupEl.append(card);
+      }
+      fragment.append(groupEl);
+    }
+
     if (!fragment.childNodes.length) {
-      empty.textContent = 'No generated files yet. Files created by Hsx will appear here.';
+      empty.textContent = 'Files Hsx creates for you will appear here.';
       return;
     }
     elements.artifactsList.replaceChildren(fragment);
   } catch {
     if (requestId === artifactsRequestId && requestedSessionId === sessionId) {
-      empty.textContent = 'Generated files are unavailable right now. Tap refresh to try again.';
+      empty.textContent = 'Files Hsx creates for you will appear here.';
     }
   }
 }
@@ -2900,6 +3065,60 @@ async function initialize() {
   viewer.addEventListener('click', (event) => {
     if (event.target === viewer) viewer.close();
   });
+  const tabsNav = document.getElementById('artifact-viewer-tabs');
+  if (tabsNav) {
+    tabsNav.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-artifact-tab]');
+      if (!button) return;
+      artifactViewerTab = button.dataset.artifactTab;
+      tabsNav.querySelectorAll('button').forEach((btn) => {
+        btn.setAttribute('aria-selected', String(btn === button));
+      });
+      void renderArtifactViewerTab();
+    });
+  }
+  const copyBtn = document.getElementById('artifact-copy');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', async () => {
+      try {
+        if (!artifactViewerText && artifactViewerFile) {
+          const query = new URLSearchParams({ path: artifactViewerFile.path });
+          const response = await apiFetch(`/api/files/preview?${query}`);
+          if (response.ok) {
+            const data = await response.json();
+            artifactViewerText = data.content || '';
+          }
+        }
+        await navigator.clipboard.writeText(artifactViewerText);
+        const original = copyBtn.textContent;
+        copyBtn.textContent = 'Copied!';
+        window.setTimeout(() => { copyBtn.textContent = original; }, 1500);
+      } catch {
+        copyBtn.textContent = 'Failed';
+        window.setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+      }
+    });
+  }
+  const downloadBtn = document.getElementById('artifact-download');
+  if (downloadBtn) {
+    downloadBtn.addEventListener('click', async () => {
+      if (!artifactViewerFile) return;
+      try {
+        const query = new URLSearchParams({ path: artifactViewerFile.path });
+        const response = await apiFetch(`/api/files/download?${query}`);
+        if (!response.ok) throw new Error('Download failed');
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = artifactViewerFile.name || 'file';
+        a.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch {
+        elements.composerStatus.textContent = `Could not download ${artifactViewerFile.name}.`;
+      }
+    });
+  }
   window.addEventListener('pagehide', () => {
     activityImageObjectUrls.forEach((url) => URL.revokeObjectURL(url));
     activityImageObjectUrls.clear();

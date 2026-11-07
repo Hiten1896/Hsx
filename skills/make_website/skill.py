@@ -10,4 +10,4 @@ def run(filename: str, html_content: str) -> dict:
     path = task_output_path(WORKSPACE, f"{Path(filename).stem}.html")
     with path.open("x", encoding="utf-8") as output_file:
         output_file.write(html_content)
-    return {"success": True, "output_path": str(path)}
+    return {"success": True, "artifact": True, "output_path": str(path)}

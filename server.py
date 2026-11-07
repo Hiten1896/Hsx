@@ -27,6 +27,7 @@ from api.chat import ChatStreamRegistry
 from api.devices import resolve_target_device
 from api.files import resolve_output
 from api.jobs import ask_job_payload
+from agent.artifacts import ArtifactStore
 from agent.activity_trace import redact_activity_text, redact_activity_value, tool_end_event
 from agent.ask_user import ApprovalRequest, AskUserJobs, AskUserRequest
 from agent.capabilities import run as _capabilities
@@ -81,6 +82,14 @@ _ask_job_payload = ask_job_payload
 
 ROOT = Path(__file__).resolve().parent
 LOGGER = logging.getLogger("hsx.server")
+ARTIFACTS = ArtifactStore(DATA_DIR / "artifacts.sqlite")
+ARTIFACT_SUFFIXES = {
+    ".pdf", ".docx", ".pptx", ".xlsx", ".csv", ".md", ".txt", ".html",
+    ".htm", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".py",
+    ".js", ".jsx", ".ts", ".tsx", ".css", ".json", ".yaml", ".yml",
+    ".toml", ".rs", ".go", ".java", ".c", ".h", ".cpp", ".cs", ".sh",
+    ".zip",
+}
 TOOLS, SKILL_MAP = load_skills(str(ROOT / "skills"))
 try:
     DYNAMIC_TOOLS.restore(TOOLS, SKILL_MAP)
@@ -259,21 +268,18 @@ def _activity_diff(before: dict | None, after: dict | None, path: str) -> dict |
     }
 
 
-def _persist_activity_event(task_dir: str, event: str, payload: dict) -> None:
-    if not task_dir:
-        return
+def _persist_activity_event(task_dir: str, event: str, payload: dict, job_id: str = "") -> None:
+    target_id = job_id or (task_dir if task_dir else "default")
+    scratch_dir = DATA_DIR / "scratch" / target_id
     try:
-        directory = (WORK_DIR / task_dir).resolve()
-        if WORK_DIR.resolve() not in directory.parents:
-            raise ValueError("Activity trace path must remain inside the task workspace.")
-        trace_path = directory / "activity-trace.jsonl"
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+        trace_path = scratch_dir / "activity-trace.jsonl"
         if trace_path.exists() and trace_path.stat().st_size > 1_000_000:
-            LOGGER.warning("Activity trace reached its 1 MB storage cap.")
             return
         with trace_path.open("a", encoding="utf-8") as trace:
             trace.write(json.dumps({"event": event, "data": payload}, ensure_ascii=False) + "\n")
     except (OSError, ValueError):
-        LOGGER.exception("Could not persist the activity trace.")
+        pass
 
 
 def _register_activity_images(paths: list[str]) -> list[dict]:
@@ -365,7 +371,7 @@ def _retry_activity_tool(job_id: str, call_id: str) -> tuple[dict, int]:
                 activity.update({"icon": "file-plus", "present": "Creating", "past": "Created"})
     activity["images"] = _register_activity_images(activity.get("images", []))
     safe_activity = redact_activity_value(activity)
-    _persist_activity_event(retry.get("task_dir", ""), "tool_end", safe_activity)
+    _persist_activity_event(retry.get("task_dir", ""), "tool_end", safe_activity, job_id=retry.get("job_id", ""))
     with _ACTIVITY_RETRY_LOCK:
         if failed:
             retry["created_at"] = time.time()
@@ -559,28 +565,34 @@ def _camera_status_payload() -> dict:
 
 
 def _session_artifacts(session_id: str) -> list[dict]:
-    if not session_id:
-        return []
-    work_root = WORK_DIR.resolve()
-    files = []
-    for task_dir in ASK_JOBS.artifact_directories(session_id):
+    artifacts = ARTIFACTS.list(session_id)
+    if not artifacts:
+        ARTIFACTS.migrate_from_workspace(WORKSPACE, session_id, ASK_JOBS, ARTIFACT_SUFFIXES)
+        artifacts = ARTIFACTS.list(session_id)
+    visible = []
+    for artifact in artifacts:
         try:
-            relative_task_dir = WORKSPACE._relative_path(task_dir)
-            task_root = (work_root / relative_task_dir).resolve()
-            WORKSPACE._assert_inside(work_root, task_root)
-            if not task_root.is_dir():
-                continue
-            directory = task_root.relative_to(WORKSPACE.root).as_posix()
-            files.extend(
-                item
-                for item in workspace_search(WORKSPACE, directory=directory, limit=200)
-                if not _is_user_upload_path(item["path"])
-                and Path(item["path"]).name != "activity-trace.jsonl"
-            )
+            path = WORKSPACE.resolve_read(artifact["path"])
         except (OSError, ValueError):
-            LOGGER.warning("Skipping invalid artifact directory for session %s.", session_id)
-    unique = {item["path"]: item for item in files}
-    return sorted(unique.values(), key=lambda item: (item["modified"], item["path"]), reverse=True)[:200]
+            continue
+        if path.is_file() and path.suffix.lower() in ARTIFACT_SUFFIXES:
+            visible.append(artifact)
+    return visible[:200]
+
+
+def _register_artifact(session_id: str, raw_path: str) -> None:
+    if not raw_path:
+        return
+    try:
+        candidate = Path(raw_path)
+        path = candidate.resolve() if candidate.is_absolute() else WORKSPACE.resolve_write(raw_path).resolve()
+        WORKSPACE._assert_inside(WORKSPACE.root, path)
+        if not path.is_file() or path.suffix.lower() not in ARTIFACT_SUFFIXES:
+            return
+        relative = path.relative_to(WORKSPACE.root).as_posix()
+        ARTIFACTS.record(session_id, relative)
+    except (OSError, ValueError):
+        LOGGER.warning("Ignoring invalid user-facing artifact path.")
 
 
 def _fail_job(
@@ -625,6 +637,8 @@ def _resume_ask_job(job_id: str) -> None:
     started_at = time.perf_counter()
     device_actions = list(job.get("device_actions") or [])
     resume_history = copy.deepcopy(job["checkpoint"])
+    scratch_dir = DATA_DIR / "scratch" / job_id
+    scratch_dir.mkdir(parents=True, exist_ok=True)
     try:
         with lock, task_output_scope(WORKSPACE, job["request"], job["task_dir"]):
             response, history = run_agent(
@@ -696,24 +710,28 @@ def _resume_ask_job(job_id: str) -> None:
         SESSION_HISTORIES[job["session_id"]] = resume_history
         _fail_job(job_id, job, error, started_at=started_at)
         return
-    SESSION_HISTORIES[job["session_id"]] = history
-    ASK_JOBS.complete(job_id, response, device_actions)
-    _record_job_telemetry(
-        job,
-        time.perf_counter() - started_at,
-        succeeded=True,
-        sensitive=job.get("sensitive", False),
-        response=response,
-        history=history,
-    )
-    POLICY.audit_event("job_done", job["session_id"], job_id, "done")
-    _hardware_audio_alert(succeeded=True)
-    NOTIFIER.notify(
-        "job_done",
-        "Your Hsx task is complete",
-        job_id=job_id,
-        result_path=_task_result_path(job),
-    )
+    else:
+        SESSION_HISTORIES[job["session_id"]] = history
+        ASK_JOBS.complete(job_id, response, device_actions)
+        _record_job_telemetry(
+            job,
+            time.perf_counter() - started_at,
+            succeeded=True,
+            sensitive=job.get("sensitive", False),
+            response=response,
+            history=history,
+        )
+        POLICY.audit_event("job_done", job["session_id"], job_id, "done")
+        _hardware_audio_alert(succeeded=True)
+        NOTIFIER.notify(
+            "job_done",
+            "Your Hsx task is complete",
+            job_id=job_id,
+            result_path=_task_result_path(job),
+        )
+    finally:
+        if scratch_dir.exists():
+            shutil.rmtree(scratch_dir, ignore_errors=True)
 
 
 def _resume_approval_job(job_id: str, approved: bool) -> None:
@@ -959,9 +977,15 @@ def _run_chat_job(
         elif event == "activity_narration":
             payload = {"text": redact_activity_text(str(payload.get("text", "")), 1000)}
         safe_payload = redact_activity_value(payload, limit=2000)
-        _persist_activity_event(job.get("task_dir", ""), event, safe_payload)
+        _persist_activity_event(job.get("task_dir", ""), event, safe_payload, job_id=job_id)
+        if event == "tool_end" and safe_payload.get("artifact") is True:
+            file_path = str(safe_payload.get("file_path", "")).strip()
+            if file_path:
+                _register_artifact(job["session_id"], file_path)
         _emit_chat_event(job_id, event, safe_payload)
 
+    scratch_dir = DATA_DIR / "scratch" / job_id
+    scratch_dir.mkdir(parents=True, exist_ok=True)
     try:
         with lock, task_output_scope(WORKSPACE, job["request"], job["task_dir"]):
             history = copy.deepcopy(SESSION_HISTORIES.get(job["session_id"], []))
@@ -1045,31 +1069,35 @@ def _run_chat_job(
     except Exception as error:
         _fail_job(job_id, job, error, stream=True, started_at=started_at)
         return
-    latest = ASK_JOBS.get(job_id)
-    if latest is None or latest["state"] != "running":
-        return
-    SESSION_HISTORIES[job["session_id"]] = updated_history
-    completed = ASK_JOBS.complete(job_id, response, device_actions)
-    if completed is None or completed["state"] != "done":
-        return
-    _record_job_telemetry(
-        job,
-        time.perf_counter() - started_at,
-        succeeded=True,
-        sensitive=sensitive,
-        response=response,
-        history=updated_history,
-    )
-    _emit_chat_event(job_id, "job", _ask_job_payload(ASK_JOBS.get(job_id)))
-    _emit_chat_event(job_id, "done", {})
-    POLICY.audit_event("job_done", job["session_id"], job_id, "done")
-    _hardware_audio_alert(succeeded=True)
-    NOTIFIER.notify(
-        "job_done",
-        "Your Hsx task is complete",
-        job_id=job_id,
-        result_path=_task_result_path(job),
-    )
+    else:
+        latest = ASK_JOBS.get(job_id)
+        if latest is None or latest["state"] != "running":
+            return
+        SESSION_HISTORIES[job["session_id"]] = updated_history
+        completed = ASK_JOBS.complete(job_id, response, device_actions)
+        if completed is None or completed["state"] != "done":
+            return
+        _record_job_telemetry(
+            job,
+            time.perf_counter() - started_at,
+            succeeded=True,
+            sensitive=sensitive,
+            response=response,
+            history=updated_history,
+        )
+        _emit_chat_event(job_id, "job", _ask_job_payload(ASK_JOBS.get(job_id)))
+        _emit_chat_event(job_id, "done", {})
+        POLICY.audit_event("job_done", job["session_id"], job_id, "done")
+        _hardware_audio_alert(succeeded=True)
+        NOTIFIER.notify(
+            "job_done",
+            "Your Hsx task is complete",
+            job_id=job_id,
+            result_path=_task_result_path(job),
+        )
+    finally:
+        if scratch_dir.exists():
+            shutil.rmtree(scratch_dir, ignore_errors=True)
 
 
 class HsxHandler(BaseHTTPRequestHandler):
@@ -1463,22 +1491,7 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._serve_file(target, inline=path.endswith("/content"))
         elif path == "/api/outputs":
             session_id = str(query.get("session_id", [""])[0])[:100]
-            if session_id:
-                files = _session_artifacts(session_id)
-            else:
-                files = [
-                    item
-                    for item in workspace_search(
-                        WORKSPACE,
-                        directory=WORK_DIR.relative_to(WORKSPACE_DIR),
-                        limit=200,
-                    )
-                    if not _is_user_upload_path(item["path"])
-                ]
-            files = [
-                {"name": item["name"], "path": item["path"], "type": item["type"]}
-                for item in files
-            ]
+            files = _session_artifacts(session_id)
             self._json({"files": files})
         elif self.path == "/api/video/jobs":
             self._json({"jobs": list_video_jobs()})
@@ -2275,14 +2288,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         self._json({"success": True, "facts": MEMORY.list_facts()})
 
     def _recent_outputs(self) -> list:
-        return [
-            {"name": item["name"], "path": item["path"], "type": item["type"]}
-            for item in workspace_search(
-                WORKSPACE,
-                directory=WORK_DIR.relative_to(WORKSPACE_DIR),
-                limit=100,
-            )
-        ]
+        return _session_artifacts("")
 
     def _serve_file(self, target: Path, *, inline: bool, no_store: bool = False) -> None:
         size = target.stat().st_size

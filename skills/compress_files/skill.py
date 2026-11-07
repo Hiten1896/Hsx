@@ -14,4 +14,4 @@ def run(filenames: list, zip_name: str) -> dict:
             source = WORKSPACE.resolve_read(filename)
             if source.exists():
                 zip_file.write(source, source.relative_to(WORKSPACE.root).as_posix())
-    return {"success": True, "output_path": str(archive)}
+    return {"success": True, "artifact": True, "output_path": str(archive)}

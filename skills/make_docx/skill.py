@@ -17,4 +17,4 @@ def run(filename: str, title: str, sections: list) -> dict:
         document.add_paragraph(section.get("body", ""))
     with path.open("xb") as document_file:
         document.save(document_file)
-    return {"success": True, "output_path": str(path)}
+    return {"success": True, "artifact": True, "output_path": str(path)}

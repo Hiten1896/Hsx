@@ -216,6 +216,8 @@ def tool_end_event(start: dict, result: Any, duration_ms: float, *, failed: bool
         },
         "images": images[:20],
     }
+    if isinstance(result, dict) and result.get("artifact") is True and paths:
+        event["artifact"] = True
     if start.get("tool") == "capabilities" and isinstance(result, dict):
         event["capabilities"] = redact_activity_value(
             {"groups": result.get("groups", []), "cannot_do": result.get("cannot_do", [])}
