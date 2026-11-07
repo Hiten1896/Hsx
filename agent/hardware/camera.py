@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
 import subprocess
 import threading
 import time
-import hashlib
 from dataclasses import dataclass
 
 LOGGER = logging.getLogger("hsx.hardware.camera")
@@ -74,6 +74,7 @@ class CameraService:
         self._last_error = ""
         self._lifecycle_lock = threading.RLock()
         self._owners: set[str] = set()
+        self._owner_timers: dict[str, threading.Timer] = {}
 
     def command(self, ffmpeg: str) -> list[str]:
         return [
@@ -116,6 +117,40 @@ class CameraService:
             self._owners.add(owner)
             return self._start_capture()
 
+    def start_session(
+        self,
+        owner: str,
+        timeout: float = 5.0,
+        lease_seconds: float = 300.0,
+    ) -> CameraFrame:
+        if timeout <= 0 or timeout > 30:
+            raise ValueError("Camera startup timeout must be between 0 and 30 seconds.")
+        if lease_seconds <= 0 or lease_seconds > 1800:
+            raise ValueError("Camera session lease must be between 0 and 1800 seconds.")
+        if shutil.which("ffmpeg") is None:
+            raise RuntimeError("ffmpeg is not installed on this host.")
+        if not os.path.exists(self.device):
+            raise RuntimeError(f"Camera device is unavailable: {self.device}")
+
+        already_owned = self.has_owner(owner)
+        previous_frame = self.latest_frame()
+        self.acquire(owner)
+        frame = self.wait_for_frame(previous_frame.version if previous_frame else -1, timeout=timeout)
+        if frame is None:
+            status = self.health_check()
+            if not already_owned:
+                self.release(owner)
+            raise RuntimeError(str(status.get("last_error") or "No fresh camera frame arrived before the timeout."))
+        with self._lifecycle_lock:
+            old_timer = self._owner_timers.pop(owner, None)
+            if old_timer is not None:
+                old_timer.cancel()
+            timer = threading.Timer(lease_seconds, self.release, args=(owner,))
+            timer.daemon = True
+            self._owner_timers[owner] = timer
+            timer.start()
+        return frame
+
     def _start_capture(self) -> bool:
         if self._thread is not None and self._thread.is_alive():
             return False
@@ -134,6 +169,9 @@ class CameraService:
     def release(self, owner: str, timeout: float = 5.0) -> None:
         with self._lifecycle_lock:
             self._owners.discard(owner)
+            timer = self._owner_timers.pop(owner, None)
+            if timer is not None:
+                timer.cancel()
             if self._owners:
                 return
             self._stop_capture(timeout)
@@ -150,6 +188,9 @@ class CameraService:
         if process is not None and process.poll() is None:
             process.kill()
             process.wait(timeout=timeout)
+        with self._condition:
+            self._frame = None
+            self._condition.notify_all()
 
     def latest_frame(self) -> CameraFrame | None:
         with self._condition:

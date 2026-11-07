@@ -2421,19 +2421,31 @@ function setCameraStatus(connected, message) {
   document.getElementById('camera-clip-time').hidden = !connected || !cameraHasFrame;
 }
 
-function stopCameraAndStandby({ notifyServer = true } = {}) {
+async function stopCameraAndStandby({ notifyServer = true } = {}) {
+  let hostStillActive = false;
+  if (notifyServer && apiContract) {
+    try {
+      const response = await apiFetch(apiContract.endpoints.camera_stop, {
+        method: 'POST',
+        keepalive: true,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.stopped !== true || data.session_active === true) {
+        throw new Error(data.error || `Camera stop failed (HTTP ${response.status}).`);
+      }
+      hostStillActive = data.active === true;
+    } catch (error) {
+      const message = error.message || 'The host did not confirm that the camera stopped.';
+      setCameraStatus(cameraEnabled, `Could not stop camera: ${message}`);
+      return false;
+    }
+  }
   cameraEnabled = false;
   stopCameraVision(true);
   window.clearTimeout(cameraAutoOffTimer);
   cameraAutoOffTimer = null;
-  if (notifyServer && apiContract) {
-    void apiFetch(apiContract.endpoints.camera_stop, {
-      method: 'POST',
-      keepalive: true,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId }),
-    });
-  }
   cameraAvailable = false;
   cameraHasFrame = false;
   stopCameraStream();
@@ -2445,13 +2457,21 @@ function stopCameraAndStandby({ notifyServer = true } = {}) {
   document.getElementById('camera-clip-time').textContent = 'Waiting for video';
   document.getElementById('camera-clip-time').hidden = true;
   setCameraLatency(null);
-  setCameraStatus(false, 'Click to turn on camera');
+  setCameraStatus(
+    false,
+    hostStillActive
+      ? 'This session is off; the host camera is active for another session'
+      : 'Click to turn on camera',
+  );
+  return true;
 }
 
 async function refreshCamera() {
   if (document.hidden) return;
   try {
-    const response = await apiFetch(apiContract.endpoints.camera_status);
+    const statusUrl = new URL(apiContract.endpoints.camera_status, window.location.href);
+    statusUrl.searchParams.set('session_id', sessionId);
+    const response = await apiFetch(statusUrl.toString());
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.error || `Camera status failed (HTTP ${response.status}).`);
@@ -2460,7 +2480,7 @@ async function refreshCamera() {
     const hostLabel = [host.hostname, host.hardware].filter(Boolean).join(' · ');
     document.getElementById('camera-heading').title =
       hostLabel || 'Host hardware information unavailable';
-    const connected = data.running === true;
+    const connected = data.session_active === true;
     if (connected) {
       if (!cameraEnabled) {
         cameraEnabled = true;
@@ -2471,13 +2491,20 @@ async function refreshCamera() {
     } else {
       if (!cameraEnabled) {
         cameraAvailable = false;
-        setCameraStatus(false, 'Click to turn on camera');
+        setCameraStatus(
+          false,
+          data.running
+            ? 'The host camera is active for another session; this feed stays hidden'
+            : 'Click to turn on camera',
+        );
         return;
       }
-      stopCameraAndStandby({ notifyServer: false });
+      await stopCameraAndStandby({ notifyServer: false });
       cameraAvailable = false;
-      const reason = data.last_error || data.snapshot_reason || 'The host camera is not running.';
-      setCameraStatus(false, `Camera feed unavailable: ${reason}`);
+      const reason = data.running
+        ? 'The host camera is active for another session.'
+        : data.last_error || data.snapshot_reason || 'The host camera is not running.';
+      setCameraStatus(false, reason);
     }
   } catch (error) {
     document.getElementById('camera-heading').title = 'Host hardware information unavailable';
@@ -2493,7 +2520,8 @@ async function refreshCamera() {
 }
 
 function handleCameraStateEvent(data) {
-  const active = Boolean(data && data.active);
+  if (data && data.session_id && data.session_id !== sessionId) return;
+  const active = Boolean(data && (data.session_id ? data.session_active : data.active));
   if (active) {
     if (!cameraEnabled) {
       cameraEnabled = true;
@@ -2514,7 +2542,7 @@ function handleCameraStateEvent(data) {
 
 async function toggleCamera() {
   if (cameraEnabled) {
-    stopCameraAndStandby();
+    await stopCameraAndStandby();
     return;
   }
   setCameraStatus(false, 'Requesting the host camera…');

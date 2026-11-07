@@ -37,8 +37,9 @@ from agent.approval import ApprovalGuard
 from agent.devices import DeviceRegistry, system_body_state
 from agent.feedback import FeedbackStore
 from agent.conversations import ConversationStore
-from agent.hardware import AUDIO_ALERTS, CAMERA, MOTION_MONITOR
+from agent.hardware import AUDIO_ALERTS, CAMERA, MICROPHONE, MOTION_MONITOR
 from agent.hardware.camera import MAX_FRAME_AGE_SECONDS, camera_session_owner
+from agent.hardware.microphone import microphone_session_owner
 from agent.llm.router import default_router
 from agent.llm.types import LLMRequest
 from agent.llm_client import PROVIDER_BANDIT, call_llm, record_provider_feedback
@@ -53,7 +54,7 @@ from agent.ml.memory import EXPERIENCE_MEMORY
 from agent.memory import MemoryManager
 from agent.music_catalog import MUSIC_CATALOG
 from agent.notifier import NOTIFIER
-from agent.orchestrator import run_agent
+from agent.orchestrator import _vision_request, run_agent
 from agent.policy import POLICY
 from agent.router import INTENT_ROUTER, LLM_TELEMETRY, ROUTER_LOGGER
 from agent.self_improvement import SelfImprovement
@@ -583,15 +584,20 @@ def _is_user_upload_path(raw_path: str) -> bool:
     )
 
 
-def _camera_status_payload(include_host: bool = True) -> dict:
+def _camera_status_payload(include_host: bool = True, session_id: str = "") -> dict:
     status = CAMERA.health_check()
     from agent.tools.vision_capture import disabled_reason, enabled
 
+    try:
+        session_active = bool(session_id and CAMERA.has_owner(camera_session_owner(session_id)))
+    except ValueError:
+        session_active = False
     snapshot_available = CAMERA.is_started() or (
         enabled() and bool(status.get("device_available")) and shutil.which("ffmpeg") is not None
     )
     payload = {
         **status,
+        "session_active": session_active,
         "snapshot_available": snapshot_available,
         "snapshot_reason": "" if snapshot_available else disabled_reason(),
     }
@@ -781,10 +787,13 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
     tool_name = str(approval.get("tool", ""))
     arguments = approval.get("arguments")
     permission_request = approval.get("request_type") == "permission_request"
-    if not isinstance(arguments, dict) or tool_name not in SKILL_MAP:
+    device_tool = tool_name in {"vision_capture", "microphone_start"}
+    if not isinstance(arguments, dict) or (tool_name not in SKILL_MAP and not device_tool):
         _fail_job(job_id, job, RuntimeError("The stored approval request is invalid."), started_at=started_at)
         return
     skill = next((item for item in TOOLS if item["name"] == tool_name), None)
+    if skill is None and device_tool:
+        skill = {"name": tool_name}
     if skill is None:
         _fail_job(job_id, job, RuntimeError("The approved tool is no longer available."), started_at=started_at)
         return
@@ -799,6 +808,8 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
     result: dict
     if POLICY.is_stopped():
         result = {"success": False, "error": "Emergency stop is active; the approved action was not run."}
+        if device_tool:
+            result["_hsx_device_action"] = "camera_start" if tool_name == "vision_capture" else "microphone_start"
     elif not policy_result["allowed"]:
         result = {
             "success": False,
@@ -806,6 +817,8 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
             if not approved
             else "The action is blocked by the host safety policy.",
         }
+        if device_tool:
+            result["_hsx_device_action"] = "camera_start" if tool_name == "vision_capture" else "microphone_start"
     else:
         PROVIDER_BANDIT.remember_job_tool(job_id, tool_name)
         tool_input = dict(arguments)
@@ -813,10 +826,59 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
             tool_input["_approved_elevation"] = True
         if tool_name in {"audio_play", "camera_record", "music_play"}:
             tool_input["target_device"] = job.get("target_device", "local_host")
-        try:
-            result = SKILL_MAP[tool_name](**tool_input)
-        except (OSError, RuntimeError, TypeError, ValueError) as error:
-            result = {"success": False, "error": str(error)}
+        if tool_name == "vision_capture":
+            owner = camera_session_owner(job["session_id"])
+            try:
+                frame = CAMERA.start_session(owner)
+                POLICY.audit_event("camera_access", job["session_id"], job_id, "started")
+                NOTIFIER.broadcast_event(
+                    "camera_state",
+                    {
+                        "active": True,
+                        "session_active": True,
+                        "device": CAMERA.device,
+                        "session_id": job["session_id"],
+                    },
+                )
+                result = {
+                    "success": True,
+                    "message": "",
+                    "_hsx_device_action": "camera_start",
+                    "_frame_data": frame.data if _vision_request(str(job["request"])) else b"",
+                }
+                if result["_frame_data"]:
+                    _emit_chat_event(
+                        job_id,
+                        "camera_snapshot",
+                        {"source": "/api/camera/snapshot"},
+                    )
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
+                result = {
+                    "success": False,
+                    "error": f"The camera did not start: {error}",
+                    "_hsx_device_action": "camera_start",
+                }
+        elif tool_name == "microphone_start":
+            owner = microphone_session_owner(job["session_id"])
+            try:
+                MICROPHONE.acquire(owner)
+                POLICY.audit_event("microphone_access", job["session_id"], job_id, "started")
+                result = {
+                    "success": True,
+                    "message": "The HP microphone is on for this session. Audio is discarded and is not recorded.",
+                    "_hsx_device_action": "microphone_start",
+                }
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
+                result = {
+                    "success": False,
+                    "error": f"The microphone did not start: {error}",
+                    "_hsx_device_action": "microphone_start",
+                }
+        else:
+            try:
+                result = SKILL_MAP[tool_name](**tool_input)
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
+                result = {"success": False, "error": str(error)}
         if isinstance(result, dict) and tool_name in {"audio_play", "camera_record", "music_play"}:
             device_actions.append(
                 result.get("browser_action")
@@ -838,7 +900,7 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
                 TOOLS,
                 SKILL_MAP,
                 session_id=job["session_id"],
-                approvals={"vision_capture": approved} if tool_name == "vision_capture" else None,
+                approvals=None,
                 sensitive=job.get("sensitive", False),
                 resume_tool_result={"tool_call_id": job["tool_call_id"], "result": result},
                 target_device=job.get("target_device", "local_host"),
@@ -1262,7 +1324,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         except ValueError:
             self._json({"error": "Turn on the camera in this browser session first."}, 403)
             return
-        if not (CAMERA.has_owner(owner) or CAMERA.is_started()):
+        if not CAMERA.has_owner(owner):
             self._json({"error": "Turn on the camera in this browser session first."}, 403)
             return
         frame = CAMERA.latest_frame()
@@ -1394,7 +1456,12 @@ class HsxHandler(BaseHTTPRequestHandler):
             telemetry["provider_stats"] = PROVIDER_BANDIT.snapshot()["providers"]
             self._json(telemetry)
         elif path == "/api/camera/status":
-            self._json(_camera_status_payload(include_host=False))
+            self._json(
+                _camera_status_payload(
+                    include_host=False,
+                    session_id=str(query.get("session_id", [""])[0]),
+                )
+            )
         elif path == "/api/camera/stream":
             self._stream_camera()
             return
@@ -1661,29 +1728,26 @@ class HsxHandler(BaseHTTPRequestHandler):
                 self._json({"error": "A valid session_id is required to consent to camera use."}, 400)
                 return
             session_id = str(payload["session_id"])
-            had_owner = CAMERA.has_owner(owner)
-            previous_frame = CAMERA.latest_frame()
-            CAMERA.acquire(owner)
-            frame = CAMERA.wait_for_frame(
-                previous_frame.version if previous_frame else -1,
-                timeout=5.0,
-            )
-            if frame is None:
-                status = CAMERA.health_check()
-                if not had_owner:
-                    CAMERA.release(owner)
+            try:
+                CAMERA.start_session(owner)
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
                 self._json({
                     "started": False,
-                    "error": status.get("last_error") or "No fresh camera frame arrived within 5 seconds.",
-                    **_camera_status_payload(),
+                    "error": str(error),
+                    **_camera_status_payload(session_id=str(payload["session_id"])),
                 }, 503)
                 return
             POLICY.audit_event("camera_access", session_id, "", "started_from_ui")
             NOTIFIER.broadcast_event(
                 "camera_state",
-                {"active": True, "device": CAMERA.device, "session_id": session_id},
+                {
+                    "active": True,
+                    "session_active": True,
+                    "device": CAMERA.device,
+                    "session_id": session_id,
+                },
             )
-            self._json({"started": True, **_camera_status_payload()})
+            self._json({"started": True, **_camera_status_payload(session_id=session_id)})
         elif path == "/api/camera/stop":
             try:
                 payload = self._body()
@@ -1695,8 +1759,16 @@ class HsxHandler(BaseHTTPRequestHandler):
             active = CAMERA.is_started()
             session_id = str(payload["session_id"])
             POLICY.audit_event("camera_off", session_id, "", "stopped_from_ui")
-            NOTIFIER.broadcast_event("camera_state", {"active": active})
-            self._json({"stopped": True, "active": active, **_camera_status_payload()})
+            NOTIFIER.broadcast_event(
+                "camera_state",
+                {"active": active, "session_active": False, "session_id": session_id},
+            )
+            self._json({
+                "stopped": True,
+                "active": active,
+                "session_active": CAMERA.has_owner(owner),
+                **_camera_status_payload(session_id=session_id),
+            })
         elif path == "/api/conversations":
             payload = self._body()
             try:

@@ -54,6 +54,14 @@ CAMERA_STOP_PROMPT = re.compile(
     r"\b(?:turn off (?:the )?camera|stop (?:the )?camera|close (?:the )?camera|shut off (?:the )?camera|deactivate (?:the )?camera)\b",
     re.IGNORECASE,
 )
+MICROPHONE_START_PROMPT = re.compile(
+    r"\b(?:turn on|start|enable|open|activate) (?:the )?(?:microphone|mic)\b",
+    re.IGNORECASE,
+)
+MICROPHONE_STOP_PROMPT = re.compile(
+    r"\b(?:turn off|stop|disable|close|deactivate) (?:the )?(?:microphone|mic)\b",
+    re.IGNORECASE,
+)
 PREFERENCE_PROMPT = re.compile(
     r"\b(?:always remember(?: that)?|remember that|remember:|please remember(?: that)?|note that|keep in mind that|standing rule:?)\b",
     re.IGNORECASE,
@@ -287,6 +295,9 @@ def run_agent(
         result = resume_tool_result.get("result")
         if result is None:
             result = {"success": True, "answer": resume_tool_result["answer"]}
+        result = dict(result) if isinstance(result, dict) else {"success": False, "error": str(result)}
+        device_action = result.pop("_hsx_device_action", "")
+        frame_data = result.pop("_frame_data", b"")
         conversation_history.append({
             "role": "user",
             "content": [{
@@ -295,6 +306,41 @@ def run_agent(
                 "content": json.dumps(result, ensure_ascii=False),
             }],
         })
+        if device_action:
+            answer = str(result.get("message") or result.get("error") or "")
+            if result.get("success") and device_action == "camera_start":
+                if _vision_request(user_input) and frame_data and not sensitive:
+                    if on_activity_event is not None:
+                        on_activity_event("camera_snapshot", {"source": "/api/camera/snapshot"})
+                    vision_resp = call_llm(
+                        [{"role": "user", "content": [
+                            {"type": "text", "text": "Describe what you see in the room through the camera in 2-3 concise sentences."},
+                            {"type": "image", "mime_type": "image/jpeg", "data": base64.b64encode(frame_data).decode("ascii")},
+                        ]}],
+                        [],
+                        "You are describing what you see through the HP camera.",
+                        sensitive=sensitive,
+                        on_provider_notice=on_provider_notice,
+                        job_id=job_id,
+                        prefer_cloud=True,
+                        required_provider="gemini",
+                        disable_panel=True,
+                    )
+                    answer = _response_text(vision_resp)
+                elif not answer:
+                    answer = (
+                        "The camera is on and capturing fresh frames. "
+                        "The browser camera card is connecting to the live feed."
+                    )
+            elif result.get("success") and device_action == "microphone_start" and not answer:
+                answer = "The HP microphone is on for this session. Audio is discarded and is not recorded."
+            elif result.get("success") and device_action == "microphone_stop" and not answer:
+                answer = "The HP microphone is off for this session."
+            if not answer:
+                answer = "The hardware action did not complete."
+            conversation_history.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
+            MEMORY.record_message(session_id, "assistant", answer)
+            return answer, conversation_history
     else:
         MEMORY.record_message(session_id, "user", user_input)
         conversation_history.append({"role": "user", "content": user_input})
@@ -350,7 +396,8 @@ def run_agent(
             CAMERA.release(owner)
             active = CAMERA.is_started()
             POLICY.audit_event("camera_off", session_id, job_id, "stopped")
-            camera_event = {"active": active}
+            camera_event = {"active": active, "session_active": False}
+            camera_event["session_id"] = session_id
             NOTIFIER.broadcast_event("camera_state", camera_event)
             if on_activity_event is not None:
                 on_activity_event("camera_state", camera_event)
@@ -363,25 +410,72 @@ def run_agent(
             MEMORY.record_message(session_id, "assistant", answer)
             return answer, conversation_history
 
+        if MICROPHONE_STOP_PROMPT.search(user_input):
+            from agent.hardware.microphone import MICROPHONE, microphone_session_owner
+
+            owner = microphone_session_owner(session_id)
+            try:
+                MICROPHONE.release(owner)
+            except (OSError, RuntimeError, ValueError) as error:
+                answer = f"I could not confirm that the microphone stopped: {error}"
+                conversation_history.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
+                MEMORY.record_message(session_id, "assistant", answer)
+                return answer, conversation_history
+            active = MICROPHONE.is_started()
+            POLICY.audit_event("microphone_off", session_id, job_id, "stopped")
+            answer = (
+                "This chat's microphone access is off."
+                if not active
+                else "This chat's microphone access is off, but another active microphone session is still using the device."
+            )
+            conversation_history.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
+            MEMORY.record_message(session_id, "assistant", answer)
+            return answer, conversation_history
+
+        if MICROPHONE_START_PROMPT.search(user_input):
+            from agent.hardware.microphone import MICROPHONE
+
+            microphone_tool = {"name": "microphone_start"}
+            decision = POLICY.decide(
+                microphone_tool,
+                {"action": "start"},
+                session_id,
+                (approvals or {}).get("microphone_start"),
+            )
+            if not decision.get("allowed"):
+                if decision.get("status") == "cancelled":
+                    return _finish_vision_notice(
+                        "I won't start the microphone. No microphone audio was captured.",
+                        conversation_history,
+                        session_id,
+                    )
+                raise ApprovalRequest(
+                    "microphone_start",
+                    {"action": "start"},
+                    decision["approval_request"],
+                    _serializable_history(conversation_history),
+                    f"microphone-{uuid.uuid4().hex}",
+                )
+            from agent.hardware.microphone import microphone_session_owner
+
+            try:
+                MICROPHONE.acquire(microphone_session_owner(session_id))
+            except (OSError, RuntimeError, ValueError) as error:
+                POLICY.audit_event("microphone_access", session_id, job_id, "failed")
+                return _finish_vision_notice(
+                    f"The microphone did not start: {error}",
+                    conversation_history,
+                    session_id,
+                )
+            POLICY.audit_event("microphone_access", session_id, job_id, "started")
+            answer = "The HP microphone is on for this session. Audio is discarded and is not recorded."
+            conversation_history.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
+            MEMORY.record_message(session_id, "assistant", answer)
+            return answer, conversation_history
+
         if CAMERA_START_PROMPT.search(user_input) or _vision_request(user_input):
             from agent.hardware.camera import CAMERA, camera_session_owner
             from agent.notifier import NOTIFIER
-            import os
-            import shutil
-            import threading
-
-            if not shutil.which("ffmpeg"):
-                return _finish_vision_notice(
-                    "The camera cannot start because ffmpeg is not installed on this host. Please install ffmpeg to enable camera streaming.",
-                    conversation_history,
-                    session_id,
-                )
-            if not os.path.exists(CAMERA.device):
-                return _finish_vision_notice(
-                    f"The camera device ({CAMERA.device}) is not available or disconnected. Please ensure your HP camera is plugged in.",
-                    conversation_history,
-                    session_id,
-                )
 
             camera_tool = {"name": "vision_capture"}
             decision = POLICY.decide(
@@ -406,39 +500,23 @@ def run_agent(
                 )
 
             owner = camera_session_owner(session_id)
-            had_owner = CAMERA.has_owner(owner)
-            previous_frame = CAMERA.latest_frame()
-            CAMERA.acquire(owner)
-            frame = CAMERA.wait_for_frame(
-                previous_frame.version if previous_frame else -1,
-                timeout=5.0,
-            )
-            if frame is None:
-                status = CAMERA.health_check()
-                if not had_owner:
-                    CAMERA.release(owner)
-                reason = status.get("last_error") or "No fresh frame arrived within 5 seconds."
+            try:
+                frame = CAMERA.start_session(owner)
+            except (OSError, RuntimeError, ValueError) as error:
                 return _finish_vision_notice(
-                    f"The camera did not start: {reason}",
+                    f"The camera did not start: {error}",
                     conversation_history,
                     session_id,
                 )
 
             POLICY.audit_event("camera_access", session_id, job_id, "started")
 
-            def _auto_stop_camera():
-                time.sleep(300)
-                if owner and CAMERA.has_owner(owner):
-                    CAMERA.release(owner)
-                if not CAMERA.is_started():
-                    POLICY.audit_event("camera_auto_stop", session_id, job_id, "stopped")
-                    NOTIFIER.broadcast_event(
-                        "camera_state",
-                        {"active": False},
-                    )
-            threading.Thread(target=_auto_stop_camera, daemon=True).start()
-
-            camera_event = {"active": True, "device": CAMERA.device, "session_id": session_id}
+            camera_event = {
+                "active": True,
+                "session_active": True,
+                "device": CAMERA.device,
+                "session_id": session_id,
+            }
             NOTIFIER.broadcast_event("camera_state", camera_event)
             if on_activity_event is not None:
                 on_activity_event("camera_state", camera_event)

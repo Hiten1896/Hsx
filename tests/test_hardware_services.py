@@ -57,6 +57,15 @@ def test_standalone_camera_buffers_bounded_mjpeg_frames():
     assert camera.wait_for_frame(1, timeout=0.1) == frame
 
 
+def test_stopping_camera_discards_the_last_in_memory_frame():
+    camera = CameraService(device="/dev/video0")
+    camera._publish_frame(b"\xff\xd8private-frame\xff\xd9")
+
+    assert camera.latest_frame() is not None
+    camera._stop_capture(timeout=0.1)
+    assert camera.latest_frame() is None
+
+
 def test_camera_stop_terminates_supervised_ffmpeg_process(monkeypatch):
     import threading
 
@@ -115,17 +124,22 @@ def test_mjpeg_api_streams_without_an_agent_job(monkeypatch):
     import threading
     from http.server import ThreadingHTTPServer
     from time import monotonic
+    from urllib.error import HTTPError
     from urllib.request import Request, urlopen
 
     import server
+    from agent.hardware.camera import camera_session_owner
 
     jpeg = b"\xff\xd8dashboard-frame\xff\xd9"
 
     class FakeCamera:
         def has_owner(self, _owner):
-            return True
+            return _owner == camera_session_owner("test")
 
         def latest_frame(self):
+            return CameraFrame(1, jpeg, monotonic(), 1234.5)
+
+        def start_session(self, _owner):
             return CameraFrame(1, jpeg, monotonic(), 1234.5)
 
         def wait_for_frame(self, _version, timeout=3.0):
@@ -152,6 +166,13 @@ def test_mjpeg_api_streams_without_an_agent_job(monkeypatch):
         assert b"--frame\r\n" in body
         assert b"X-Hsx-Captured-At: 1234.500000\r\n\r\n" in body
         assert jpeg in body
+        unrelated = Request(
+            f"{origin}/api/camera/stream?session_id=other-session",
+            headers={"Origin": origin},
+        )
+        with pytest.raises(HTTPError) as rejected:
+            urlopen(unrelated, timeout=3)
+        assert rejected.value.code == 403
     finally:
         httpd.shutdown()
         thread.join(timeout=3)
@@ -183,6 +204,214 @@ def test_camera_status_is_read_only_and_does_not_start_camera(monkeypatch):
     assert camera.started is False
 
 
+def test_microphone_service_discards_audio_and_releases_last_owner(monkeypatch):
+    import sys
+    from types import ModuleType
+
+    from agent.hardware.microphone import MicrophoneService
+
+    streams = []
+
+    class FakeStream:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.started = False
+            self.stopped = False
+            self.closed = False
+
+        def start(self):
+            self.started = True
+
+        def stop(self):
+            self.stopped = True
+
+        def close(self):
+            self.closed = True
+
+    sounddevice = ModuleType("sounddevice")
+    sounddevice.PortAudioError = RuntimeError
+    sounddevice.InputStream = lambda **kwargs: streams.append(FakeStream(**kwargs)) or streams[-1]
+    monkeypatch.setitem(sys.modules, "sounddevice", sounddevice)
+
+    service = MicrophoneService()
+    assert service.acquire("session-one")
+    assert service.acquire("session-two") is False
+    assert service.health_check()["running"] is True
+    assert len(streams) == 1
+    assert streams[0].started
+    assert streams[0].kwargs["callback"] == service._discard_audio
+    assert service.release("session-one") is False
+    assert not streams[0].stopped
+    assert service.release("session-two") is True
+    assert streams[0].stopped and streams[0].closed
+    assert service.health_check()["running"] is False
+
+
+def test_microphone_service_reports_missing_optional_dependency(monkeypatch):
+    import sys
+
+    from agent.hardware.microphone import MicrophoneService
+
+    monkeypatch.setitem(sys.modules, "sounddevice", None)
+    with pytest.raises(RuntimeError, match="requirements-voice.txt"):
+        MicrophoneService().acquire("session")
+
+
+def test_microphone_shutdown_failure_does_not_report_the_device_as_off(monkeypatch):
+    import sys
+    from types import ModuleType
+
+    from agent.hardware.microphone import MicrophoneService
+
+    class FakeStream:
+        fail_stop = True
+
+        def start(self):
+            pass
+
+        def stop(self):
+            if self.fail_stop:
+                raise OSError("device is busy")
+
+        def close(self):
+            pass
+
+    sounddevice = ModuleType("sounddevice")
+    sounddevice.PortAudioError = RuntimeError
+    sounddevice.InputStream = lambda **_kwargs: FakeStream()
+    monkeypatch.setitem(sys.modules, "sounddevice", sounddevice)
+
+    service = MicrophoneService()
+    service.acquire("session")
+    with pytest.raises(RuntimeError, match="Could not confirm microphone shutdown"):
+        service.release("session")
+    assert service.is_started()
+    assert service.health_check()["last_error"] == "device is busy"
+
+
+def test_microphone_chat_asks_before_start_and_resumes_with_truthful_status(monkeypatch):
+    from agent import orchestrator
+    from agent.ask_user import ApprovalRequest
+    from agent.hardware.microphone import MICROPHONE, microphone_session_owner
+
+    monkeypatch.setattr(orchestrator.MEMORY, "record_message", lambda *_args: None)
+    monkeypatch.setattr(orchestrator.POLICY, "is_stopped", lambda: False)
+    monkeypatch.setattr(orchestrator.POLICY, "audit_event", lambda *args: None)
+    monkeypatch.setattr(
+        orchestrator.POLICY,
+        "decide",
+        lambda *_args, **_kwargs: {
+            "allowed": False,
+            "status": "waiting_approval",
+            "approval_request": {
+                "request_type": "tool_consent",
+                "why": "The microphone input is discarded.",
+            },
+        },
+    )
+    opened = []
+    monkeypatch.setattr(MICROPHONE, "acquire", lambda owner: opened.append(owner))
+    with pytest.raises(ApprovalRequest) as paused:
+        orchestrator.run_agent("Turn on the microphone", [], [], {}, session_id="mic-session")
+    assert paused.value.tool == "microphone_start"
+    assert paused.value.arguments == {"action": "start"}
+    assert opened == []
+
+    monkeypatch.setattr(orchestrator.POLICY, "decide", lambda *_args, **_kwargs: {"allowed": True})
+    answer, _ = orchestrator.run_agent(
+        "Turn on the microphone",
+        [],
+        [],
+        {},
+        session_id="mic-session",
+        approvals={"microphone_start": True},
+    )
+    assert "discarded" in answer.lower()
+    assert opened == [microphone_session_owner("mic-session")]
+
+    answer, history = orchestrator.run_agent(
+        "Turn on the microphone",
+        [],
+        [],
+        {},
+        session_id="mic-session",
+        resume_tool_result={
+            "tool_call_id": "mic-call",
+            "result": {
+                "success": True,
+                "message": "The HP microphone is on for this session. Audio is discarded and is not recorded.",
+                "_hsx_device_action": "microphone_start",
+            },
+        },
+    )
+    assert "not recorded" in answer.lower()
+    assert all("_hsx_device_action" not in str(message) for message in history)
+
+
+def test_approved_camera_chat_action_uses_live_service_and_keeps_frame_ephemeral(monkeypatch):
+    from contextlib import nullcontext
+
+    import server
+    from agent.hardware.camera import CameraFrame, camera_session_owner
+
+    jpeg = b"\xff\xd8approved-frame\xff\xd9"
+    job = {
+        "id": "camera-approval-job",
+        "state": "running",
+        "session_id": "camera-approval-session",
+        "checkpoint": [],
+        "approval": {"tool": "vision_capture", "arguments": {}, "request_type": "tool_consent"},
+        "request": "What do you see?",
+        "task_dir": "camera-task",
+        "tool_call_id": "camera-call",
+    }
+    events = []
+    started_owners = []
+
+    class FakeJobs:
+        def get(self, _job_id):
+            return job
+
+        def complete(self, _job_id, response, _device_actions):
+            job.update({"state": "done", "result": response})
+            return job
+
+    class FakeCamera:
+        device = "/dev/video0"
+
+        def start_session(self, owner):
+            started_owners.append(owner)
+            return CameraFrame(1, jpeg, monotonic())
+
+    monkeypatch.setattr(server, "ASK_JOBS", FakeJobs())
+    monkeypatch.setattr(server, "CAMERA", FakeCamera())
+    monkeypatch.setattr(server, "PROVIDER_BANDIT", SimpleNamespace(remember_job_tool=lambda *_args: None))
+    monkeypatch.setattr(server.POLICY, "is_stopped", lambda: False)
+    monkeypatch.setattr(server.POLICY, "decide", lambda *_args, **_kwargs: {"allowed": True})
+    monkeypatch.setattr(server.POLICY, "audit_event", lambda *_args: None)
+    monkeypatch.setattr(server.NOTIFIER, "broadcast_event", lambda *args: events.append(args))
+    monkeypatch.setattr(server, "_session_lock", lambda _session: nullcontext())
+    monkeypatch.setattr(server, "task_output_scope", lambda *_args: nullcontext())
+    monkeypatch.setattr(server, "_record_job_telemetry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(server, "_ask_job_payload", lambda current: current)
+    monkeypatch.setattr(server, "_emit_chat_event", lambda *args: events.append(args))
+
+    received = {}
+
+    def fake_run_agent(*_args, **kwargs):
+        received.update(kwargs["resume_tool_result"]["result"])
+        return "A desk is visible.", [{"role": "assistant", "content": "A desk is visible."}]
+
+    monkeypatch.setattr(server, "run_agent", fake_run_agent)
+    server._resume_approval_job(job["id"], approved=True)
+
+    assert started_owners == [camera_session_owner(job["session_id"])]
+    assert received["_frame_data"] == jpeg
+    assert received["_hsx_device_action"] == "camera_start"
+    assert any(len(item) == 3 and item[1] == "camera_snapshot" for item in events)
+    assert job["state"] == "done"
+
+
 def test_camera_consent_is_bound_to_session_start_and_stop(monkeypatch):
     import server
     from agent.hardware.camera import camera_session_owner
@@ -211,7 +440,8 @@ def test_camera_consent_is_bound_to_session_start_and_stop(monkeypatch):
         def latest_frame(self):
             return None
 
-        def wait_for_frame(self, _version, timeout=5.0):
+        def start_session(self, owner):
+            self.owners.add(owner)
             return CameraFrame(1, b"\xff\xd8frame\xff\xd9", monotonic())
 
     camera = FakeCamera()
@@ -231,9 +461,13 @@ def test_camera_consent_is_bound_to_session_start_and_stop(monkeypatch):
     assert status == 200
     assert camera.has_owner(camera_session_owner("browser-one"))
 
-    status, _, _ = _request("/api/camera/stop", method="POST", payload={"session_id": "browser-one"})
+    camera.owners.add("motion-monitor")
+    status, _, body = _request("/api/camera/stop", method="POST", payload={"session_id": "browser-one"})
     assert status == 200
     assert not camera.has_owner(camera_session_owner("browser-one"))
+    stopped = json.loads(body)
+    assert stopped["active"] is True
+    assert stopped["session_active"] is False
 
 
 
@@ -444,8 +678,7 @@ def test_visual_orchestrator_uses_live_frame_after_approval(tmp_path, monkeypatc
     monkeypatch.setattr(CAMERA, "health_check", lambda: {"device_available": True, "running": True})
     monkeypatch.setattr(CAMERA, "has_owner", lambda _owner: False)
     monkeypatch.setattr(CAMERA, "latest_frame", lambda: None)
-    monkeypatch.setattr(CAMERA, "acquire", lambda _owner: True)
-    monkeypatch.setattr(CAMERA, "wait_for_frame", lambda *_args, **_kwargs: CameraFrame(1, jpeg, monotonic()))
+    monkeypatch.setattr(CAMERA, "start_session", lambda _owner: CameraFrame(1, jpeg, monotonic()))
     monkeypatch.setattr(CAMERA, "release", lambda owner: released_owners.append(owner))
     monkeypatch.setattr(NOTIFIER, "broadcast_event", lambda *args: None)
     monkeypatch.setattr(orchestrator.POLICY, "decide", lambda *args: {"allowed": True})

@@ -148,10 +148,19 @@ class PolicyEngine:
                 "security_risk": "Elevated privileges can affect the operating system and other users; approve only a clearly understood action.",
             })
         elif action in {"camera_start", "microphone_start"}:
-            device = "camera" if action == "camera_start" else "microphone"
             review.update({
-                "host_impact": f"Turns on the HP {device} for this request; it is not intended to stay on afterward.",
-                "security_risk": f"{device.title()} input may contain private information and is processed for this request.",
+                "host_impact": (
+                    "Starts the HP camera for this browser session; the session lease expires after five minutes "
+                    "unless you turn it off sooner."
+                    if action == "camera_start"
+                    else "Opens the HP microphone for this browser session; audio samples are discarded, not recorded or sent."
+                ),
+                "security_risk": (
+                    "The live feed is available only to the session that approved camera access. A frame is sent to "
+                    "the vision provider only when you ask Hsx to describe what the camera sees."
+                    if action == "camera_start"
+                    else "Nearby sound is briefly read by the host audio input callback and immediately discarded."
+                ),
             })
         else:
             review.update({
@@ -196,8 +205,10 @@ class PolicyEngine:
             "sudo": "Possible consequence: an elevated operation can change system-wide settings.",
             "system_services": "Possible consequence: changing a service can interrupt Hsx or other host services.",
             "shutdown_reboot": "Possible consequence: the host may shut down or restart and interrupt active work.",
-            "camera_start": "Possible consequence: the camera feed may be captured and used to answer your request.",
-            "microphone_start": "Possible consequence: microphone audio may be captured and processed for your request.",
+            "camera_start": (
+                "Possible consequence: the HP camera feed is available in this session and automatically stops after five minutes."
+            ),
+            "microphone_start": "Possible consequence: the HP microphone opens for this session; audio is discarded and not recorded or sent.",
             "install_packages": "Possible consequence: a pinned package is downloaded into Hsx's project environment.",
             "external_services": "Possible consequence: request data needed for this action may be sent to an external service.",
             "firmware_flash": "Possible consequence: writing firmware can erase or replace a device's current program.",
@@ -218,7 +229,9 @@ class PolicyEngine:
             return "Possible consequence: live local system or device information is read; no settings are changed."
         if name in {"camera_snapshot", "vision_capture", "camera_record"}:
             return "Possible consequence: the camera may capture a frame or recording for this task."
-        if name in {"voice_input", "microphone_start"}:
+        if name == "microphone_start":
+            return "Possible consequence: the HP microphone opens temporarily; input samples are discarded without recording."
+        if name == "voice_input":
             return "Possible consequence: microphone audio may be captured for this task."
         return f"Possible consequence: the {name.replace('_', ' ')} tool may read or change information needed for this task."
 
