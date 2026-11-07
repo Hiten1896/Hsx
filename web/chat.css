@@ -387,7 +387,29 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
   .sidebar-activity, .history-panel, .panel-collapse-button svg, .chat-history-row, .chat-history-item { transition-duration: .01ms !important; }
 }
 
-:root[data-theme="light"] { color-scheme: light; --background: #ffffff; --sidebar: #f7f7f7; --surface: #ffffff; --surface-raised: #f2f2f2; --surface-input: #ffffff; --border: #dedede; --text: #242424; --muted: #646464; --accent: #343434; --accent-strong: #1f1f1f; --success: #287a42; --warning: #885b10; --danger: #a13b36; --code-background: #f5f5f5; --button-text: #ffffff; }
+:root[data-theme="light"] {
+  color-scheme: light;
+  --background: #ffffff;
+  --sidebar: #f4f4f5;
+  --surface: #ffffff;
+  --surface-raised: #f7f7f8;
+  --surface-input: #f4f4f5;
+  --border: #e4e4e7;
+  --text: #111827;
+  --muted: #52525b;
+  --accent: #27272a;
+  --accent-strong: #18181b;
+  --success: #166534;
+  --warning: #854d0e;
+  --danger: #b91c1c;
+  --code-background: #f4f4f5;
+  --button-text: #ffffff;
+  --light-hover: #ededf0;
+  --light-selected: #e4e4e7;
+  --light-border-strong: #d4d4d8;
+  --light-focus: #2563eb;
+  --light-shadow: 0 12px 32px rgb(15 23 42 / 9%);
+}
 @media (max-width: 390px) {
   .chat-controls { gap: 2px; }
   .header-icon-button { width: 36px; height: 38px; }
@@ -729,6 +751,332 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 :root[data-theme="light"] .activity-command { background: #f2f2f2; }
 :root[data-theme="light"] .camera-metrics span, :root[data-theme="light"] .camera-placeholder,
 :root[data-theme="light"] .message-time { color: #656565; }
+
+:root[data-theme="light"] {
+  background: var(--background);
+  color: var(--text);
+}
+:root[data-theme="light"] body,
+:root[data-theme="light"] .chat-area,
+:root[data-theme="light"] .conversation-layout,
+:root[data-theme="light"] .message-stream,
+:root[data-theme="light"] .conversation-layout.is-empty {
+  color: var(--text);
+  background: var(--background);
+}
+:root[data-theme="light"] .sidebar,
+:root[data-theme="light"] .camera-sidebar {
+  color: var(--text);
+  background: var(--sidebar);
+}
+:root[data-theme="light"] .camera-sidebar,
+:root[data-theme="light"] .sidebar {
+  border-color: var(--border);
+}
+:root[data-theme="light"] .new-chat-button,
+:root[data-theme="light"] .connections,
+:root[data-theme="light"] .notifications-panel,
+:root[data-theme="light"] .notifications-heading,
+:root[data-theme="light"] .notification-toast,
+:root[data-theme="light"] .notification-item,
+:root[data-theme="light"] .camera-panel,
+:root[data-theme="light"] .artifacts-panel,
+:root[data-theme="light"] .activity-panel,
+:root[data-theme="light"] .artifact-item,
+:root[data-theme="light"] .settings-dialog,
+:root[data-theme="light"] .feedback-dialog,
+:root[data-theme="light"] .permission-dialog,
+:root[data-theme="light"] .activity-details,
+:root[data-theme="light"] .activity-details pre,
+:root[data-theme="light"] .activity-command,
+:root[data-theme="light"] .activity-target-chip,
+:root[data-theme="light"] .activity-row-toggle:hover,
+:root[data-theme="light"] .activity-row-toggle:focus-visible,
+:root[data-theme="light"] .provider-notice,
+:root[data-theme="light"] .drop-hint,
+:root[data-theme="light"] .settings-tabs,
+:root[data-theme="light"] .provider-health-item,
+:root[data-theme="light"] .permission-dialog .approval-card,
+:root[data-theme="light"] .settings-panels,
+:root[data-theme="light"] .settings-heading {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--surface);
+}
+:root[data-theme="light"] .new-chat-button,
+:root[data-theme="light"] .notification-item,
+:root[data-theme="light"] .artifact-item,
+:root[data-theme="light"] .activity-item,
+:root[data-theme="light"] .activity-music-player,
+:root[data-theme="light"] .approval-card,
+:root[data-theme="light"] .settings-action,
+:root[data-theme="light"] .settings-field select,
+:root[data-theme="light"] .feedback-dialog input,
+:root[data-theme="light"] .feedback-dialog textarea,
+:root[data-theme="light"] .debug-info,
+:root[data-theme="light"] .settings-tabs,
+:root[data-theme="light"] .provider-health-item,
+:root[data-theme="light"] .activity-details,
+:root[data-theme="light"] .activity-details pre,
+:root[data-theme="light"] .activity-command,
+:root[data-theme="light"] .activity-target-chip,
+:root[data-theme="light"] .provider-notice,
+:root[data-theme="light"] .drop-hint,
+:root[data-theme="light"] .history-search,
+:root[data-theme="light"] .message-attachment,
+:root[data-theme="light"] .message-attachment-type {
+  background: var(--surface-raised);
+}
+:root[data-theme="light"] .new-chat-button:hover,
+:root[data-theme="light"] .nav-item:hover,
+:root[data-theme="light"] .nav-item-active,
+:root[data-theme="light"] .suggestion-chip:hover,
+:root[data-theme="light"] .chat-history-row:hover,
+:root[data-theme="light"] .chat-history-row[data-active="true"],
+:root[data-theme="light"] .chat-history-item:hover,
+:root[data-theme="light"] .chat-history-item[aria-current="true"],
+:root[data-theme="light"] .settings-tabs [role="tab"]:hover,
+:root[data-theme="light"] .settings-tabs [role="tab"][aria-selected="true"],
+:root[data-theme="light"] .settings-action:hover,
+:root[data-theme="light"] .panel-refresh,
+:root[data-theme="light"] .mobile-panel-close,
+:root[data-theme="light"] .message-action:hover,
+:root[data-theme="light"] .message-action[aria-pressed="true"],
+:root[data-theme="light"] .activity-item-toggle:hover,
+:root[data-theme="light"] .activity-state {
+  color: var(--text);
+  border-color: var(--light-border-strong);
+  background: var(--light-hover);
+}
+:root[data-theme="light"] .header-icon-button,
+:root[data-theme="light"] .nav-item,
+:root[data-theme="light"] .connection-list li,
+:root[data-theme="light"] .connection-list strong,
+:root[data-theme="light"] .connection-note,
+:root[data-theme="light"] .sidebar-caption,
+:root[data-theme="light"] .local-note,
+:root[data-theme="light"] .panel-eyebrow,
+:root[data-theme="light"] .camera-placeholder,
+:root[data-theme="light"] .camera-metrics span,
+:root[data-theme="light"] .camera-metrics strong,
+:root[data-theme="light"] .camera-badge,
+:root[data-theme="light"] .camera-badge-online,
+:root[data-theme="light"] .camera-badge-offline,
+:root[data-theme="light"] .camera-badge-reconnecting,
+:root[data-theme="light"] .artifact-item a,
+:root[data-theme="light"] .artifact-name,
+:root[data-theme="light"] .activity-summary,
+:root[data-theme="light"] .activity-detail strong,
+:root[data-theme="light"] .activity-verb,
+:root[data-theme="light"] .activity-capability-card strong,
+:root[data-theme="light"] .markdown-body,
+:root[data-theme="light"] .markdown-body h1,
+:root[data-theme="light"] .markdown-body h2,
+:root[data-theme="light"] .markdown-body h3,
+:root[data-theme="light"] .markdown-body pre code,
+:root[data-theme="light"] .markdown-body :not(pre) > code,
+:root[data-theme="light"] .message-content,
+:root[data-theme="light"] .composer textarea,
+:root[data-theme="light"] .composer-icon-button,
+:root[data-theme="light"] .composer-icon-button:hover,
+:root[data-theme="light"] .settings-panels h3,
+:root[data-theme="light"] .settings-heading h2,
+:root[data-theme="light"] .provider-health-item strong,
+:root[data-theme="light"] .permission-action-row label,
+:root[data-theme="light"] .permission-action-row span,
+:root[data-theme="light"] .debug-info {
+  color: var(--text);
+}
+:root[data-theme="light"] .chat-history-row[data-active="true"],
+:root[data-theme="light"] .chat-history-item[aria-current="true"],
+:root[data-theme="light"] .nav-item-active {
+  background: var(--light-selected);
+}
+:root[data-theme="light"] .header-icon-button:hover,
+:root[data-theme="light"] .panel-refresh:hover,
+:root[data-theme="light"] .chat-history-action:hover,
+:root[data-theme="light"] .message-attachment:hover,
+:root[data-theme="light"] .composer-icon-button:hover,
+:root[data-theme="light"] .activity-step-icon {
+  color: var(--text);
+  background: var(--light-hover);
+}
+:root[data-theme="light"] .camera-view,
+:root[data-theme="light"] .camera-frame {
+  background: #f4f4f5;
+}
+:root[data-theme="light"] .camera-placeholder-icon {
+  color: var(--muted);
+  border-color: var(--border);
+  background: var(--surface-raised);
+}
+:root[data-theme="light"] .camera-badge,
+:root[data-theme="light"] .camera-badge-online,
+:root[data-theme="light"] .camera-badge-offline,
+:root[data-theme="light"] .camera-badge-reconnecting {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--surface-raised);
+}
+:root[data-theme="light"] .camera-badge-online .connection-dot,
+:root[data-theme="light"] .camera-badge-reconnecting .connection-dot {
+  background: var(--success);
+}
+:root[data-theme="light"] .artifacts-panel,
+:root[data-theme="light"] .activity-panel,
+:root[data-theme="light"] .camera-panel,
+:root[data-theme="light"] .connections,
+:root[data-theme="light"] .artifact-item,
+:root[data-theme="light"] .activity-item,
+:root[data-theme="light"] .notification-item {
+  border-color: var(--border);
+  box-shadow: none;
+}
+:root[data-theme="light"] .camera-heading,
+:root[data-theme="light"] .camera-metrics,
+:root[data-theme="light"] .artifacts-heading,
+:root[data-theme="light"] .notifications-heading,
+:root[data-theme="light"] .settings-heading {
+  border-color: var(--border);
+  background: var(--surface);
+}
+:root[data-theme="light"] .artifacts-empty,
+:root[data-theme="light"] .artifact-meta,
+:root[data-theme="light"] .artifact-type,
+:root[data-theme="light"] .notification-meta,
+:root[data-theme="light"] .activity-meta,
+:root[data-theme="light"] .activity-detail,
+:root[data-theme="light"] .activity-metadata,
+:root[data-theme="light"] .activity-change-count,
+:root[data-theme="light"] .message-time,
+:root[data-theme="light"] .composer-footer,
+:root[data-theme="light"] .privacy-note,
+:root[data-theme="light"] .composer textarea::placeholder,
+:root[data-theme="light"] .settings-panels p,
+:root[data-theme="light"] .settings-panels #feedback-count,
+:root[data-theme="light"] .settings-field,
+:root[data-theme="light"] .settings-check,
+:root[data-theme="light"] .feedback-dialog label,
+:root[data-theme="light"] .feedback-dialog .feedback-status {
+  color: var(--muted);
+}
+:root[data-theme="light"] .message-card[data-role="user"] .message-content {
+  color: var(--text);
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+:root[data-theme="light"] .markdown-body a {
+  color: #1d4ed8;
+}
+:root[data-theme="light"] .markdown-body :not(pre) > code,
+:root[data-theme="light"] .markdown-body pre,
+:root[data-theme="light"] .code-viewer,
+:root[data-theme="light"] .debug-info {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--code-background);
+}
+:root[data-theme="light"] .markdown-body pre code {
+  color: var(--text);
+}
+:root[data-theme="light"] .composer-dock {
+  border-color: var(--border);
+  background: linear-gradient(180deg, rgb(255 255 255 / 92%), var(--background) 24%);
+}
+:root[data-theme="light"] .composer {
+  color: var(--text);
+  border-color: var(--light-border-strong);
+  background: var(--surface);
+  box-shadow: 0 5px 22px rgb(15 23 42 / 8%);
+}
+:root[data-theme="light"] .composer:focus-within {
+  border-color: var(--light-focus);
+  box-shadow: 0 0 0 3px rgb(37 99 235 / 16%), 0 5px 22px rgb(15 23 42 / 8%);
+}
+:root[data-theme="light"] .composer textarea {
+  color: var(--text);
+}
+:root[data-theme="light"] .composer-icon-button,
+:root[data-theme="light"] .send-button,
+:root[data-theme="light"] .stop-button,
+:root[data-theme="light"] .settings-action,
+:root[data-theme="light"] .feedback-dialog button,
+:root[data-theme="light"] .notifications-heading button {
+  border-color: var(--border);
+}
+:root[data-theme="light"] .send-button {
+  color: var(--button-text);
+  border-color: var(--accent);
+  background: var(--accent);
+}
+:root[data-theme="light"] .send-button:hover {
+  background: #3f3f46;
+}
+:root[data-theme="light"] .stop-button,
+:root[data-theme="light"] .settings-action,
+:root[data-theme="light"] .feedback-dialog button,
+:root[data-theme="light"] .notifications-heading button {
+  color: var(--text);
+  background: var(--surface-raised);
+}
+:root[data-theme="light"] .stop-button:hover,
+:root[data-theme="light"] .settings-action:hover,
+:root[data-theme="light"] .feedback-dialog button:hover,
+:root[data-theme="light"] .notifications-heading button:hover {
+  background: var(--light-hover);
+}
+:root[data-theme="light"] .settings-action.danger-action {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+}
+:root[data-theme="light"] .composer-icon-button:hover,
+:root[data-theme="light"] .settings-close:hover {
+  color: var(--text);
+  background: var(--light-hover);
+}
+:root[data-theme="light"] .composer-footer,
+:root[data-theme="light"] .privacy-note,
+:root[data-theme="light"] .settings-check,
+:root[data-theme="light"] .settings-panels p {
+  color: var(--muted);
+}
+:root[data-theme="light"] .history-search,
+:root[data-theme="light"] .settings-field select,
+:root[data-theme="light"] .feedback-dialog input,
+:root[data-theme="light"] .feedback-dialog textarea {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--surface);
+}
+:root[data-theme="light"] .settings-dialog,
+:root[data-theme="light"] .feedback-dialog,
+:root[data-theme="light"] .permission-dialog {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--surface);
+  box-shadow: var(--light-shadow);
+}
+:root[data-theme="light"] .settings-dialog::backdrop,
+:root[data-theme="light"] .feedback-dialog::backdrop,
+:root[data-theme="light"] .permission-dialog::backdrop {
+  background: rgb(24 24 27 / 32%);
+}
+:root[data-theme="light"] button:focus-visible,
+:root[data-theme="light"] a:focus-visible,
+:root[data-theme="light"] textarea:focus-visible,
+:root[data-theme="light"] input:focus-visible,
+:root[data-theme="light"] select:focus-visible {
+  outline-color: var(--light-focus);
+}
+:root[data-theme="light"] .chat-history-list,
+:root[data-theme="light"] .sidebar-activity .artifacts-list,
+:root[data-theme="light"] .message-stream {
+  scrollbar-color: #a1a1aa transparent;
+}
+:root[data-theme="light"] .chat-history-list::-webkit-scrollbar-thumb,
+:root[data-theme="light"] .sidebar-activity .artifacts-list::-webkit-scrollbar-thumb {
+  background: #a1a1aa;
+}
 @media (max-width: 390px) {
   .send-button, .stop-button { width: 44px; min-width: 44px; }
 }

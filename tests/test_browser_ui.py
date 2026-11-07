@@ -392,6 +392,59 @@ def test_browser_theme_switching_brand_center_and_artifact_scrolling(browser_app
     )
 
 
+def test_browser_light_theme_uses_consistent_high_contrast_surfaces(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.locator("#settings-toggle").click()
+    page.locator("#theme-setting").select_option("light")
+    page.locator("#settings-dialog").evaluate("(dialog) => dialog.close()")
+    page.locator("#prompt-input").fill("Light theme surface check")
+    page.locator("#send-button").click()
+    page.get_by_text("Test answer from fake provider.").wait_for(timeout=5000)
+    bubble_color = page.locator('.message-card[data-role="user"] .message-content').evaluate(
+        "node => ({background: getComputedStyle(node).backgroundColor, color: getComputedStyle(node).color})"
+    )
+    assert bubble_color == {"background": "rgb(247, 247, 248)", "color": "rgb(17, 24, 39)"}
+
+    for width in (360, 1280):
+        page.set_viewport_size({"width": width, "height": 800})
+        page.mouse.move(0, 0)
+        palette = page.evaluate("""() => {
+          const style = (selector) => getComputedStyle(document.querySelector(selector));
+          const root = getComputedStyle(document.documentElement);
+          return {
+            background: root.getPropertyValue('--background').trim(),
+            text: root.getPropertyValue('--text').trim(),
+            sidebar: style('.sidebar').backgroundColor,
+            main: style('.chat-area').backgroundColor,
+            composer: style('.composer').backgroundColor,
+            composerText: style('.composer textarea').color,
+            sendButton: style('.send-button').backgroundColor,
+            focus: root.getPropertyValue('--light-focus').trim(),
+          };
+        }""")
+        assert palette["background"] == "#ffffff"
+        assert palette["text"] == "#111827"
+        assert palette["main"] == "rgb(255, 255, 255)"
+        assert palette["composer"] == "rgb(255, 255, 255)"
+        assert palette["composerText"] == "rgb(17, 24, 39)"
+        assert palette["sendButton"] == "rgb(39, 39, 42)"
+        assert palette["focus"] == "#2563eb"
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+    page.set_viewport_size({"width": 1280, "height": 800})
+    sidebar_colors = page.locator(".camera-sidebar").evaluate(
+        "node => ({sidebar: getComputedStyle(node).backgroundColor, panel: getComputedStyle(node.querySelector('.camera-panel')).backgroundColor, artifacts: getComputedStyle(node.querySelector('.artifacts-panel')).backgroundColor})"
+    )
+    assert sidebar_colors == {
+        "sidebar": "rgb(244, 244, 245)",
+        "panel": "rgb(255, 255, 255)",
+        "artifacts": "rgb(255, 255, 255)",
+    }
+
+
 def test_voice_dictation_deduplicates_results_and_does_not_send(browser_app, browser_page):
     base_url, _ = browser_app
     _, page = browser_page
