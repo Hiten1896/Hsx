@@ -164,11 +164,8 @@
       <aside id="camera-sidebar" class="camera-sidebar" aria-label="Host camera and artifacts">
         <button id="camera-close" class="mobile-panel-close" type="button" aria-label="Close camera and artifacts">Close</button>
         <div class="camera-panel">
-          <div class="camera-heading">
-            <div>
-              <p id="camera-host-label" class="panel-eyebrow">Host camera</p>
-              <h2>Live camera</h2>
-            </div>
+          <div id="camera-heading" class="camera-heading" title="Camera status">
+            <h2>Live camera</h2>
             <div class="camera-heading-actions">
               <span id="camera-badge" class="camera-badge camera-badge-standby"><span class="connection-dot"></span> Standby</span>
               <button id="camera-retry" class="panel-refresh camera-retry" type="button" aria-label="Refresh camera video" title="Refresh camera video">
@@ -187,8 +184,8 @@
             </div>
           </div>
           <div class="camera-metrics" aria-live="polite">
-            <div><span>Browser time</span><strong id="camera-clock">Unknown</strong></div>
-            <div><span>Video delay</span><strong id="camera-latency">No live feed</strong></div>
+            <span>Time <strong id="camera-clock">Unknown</strong></span>
+            <span>Delay <strong id="camera-latency">No live feed</strong></span>
           </div>
         </div>
         <section class="artifacts-panel" aria-labelledby="artifacts-title">

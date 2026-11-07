@@ -2015,8 +2015,8 @@ async function refreshCamera() {
     const data = await response.json();
     const host = data.host || {};
     const hostLabel = [host.hostname, host.hardware].filter(Boolean).join(' · ');
-    document.getElementById('camera-host-label').textContent =
-      hostLabel || 'Host hardware unavailable';
+    document.getElementById('camera-heading').title =
+      hostLabel || 'Host hardware information unavailable';
     const connected = response.ok && data.running === true;
     if (connected) {
       cameraAvailable = true;
@@ -2037,7 +2037,7 @@ async function refreshCamera() {
       scheduleCameraReconnect();
     }
   } catch {
-    document.getElementById('camera-host-label').textContent = 'Host hardware unavailable';
+    document.getElementById('camera-heading').title = 'Host hardware information unavailable';
     if (cameraHasFrame) setCameraReconnecting('Camera feed offline; retrying…');
     else setCameraStatus(false, 'Camera feed offline');
     scheduleCameraReconnect();

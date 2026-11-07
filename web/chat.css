@@ -608,9 +608,9 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 .chat-history-action:hover { color: var(--text); background: var(--surface-raised); }
 .chat-controls { background: color-mix(in srgb, var(--background) 94%, transparent); }
 .camera-sidebar { min-height: 0; border-color: var(--border); background: var(--sidebar); }
-.camera-sidebar { grid-template-rows: minmax(0, 1fr) minmax(0, .8fr); gap: 12px; }
+.camera-sidebar { grid-template-rows: auto minmax(0, 1fr); gap: 12px; }
 .camera-sidebar > .camera-panel { min-height: 0; overflow: hidden; }
-.camera-sidebar > .artifacts-panel { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; max-height: 38vh; margin-top: 0; overflow: hidden; }
+.camera-sidebar > .artifacts-panel { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; max-height: none; margin-top: 0; overflow: hidden; }
 .camera-sidebar > .artifacts-panel .artifacts-heading { position: relative; z-index: 1; background: var(--surface); }
 .camera-sidebar > .artifacts-panel .artifacts-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .camera-sidebar .camera-view { min-height: 90px; }
@@ -644,7 +644,27 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 .camera-placeholder strong, .camera-metrics strong { color: var(--text); }
 .camera-heading, .camera-metrics { border-color: var(--border); }
 .camera-sidebar .artifacts-panel .artifacts-heading { border-color: var(--border); }
-@media (max-width: 1100px) { .camera-sidebar { grid-template-rows: minmax(0, 1fr) minmax(180px, .7fr); } }
+.camera-panel { display: grid; grid-template-rows: 40px auto 32px; }
+.camera-heading { min-width: 0; height: 40px; padding: 0 10px 0 12px; }
+.camera-heading h2 { overflow: hidden; margin: 0; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.camera-heading-actions { gap: 5px; }
+.camera-heading .camera-badge { min-height: 26px; padding: 3px 7px; font-size: 8px; }
+.camera-heading .panel-refresh { width: 28px; height: 28px; border-radius: 7px; }
+.camera-heading .panel-refresh svg { width: 15px; height: 15px; }
+.camera-view { align-self: center; aspect-ratio: 16 / 9; min-height: 0; }
+.camera-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border-top: 1px solid var(--border);
+}
+.camera-metrics > span { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; color: var(--muted); font: 8px var(--font-code); white-space: nowrap; }
+.camera-metrics strong { min-width: 0; color: var(--text); font: inherit; text-overflow: ellipsis; }
+@media (max-width: 1100px) { .camera-sidebar { grid-template-rows: auto minmax(180px, 1fr); } }
 @media (max-width: 700px) {
   .camera-sidebar { grid-template-rows: auto minmax(0, 1fr); overflow-y: auto; }
   .camera-sidebar > .camera-panel { overflow: visible; }
