@@ -436,12 +436,32 @@ def test_browser_light_theme_uses_consistent_high_contrast_surfaces(browser_app,
 
     page.set_viewport_size({"width": 1280, "height": 800})
     sidebar_colors = page.locator(".camera-sidebar").evaluate(
-        "node => ({sidebar: getComputedStyle(node).backgroundColor, panel: getComputedStyle(node.querySelector('.camera-panel')).backgroundColor, artifacts: getComputedStyle(node.querySelector('.artifacts-panel')).backgroundColor})"
+        """node => {
+          const color = (selector, property = 'backgroundColor') =>
+            getComputedStyle(node.querySelector(selector))[property];
+          return {
+            sidebar: getComputedStyle(node).backgroundColor,
+            panel: color('.camera-panel'),
+            cameraHeading: color('.camera-heading'),
+            cameraView: color('.camera-view'),
+            placeholder: color('.camera-placeholder', 'color'),
+            placeholderIcon: color('.camera-placeholder-icon'),
+            artifacts: color('.artifacts-panel'),
+            artifactsHeading: color('.artifacts-heading'),
+            artifactItem: color('.artifact-item'),
+          };
+        }"""
     )
     assert sidebar_colors == {
         "sidebar": "rgb(244, 244, 245)",
         "panel": "rgb(255, 255, 255)",
+        "cameraHeading": "rgb(255, 255, 255)",
+        "cameraView": "rgb(244, 244, 245)",
+        "placeholder": "rgb(17, 24, 39)",
+        "placeholderIcon": "rgb(247, 247, 248)",
         "artifacts": "rgb(255, 255, 255)",
+        "artifactsHeading": "rgb(255, 255, 255)",
+        "artifactItem": "rgb(247, 247, 248)",
     }
 
 
