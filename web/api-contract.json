@@ -1,6 +1,7 @@
 {
   "endpoints": {
     "health": "/health",
+    "auth_check": "/api/auth/check",
     "provider_health": "/healthz/providers",
     "greeting": "/api/greeting",
     "chat_stream": "/api/chat/stream",

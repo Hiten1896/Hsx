@@ -190,6 +190,15 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visib
 .feedback-dialog label { color: var(--muted); font-size: 11px; }
 .feedback-dialog input, .feedback-dialog textarea { width: 100%; padding: 9px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: #151a17; font: inherit; }
 .feedback-dialog form > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.auth-dialog { width: min(440px, calc(100vw - 28px)); padding: 22px; border: 1px solid var(--accent); border-radius: 16px; color: var(--text); background: var(--surface); box-shadow: 0 24px 80px #000b; }
+.auth-dialog::backdrop { background: #070a08c9; backdrop-filter: blur(3px); }
+.auth-dialog form { display: grid; gap: 11px; }
+.auth-dialog h2 { margin: 0; font-size: 18px; }
+.auth-dialog p { margin: 0; color: var(--muted); line-height: 1.6; }
+.auth-dialog label { color: var(--text); font-size: 12px; }
+.auth-dialog input { width: 100%; padding: 11px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--surface-raised); font: inherit; }
+.auth-dialog #auth-message { min-height: 1em; color: var(--warning); font-size: 12px; }
+.auth-dialog button { min-height: 40px; border: 1px solid var(--accent); border-radius: 9px; color: #07151f; background: var(--accent); font: inherit; font-weight: 700; }
 
 .settings-dialog { width: min(760px, calc(100vw - 40px)); max-width: none; max-height: min(760px, calc(100dvh - 40px)); padding: 0; overflow: hidden; border: 1px solid #3b473e; border-radius: 18px; color: var(--text); background: var(--surface); box-shadow: 0 28px 90px #0009; }
 .settings-dialog::backdrop { background: #050806bf; backdrop-filter: blur(3px); }

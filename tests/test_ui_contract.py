@@ -126,6 +126,9 @@ def test_notification_sse_disables_buffering_and_resumes_from_requested_id(monke
         def _security_headers(self):
             server.HsxHandler._security_headers(self)
 
+        def _cors_headers(self):
+            server.HsxHandler._cors_headers(self)
+
         def send_header(self, key, value):
             self.response_headers[key] = value
 
@@ -290,7 +293,8 @@ def test_web_user_actions_accordion_state_and_camera_stream_are_wired():
     assert ".panel-collapse-button[aria-expanded=\"false\"] svg { transform: none; }" in css
     assert 'aria-expanded="false"' in html
     assert 'access-token' not in html
-    assert 'Authorization' not in script
+    assert "sessionStorage', 'hsx-api-token'" in script
+    assert "headers.set('Authorization'" in script
     assert 'id="emergency-banner"' in html
     assert "Emergency stop is active" in html
     assert "emergency_stop" in script

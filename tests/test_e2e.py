@@ -146,12 +146,17 @@ def test_authenticated_stream_creates_workspace_artifact(tmp_path: Path, monkeyp
     monkeypatch.setattr(server, "WORKSPACE", Workspace(root, "Hsx Work"))
     monkeypatch.setattr(server, "WORK_DIR", root / "Hsx Work")
     monkeypatch.setattr(server, "ASK_JOBS", AskUserJobs(tmp_path / "jobs.db"))
+    monkeypatch.setattr(server, "CHAT_STREAMS", server.ChatStreamRegistry())
+    monkeypatch.setattr(server, "RUN_CANCEL_EVENTS", {})
+    monkeypatch.setattr(server, "SESSION_LAST_JOBS", {})
     monkeypatch.setattr(server.POLICY, "audit_event", lambda *args: None)
+    calls = []
 
     def fake_run_chat_job(
         job_id, approvals, sensitive, target_device, on_text_delta, cancel_event=None, on_provider_notice=None,
         on_activity_event=None,
     ):
+        calls.append(job_id)
         del cancel_event
         del approvals, sensitive, target_device, on_activity_event
         artifact = server.WORKSPACE.work_dir / "answer.txt"
@@ -163,15 +168,35 @@ def test_authenticated_stream_creates_workspace_artifact(tmp_path: Path, monkeyp
         server._emit_chat_event(job_id, "done", {})
 
     monkeypatch.setattr(server, "_run_chat_job", fake_run_chat_job)
+    payload = {
+        "message": "create an answer",
+        "target_device": "client_browser",
+        "session_id": "idempotent-session",
+        "client_message_id": "answer-request-1",
+    }
     status, headers, body = _request(
         "/api/chat/stream",
         method="POST",
-        payload={"message": "create an answer", "target_device": "client_browser"},
+        payload=payload,
         stop_event="done",
     )
     assert status == 200
     assert headers["Content-Type"] == "text/event-stream"
     assert b"e2e answer" in body
+    status, _, resumed_body = _request(
+        "/api/chat/stream",
+        method="POST",
+        headers={"Last-Event-ID": "2"},
+        payload=payload,
+        stop_event="done",
+    )
+    assert status == 200
+    assert b"e2e answer" in resumed_body
+    assert b"id: 3\n" in resumed_body
+    assert calls == [server.ASK_JOBS.get_by_client_message(
+        "idempotent-session",
+        "answer-request-1",
+    )["id"]]
     assert (root / "Hsx Work" / "answer.txt").read_text(encoding="utf-8") == "e2e answer"
 
 
@@ -257,7 +282,10 @@ def test_emergency_stop_is_separate_from_run_stop(monkeypatch):
         handler.path = path
         handler.command = "POST"
         handler.client_address = ("127.0.0.1", 12345)
-        handler.headers = {"Content-Length": "2"}
+        handler.headers = {
+            "Content-Length": "2",
+            "Authorization": f"Bearer {server.AUTH_TOKEN}",
+        }
         handler.rfile = io.BytesIO(b"{}")
         handler.wfile = io.BytesIO()
         handler.send_response = lambda status: setattr(handler, "response_status", status)

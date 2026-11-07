@@ -26,12 +26,12 @@ def test_safe_path_rejects_traversal_and_symlink(tmp_path: Path):
         safe_path(root, "link/file.txt")
 
 
-def test_api_is_available_without_bearer_from_remote_address():
+def test_api_accepts_a_configured_origin_from_remote_address():
     handler = server.HsxHandler.__new__(server.HsxHandler)
     handler.client_address = ("192.168.1.2", 1234)
     handler.command = "GET"
     handler.path = "/api/skills"
-    handler.headers = {}
+    handler.headers = {"Origin": server.ALLOWED_ORIGINS[0]}
     assert handler._api_access_allowed()
 
 

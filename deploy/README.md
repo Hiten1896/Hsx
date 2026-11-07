@@ -6,7 +6,7 @@ The policy broker is a separate root-owned service. Copy `policy.yaml` to
 installing the agent and creating the `hsx` user. The broker socket is
 `/run/hsx/broker.sock`; the agent never receives sudo or a root shell.
 
-On Debian/Ubuntu, install Python 3.11+, create a dedicated `hsx` user, create `/opt/hsx/venv`, and install `requirements.txt`. The local server accepts loopback connections without an access token and rejects non-loopback HTTP requests; do not expose it through Tailscale Serve, a reverse proxy, or a public port. Set `HSX_OWNER_PIN` during setup, or securely capture the generated owner PIN from the first startup. The PIN hash is stored outside the workspace and is required for self-improvement approval and promotion. Install Docker for the `run_code` sandbox; Docker is the only strong isolation mode.
+On Debian/Ubuntu, install Python 3.11+, create a dedicated `hsx` user, create `/opt/hsx/venv`, and install `requirements.txt`. The server binds to loopback by default. Keep it there and use Tailscale Serve for remote browser access; add the exact Tailscale HTTPS origin to `HSX_ALLOWED_ORIGINS`. Browser requests from other origins are rejected, and requests without an `Origin` header require the bearer token in `/opt/hsx/data/auth.token` (unless `HSX_AUTH_TOKEN` is configured). Do not publish the server directly to the public internet. Set `HSX_OWNER_PIN` during setup, or securely capture the generated owner PIN from the first startup. The PIN hash is stored outside the workspace and is required for self-improvement approval and promotion. Install Docker for the `run_code` sandbox; Docker is the only strong isolation mode.
 
 Set `HSX_WORKSPACE=/home/hsxshare` and `HSX_WORK_DIR=Hsx Work` in `/opt/hsx/.env`. Create `Hsx Work` from the Samba owner account before starting Hsx so that it retains the intended ownership. Grant `hsx` read/traverse ACLs on the share and write ACLs only on `Hsx Work` (the README includes example `setfacl` commands). Verify with `getfacl`; do not solve write failures by granting the agent write access to the share root.
 
@@ -25,7 +25,7 @@ updates it signals the running server to drain requests and re-exec. It does not
 Docker deployments. Review and test commits before signing; a trusted signature is the
 authorization to deploy code.
 
-The API enforces loopback client addresses. The included Docker Compose port
-mapping is not compatible with this local-only access policy; do not use it to
-publish the API. Back up `memory/`, `data/`, and the shared `Hsx Work/` results
-before updating the installation.
+The included Docker Compose port mapping exposes the container listener and is not
+covered by the loopback-only systemd deployment guidance; do not use it to publish
+the API. Back up `memory/`, `data/`, and the shared `Hsx Work/` results before
+updating the installation.

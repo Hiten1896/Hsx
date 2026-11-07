@@ -53,16 +53,16 @@ it does not imply live hardware or production-provider verification.
 | Image description restricted to named/attached files, resized/converted and provider-tested | DONE + TESTED | `skills/describe_image/skill.py` limits and resizes images to the provider cap, converts to JPEG, uses Gemini, and `agent/orchestrator.py` enforces explicit path boundaries; `tests/test_describe_image.py` and `tests/test_orchestrator_router.py` check the image part and reject unmentioned or path-confusable files. Provider and image inputs are simulated. |
 | Music search/play, bounded cache, range endpoint, player card, mobile gesture and settings updater | DONE + TESTED | `agent/music_catalog.py`, `skills/music_search/`, `skills/music_play/`, `server.py`, `web/chat.js`, `web/chat.css`, and `web/index.html` implement Commons-only free-license search, capped/expiring downloads, cookie-scoped Range streaming, attribution, a non-autoplay player, and the Advanced updater routed through package approval. Fake API/downloader/browser tests cover these flows; live Commons, yt-dlp installation/download, production HTTPS, and HP audio-device checks are not verified. |
 
-## Phase 6: Web access and hardening — PARTLY
+## Phase 6: Web access and hardening — DONE + TESTED
 
 | Requirement | Status | Evidence |
 |---|---|---|
-| Exact allowed origins and token-gated no-Origin requests | PARTLY | `server.py`, `tests/test_phase13b_security.py`; exhaustive look-alike and deployment checks not established. |
-| Mic dictation controls and safe recognition behavior | NOT STARTED | No `SpeechRecognition`/`webkitSpeechRecognition` implementation found in the web client. |
-| SSE heartbeats/resume and idempotent client message IDs | PARTLY | `server.py`, `web/chat.js`, `web/api-contract.json`, `tests/test_e2e.py`; reconnect/resume behavior not established end-to-end. |
-| Versioned service worker; token storage and log redaction | PARTLY | `web/service-worker.js` now versions the shell cache as `hsx-shell-v13`; `web/chat.js` and `server.py` still need a separate token/logging audit. |
-| Security headers/CSP, sanitized markdown and port-conflict messaging | PARTLY | `server.py`, `web/chat.js`, `tests/test_phase13b_security.py`; full header and rendering validation not established. |
-| Health endpoint, check script, rotating logs, systemd memory/restart policy | PARTLY | `server.py`, `scripts/check.sh`, `deploy/hsx.logrotate`, `deploy/hsx.service`; deployment-unit requirements are not all verified. |
+| Exact allowed origins and token-gated no-Origin requests | DONE + TESTED | `server.py`, `agent/auth.py`, `config.py`, `tests/test_phase13b_security.py`; exact-origin, look-alike, opaque-origin, and bearer-token cases pass. |
+| Mic dictation controls and safe recognition behavior | DONE + TESTED | `web/chat.js`, `tests/test_browser_ui.py`; browser tests cover feature detection, language selection, duplicate results, and draft-only dictation. |
+| SSE heartbeats/resume and idempotent client message IDs | DONE + TESTED | `api/chat.py`, `agent/ask_user.py`, `server.py`, `web/chat.js`, `tests/test_chat_stream.py`, `tests/test_ask_user.py`, `tests/test_e2e.py`; fake-server browser tests cover reconnect/replay and deduplication. |
+| Versioned service worker; token storage and log redaction | DONE + TESTED | `web/service-worker.js`, `web/chat.js`, `server.py`, `tests/test_phase13b_security.py`, `tests/test_browser_ui.py`; the token is kept in memory/session storage and HTTP logs redact query credentials. |
+| Security headers/CSP, sanitized markdown and port-conflict messaging | DONE + TESTED | `server.py`, `web/chat.js`, `tests/test_phase13b_security.py`, `tests/test_browser_ui.py`; response headers, markdown rendering, and the occupied-port path are covered. |
+| Health endpoint, check script, rotating logs, systemd memory/restart policy | DONE + TESTED | `server.py`, `scripts/check.sh`, `deploy/hsx.logrotate`, `deploy/hsx.service`; files and local checks are verified, but HP systemd/Tailscale operation has not been tested live. |
 
 ## Phase 7: Feedback dataset — PARTLY
 
@@ -88,7 +88,7 @@ it does not imply live hardware or production-provider verification.
 | Typed tool rows, live/final verbs, icon mapping, grouping and narration | DONE + TESTED | `agent/activity_trace.py`, `agent/orchestrator.py`, `server.py`, `web/index.html`, `web/chat.js`, `tests/test_activity_trace.py`, and the Activity Trace browser test; registered tools are checked against the mapping. |
 | Redacted file diffs, command details, image thumbnails, file viewer and retry | DONE + TESTED | `server.py`, `web/chat.js`, `web/chat.css`, `tests/test_activity_trace.py`, and `tests/test_browser_ui.py`; retry rechecks policy, and thumbnail paths are jailed. |
 | Rich CLI rows, spinner, `/steps N`, Syntax diffs and width/no-color behavior | DONE + TESTED | `cli.py`, `requirements-core.txt`, `tests/test_cli.py`; tests render at 60, 80 and 120 columns with colors disabled. |
-| Exact comparison to reference screenshots and live camera/attached-image sources | PARTLY | No files were present under `docs/design/`; `docs/screens/after-{360,768,1280}-activity-trace.png` are generated from the implemented UI. Exact screenshot matching and live device streams remain unverified. |
+| Exact comparison to reference screenshots and live camera/attached-image sources | PARTLY | The requested reference PNGs are not present under `docs/design/`; `docs/design.md` documents the current UI, and `docs/screens/after-{360,768,1280}-activity-trace.png` are generated from the implemented UI. Exact screenshot matching and live device streams remain unverified. |
 
 ## Baseline verification
 
@@ -96,8 +96,12 @@ it does not imply live hardware or production-provider verification.
   installed; after installing the project browser runtime, full-suite runs
   passed, including Chromium interactions and viewport screenshots.
 - Latest complete-suite verification: `.\.venv\Scripts\python.exe -m pytest -q`
-  exited 0 after the Activity Trace browser, backend, and CLI tests were added.
-- Ruff: `ruff check .` exited 0: “All checks passed!”
+  exited 0 after Phase 6 authentication, SSE, idempotency, and browser tests were
+  included. The full suite includes expected platform skips.
+- Ruff: `.\.venv\Scripts\ruff.exe check .` exited 0: “All checks passed!”
+- `node --check web\chat.js` and `git diff --check` exited 0.
+- HP deployment, Tailscale routing, systemd behavior, and camera/microphone hardware
+  remain not verified from this Windows development host.
 - `node --check web\chat.js` exited 0.
 - Browser UI checks ran locally in Chromium, including Activity Trace
   screenshots at 360, 768, and 1280 px. Live camera/audio hardware and

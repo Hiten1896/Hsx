@@ -86,9 +86,11 @@ offers `/activity` and `/artifacts`; the Textual terminal UI shows both in its a
 line. This reports Hsx jobs, not individual specialist/sub-agent execution because the
 current backend does not persist per-sub-agent progress.
 
-The primary API has no bearer-token prompt or requirement. The Tailnet indicator describes whether the page is currently served from a `.ts.net`
-hostname; the browser network indicator uses `navigator.onLine` and is not a host-side
-internet reachability test.
+The primary API accepts browser requests only from an exact origin listed in
+`HSX_ALLOWED_ORIGINS`; requests without an Origin header require the host's bearer
+token. The Tailnet indicator describes whether the page is currently served from a
+`.ts.net` hostname; the browser network indicator uses `navigator.onLine` and is not
+a host-side internet reachability test.
 
 Browser chat requests explicitly target `local_host`, so tools execute on the Hsx
 server. Remote callers must first pass the existing Tailscale bearer or mesh

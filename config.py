@@ -5,6 +5,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from agent.auth import load_or_create_auth_token
+
 BASE_DIR = Path(__file__).resolve().parent
 ENV_FILE = BASE_DIR / ".env"
 LOGGER = logging.getLogger("hsx.config")
@@ -81,7 +83,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_COMPATIBLE_URL = os.getenv("OPENAI_COMPATIBLE_URL", "")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 MODE = os.getenv("HSX_MODE", "jarvis").strip().lower()
-HOST = os.getenv("HSX_HOST", "0.0.0.0").strip() or "0.0.0.0"
+HOST = os.getenv("HSX_HOST", "127.0.0.1").strip() or "127.0.0.1"
 PORT = int(os.getenv("HSX_PORT", "8000"))
 ALLOWED_ORIGINS = tuple(
     origin.strip()
@@ -106,3 +108,5 @@ def is_loopback_host(host: str) -> bool:
 
 for directory in (WORKSPACE_DIR, OUTPUTS_DIR, SCRATCH_DIR, UPLOADS_DIR, MEMORY_DIR, DATA_DIR):
     directory.mkdir(parents=True, exist_ok=True)
+
+AUTH_TOKEN = load_or_create_auth_token(DATA_DIR / "auth.token", os.getenv("HSX_AUTH_TOKEN", ""))

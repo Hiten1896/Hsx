@@ -15,11 +15,19 @@ from agent.notifier import Notifier
 
 BROWSER_MUSIC_STREAM_IDS: list[str] = []
 BROWSER_CHAT_MESSAGES: list[str] = []
+BROWSER_RESUME_REQUESTS: list[tuple[str, str]] = []
 
 
 class BrowserFakeHandler(server.HsxHandler):
     def do_GET(self):
-        if self._request_path() == "/api/activity/image":
+        path = self._request_path()
+        if (
+            path.startswith("/api/")
+            and not path.startswith("/api/music/stream/")
+            and not self._api_access_allowed()
+        ):
+            return
+        if path == "/api/activity/image":
             image = base64.b64decode(
                 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l3sAAAAASUVORK5CYII="
             )
@@ -40,9 +48,24 @@ class BrowserFakeHandler(server.HsxHandler):
             self.end_headers()
             self.wfile.write(content)
             return
+        if self._request_path() == "/api/outputs":
+            self._json({"files": [{"name": "report.txt", "path": "Hsx Work/report.txt", "type": "text"}]})
+            return
+        if self._request_path() == "/api/files/download":
+            content = b"browser-authenticated-download"
+            self.send_response(200)
+            self._security_headers()
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Disposition", 'attachment; filename="report.txt"')
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+            return
         return super().do_GET()
 
     def do_POST(self):
+        if not self._api_access_allowed():
+            return
         if self._request_path() == "/api/feedback":
             self._json({"success": True, "saved": True}, 201)
             return
@@ -50,6 +73,28 @@ class BrowserFakeHandler(server.HsxHandler):
             return super().do_POST()
         payload = self._body()
         BROWSER_CHAT_MESSAGES.append(str(payload.get("message", "")))
+        if payload.get("message") == "resume once":
+            BROWSER_RESUME_REQUESTS.append((
+                str(payload.get("client_message_id", "")),
+                self.headers.get("Last-Event-ID", ""),
+            ))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            if len(BROWSER_RESUME_REQUESTS) == 1:
+                self.wfile.write(
+                    b'id: 1\nevent: message_start\ndata: {"run_id":"resume-run"}\n\n'
+                    b'id: 2\nevent: job\ndata: {"id":"resume-job","state":"running"}\n\n'
+                )
+            else:
+                self.wfile.write(
+                    b'id: 3\nevent: text_delta\ndata: {"text":"Reconnected successfully."}\n\n'
+                    b'id: 4\nevent: job\ndata: {"id":"resume-job","state":"done","result":"Reconnected successfully."}\n\n'
+                    b'id: 5\nevent: done\ndata: {}\n\n'
+                )
+            self.wfile.flush()
+            return
         if payload.get("message") == "cause provider failure":
             self._json({"error": "The provider is temporarily unavailable."}, 502)
             return
@@ -247,7 +292,9 @@ class BrowserFakeHandler(server.HsxHandler):
 def browser_app(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "CONVERSATIONS", ConversationStore(tmp_path / "conversations.sqlite"))
     monkeypatch.setattr(server, "NOTIFIER", Notifier(tmp_path / "notifications.sqlite"))
+    monkeypatch.setattr(server, "AUTH_TOKEN", "browser-testing-token")
     host = ThreadingHTTPServer(("127.0.0.1", 0), BrowserFakeHandler)
+    monkeypatch.setattr(server, "ALLOWED_ORIGINS", (f"http://127.0.0.1:{host.server_port}",))
     thread = threading.Thread(target=host.serve_forever, daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{host.server_port}", tmp_path / "conversations.sqlite"
@@ -261,10 +308,92 @@ def browser_app(tmp_path, monkeypatch):
 def browser_page():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page = browser.new_page(viewport={"width": 1280, "height": 900}, accept_downloads=True)
+        page.add_init_script("sessionStorage.setItem('hsx-api-token', 'browser-testing-token');")
         page.route("https://cdn.jsdelivr.net/**", lambda route: route.abort())
         yield browser, page
         browser.close()
+
+
+def test_browser_prompts_for_token_and_keeps_it_in_session_storage(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    page.add_init_script("sessionStorage.removeItem('hsx-api-token');")
+    page.goto(f"{base_url}/web/")
+
+    dialog = page.locator("#auth-dialog")
+    dialog.wait_for(state="visible")
+    token_input = page.locator("#auth-token")
+    token_input.fill("invalid-testing-token")
+    page.get_by_role("button", name="Connect", exact=True).click()
+    page.get_by_text("This request has no Origin header.", exact=False).wait_for()
+
+    token_input.fill("browser-testing-token")
+    page.get_by_role("button", name="Connect", exact=True).click()
+    dialog.wait_for(state="hidden")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    assert page.evaluate("sessionStorage.getItem('hsx-api-token')") == "browser-testing-token"
+    assert page.evaluate("localStorage.getItem('hsx-api-token')") is None
+
+
+def test_voice_dictation_deduplicates_results_and_does_not_send(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    page.add_init_script(
+        "window.SpeechRecognition = class { "
+        "constructor() { window.testRecognition = this; } "
+        "start() { this.onstart?.(); } stop() { this.onend?.(); } };"
+    )
+    page.add_init_script("localStorage.setItem('hsx-voice-language', 'hi-IN');")
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    before = len(BROWSER_CHAT_MESSAGES)
+    page.locator("#voice-button").click()
+    result = page.evaluate(
+        """() => {
+          const item = Object.assign([{ transcript: 'hello there' }], { isFinal: true });
+          const event = { resultIndex: 0, results: [item] };
+          window.testRecognition.onresult(event);
+          window.testRecognition.onresult(event);
+          return {
+            text: document.querySelector('#prompt-input').value,
+            language: window.testRecognition.lang,
+            sendEnabled: !document.querySelector('#send-button').disabled,
+          };
+        }"""
+    )
+    assert result == {"text": "hello there", "language": "hi-IN", "sendEnabled": True}
+    assert len(BROWSER_CHAT_MESSAGES) == before
+
+
+def test_browser_resumes_chat_stream_with_same_client_message_id(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    BROWSER_RESUME_REQUESTS.clear()
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.locator("#prompt-input").fill("resume once")
+    page.locator("#send-button").click()
+    page.get_by_text("Reconnected successfully.", exact=True).wait_for()
+
+    assert len(BROWSER_RESUME_REQUESTS) == 2
+    assert BROWSER_RESUME_REQUESTS[0][0]
+    assert BROWSER_RESUME_REQUESTS[0][0] == BROWSER_RESUME_REQUESTS[1][0]
+    assert BROWSER_RESUME_REQUESTS[0][1] == ""
+    assert BROWSER_RESUME_REQUESTS[1][1] == "2"
+
+
+def test_artifact_download_uses_authenticated_fetch(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    link = page.get_by_role("link", name="Download report.txt")
+    link.wait_for()
+    with page.expect_download() as download_info:
+        link.click()
+    download = download_info.value
+    assert download.suggested_filename == "report.txt"
 
 
 def test_browser_new_chat_saves_thread_and_does_not_save_empty_chats(browser_app, browser_page):
@@ -389,6 +518,9 @@ def test_browser_history_survives_reload_and_another_browser_and_supports_action
     second = browser.new_page(viewport={"width": 360, "height": 800})
     second.route("https://cdn.jsdelivr.net/**", lambda route: route.abort())
     second.goto(f"{base_url}/web/")
+    second.locator("#auth-dialog").wait_for(state="visible")
+    second.locator("#auth-token").fill("browser-testing-token")
+    second.get_by_role("button", name="Connect", exact=True).click()
     second.locator('body[data-ready="true"]').wait_for(timeout=10000)
     second.locator("#sidebar-toggle").click()
     title = "Open chat: History survives the server restart"

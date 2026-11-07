@@ -81,6 +81,7 @@ class AskUserJobs:
                 target_device TEXT NOT NULL DEFAULT 'client_browser',
                 device_actions TEXT NOT NULL DEFAULT '[]',
                 sensitive INTEGER NOT NULL DEFAULT 0,
+                client_message_id TEXT NOT NULL DEFAULT '',
                 approval_id TEXT NOT NULL DEFAULT '',
                 approval_json TEXT NOT NULL DEFAULT '{}',
                 created TEXT NOT NULL, updated TEXT NOT NULL,
@@ -105,6 +106,12 @@ class AskUserJobs:
                 connection.execute("ALTER TABLE ask_jobs ADD COLUMN approval_id TEXT NOT NULL DEFAULT ''")
             if "approval_json" not in columns:
                 connection.execute("ALTER TABLE ask_jobs ADD COLUMN approval_json TEXT NOT NULL DEFAULT '{}'")
+            if "client_message_id" not in columns:
+                connection.execute("ALTER TABLE ask_jobs ADD COLUMN client_message_id TEXT NOT NULL DEFAULT ''")
+            connection.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS idx_ask_jobs_client_message
+                ON ask_jobs(session_id, client_message_id) WHERE client_message_id != ''"""
+            )
             connection.execute(
                 """UPDATE ask_jobs SET state = 'failed',
                 error = 'The server restarted while this job was running; submit it again.',
@@ -171,19 +178,107 @@ class AskUserJobs:
         target_device: str = "client_browser",
         sensitive: bool = False,
     ) -> dict:
+        job, _ = self.create_or_get_running(
+            request,
+            session_id,
+            task_dir,
+            target_device,
+            sensitive,
+        )
+        return job
+
+    def create_or_get_running(
+        self,
+        request: str,
+        session_id: str,
+        task_dir: str = "",
+        target_device: str = "client_browser",
+        sensitive: bool = False,
+        client_message_id: str = "",
+    ) -> tuple[dict, bool]:
+        client_message_id = client_message_id.strip()
+        if client_message_id and (
+            len(client_message_id) > 128
+            or not client_message_id.isascii()
+            or any(not (char.isalnum() or char in "-_.:") for char in client_message_id)
+        ):
+            raise ValueError("client_message_id must contain 1 to 128 safe ASCII characters.")
         now = self._now().isoformat()
         job_id = uuid.uuid4().hex
         expires = (self._now() + timedelta(hours=24)).isoformat()
         with self._connect() as connection:
-            connection.execute(
-                """INSERT INTO ask_jobs(
-                    id, request, session_id, question, options, allow_free_text, state,
-                    question_count, answers, checkpoint, tool_call_id, task_dir, target_device,
-                    sensitive, created, updated, expires_at
-                ) VALUES (?, ?, ?, '', '[]', 1, 'running', 0, '[]', '[]', '', ?, ?, ?, ?, ?, ?)""",
-                (job_id, request, session_id, task_dir, target_device, int(sensitive), now, now, expires),
+            if client_message_id:
+                row = connection.execute(
+                    "SELECT * FROM ask_jobs WHERE session_id = ? AND client_message_id = ?",
+                    (session_id, client_message_id),
+                ).fetchone()
+                if row:
+                    return self._existing_client_message(row, request), False
+            try:
+                connection.execute(
+                    """INSERT INTO ask_jobs(
+                        id, request, session_id, question, options, allow_free_text, state,
+                        question_count, answers, checkpoint, tool_call_id, task_dir, target_device,
+                        sensitive, client_message_id, created, updated, expires_at
+                    ) VALUES (?, ?, ?, '', '[]', 1, 'running', 0, '[]', '[]', '', ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        job_id,
+                        request,
+                        session_id,
+                        task_dir,
+                        target_device,
+                        int(sensitive),
+                        client_message_id,
+                        now,
+                        now,
+                        expires,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                if not client_message_id:
+                    raise
+                row = connection.execute(
+                    "SELECT * FROM ask_jobs WHERE session_id = ? AND client_message_id = ?",
+                    (session_id, client_message_id),
+                ).fetchone()
+                if not row:
+                    raise
+                return self._existing_client_message(row, request), False
+        job = self.get(job_id)
+        if job is None:
+            raise RuntimeError("The new chat task could not be reloaded.")
+        return job, True
+
+    @staticmethod
+    def _existing_client_message(row: sqlite3.Row, request: str) -> dict:
+        job = AskUserJobs._public(row)
+        if job["request"] != request:
+            raise ValueError("client_message_id was already used for a different request.")
+        return job
+
+    def get_by_client_message(self, session_id: str, client_message_id: str) -> dict | None:
+        if not client_message_id:
+            return None
+        self.expire()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM ask_jobs WHERE session_id = ? AND client_message_id = ?",
+                (session_id, client_message_id),
+            ).fetchone()
+        return self._public(row) if row else None
+
+    def update_task_directory(self, job_id: str, task_dir: str) -> dict:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE ask_jobs SET task_dir = ?, updated = ? WHERE id = ?",
+                (task_dir, self._now().isoformat(), job_id),
             )
-        return self.get(job_id)
+            if cursor.rowcount != 1:
+                raise KeyError(f"Unknown chat job: {job_id}")
+        job = self.get(job_id)
+        if job is None:
+            raise RuntimeError("The chat task could not be reloaded after assigning its folder.")
+        return job
 
     def get(self, job_id: str) -> dict | None:
         self.expire()

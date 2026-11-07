@@ -84,6 +84,44 @@ def test_target_device_survives_job_store_restart(tmp_path: Path):
     assert listed["device_actions"][0]["type"] == "audio_play"
 
 
+def test_client_message_id_returns_existing_job_without_duplicate_execution(tmp_path: Path):
+    database = tmp_path / "jobs.db"
+    jobs = AskUserJobs(database)
+    first, created = jobs.create_or_get_running(
+        "Create a report",
+        "browser-session",
+        task_dir="report-1",
+        client_message_id="client-message-1",
+    )
+    duplicate, created_again = jobs.create_or_get_running(
+        "Create a report",
+        "browser-session",
+        task_dir="report-2",
+        client_message_id="client-message-1",
+    )
+
+    assert created is True
+    assert created_again is False
+    assert duplicate["id"] == first["id"]
+    assert duplicate["task_dir"] == "report-1"
+    with pytest.raises(ValueError, match="already used"):
+        jobs.create_or_get_running(
+            "Different request",
+            "browser-session",
+            client_message_id="client-message-1",
+        )
+
+    restarted = AskUserJobs(database)
+    replayed, created_after_restart = restarted.create_or_get_running(
+        "Create a report",
+        "browser-session",
+        client_message_id="client-message-1",
+    )
+    assert created_after_restart is False
+    assert replayed["id"] == first["id"]
+    assert replayed["state"] == "failed"
+
+
 def test_kill_switch_cancellation_is_terminal_against_late_worker_result(tmp_path: Path):
     jobs = AskUserJobs(tmp_path / "jobs.db")
     running = jobs.create_running("Long task", "session")

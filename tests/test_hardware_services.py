@@ -139,7 +139,12 @@ def test_mjpeg_api_streams_without_an_agent_job(monkeypatch):
     thread = threading.Thread(target=httpd.serve_forever)
     thread.start()
     try:
-        request = Request(f"http://127.0.0.1:{httpd.server_port}/api/camera/stream?session_id=test")
+        origin = f"http://127.0.0.1:{httpd.server_port}"
+        monkeypatch.setattr(server, "ALLOWED_ORIGINS", (origin,))
+        request = Request(
+            f"{origin}/api/camera/stream?session_id=test",
+            headers={"Origin": origin},
+        )
         with urlopen(request, timeout=3) as response:
             body = response.read()
             assert response.status == 200

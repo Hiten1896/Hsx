@@ -24,7 +24,10 @@ def _request(
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.HsxHandler)
     thread = threading.Thread(target=httpd.handle_request)
     thread.start()
-    request_headers = headers or {}
+    request_headers = dict(headers or {})
+    token = getattr(server, "AUTH_TOKEN", "")
+    if not tokenless and token:
+        request_headers.setdefault("Authorization", f"Bearer {token}")
     data = None
     if payload is not None:
         request_headers = {**request_headers, "Content-Type": "application/json"}
@@ -244,10 +247,12 @@ def test_files_panel_rejects_traversal(tmp_path: Path, monkeypatch):
     assert status == 404
 
 
-def test_files_panel_is_available_without_bearer_when_origin_is_missing(tmp_path, monkeypatch):
+def test_files_panel_requires_bearer_when_origin_is_missing(tmp_path, monkeypatch):
     (tmp_path / "Hsx Work").mkdir()
     monkeypatch.setattr(server, "WORKSPACE", Workspace(tmp_path, "Hsx Work"))
     status, _, _ = _request("/api/files", tokenless=True)
+    assert status == 401
+    status, _, _ = _request("/api/files")
     assert status == 200
 
 

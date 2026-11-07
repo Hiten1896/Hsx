@@ -103,8 +103,9 @@ terminal client over SSH for keyboard-first work on the HP itself.
 - Browser: `http://127.0.0.1:8000` or the Tailscale URL published by `tailscale serve`.
 - Terminal: `python cli.py` from the project environment; it keeps the local execution
   target and the same approval language as the web client.
-- API access: the primary API does not require bearer authentication. Any client that
-  can reach its configured listener can send requests.
+- API access: browser origins must match `HSX_ALLOWED_ORIGINS` exactly. The server
+  prompts for its local access token when needed; requests without an `Origin` header
+  must send a bearer token.
 - Data stays local by default: feedback is stored on this computer only unless the user
   opts in to a broader export.
 
@@ -191,8 +192,10 @@ cp .env.example .env
 python main.py
 ```
 
-Open <http://127.0.0.1:8000> after startup. The API accepts requests without bearer
-authentication, so bind it only to a network you intend to trust.
+Open <http://127.0.0.1:8000> after startup. The server binds to loopback by default;
+use Tailscale Serve for remote browser access and list its exact HTTPS origin in
+`HSX_ALLOWED_ORIGINS`. The web UI prompts for the token generated in
+`data/auth.token` unless `HSX_AUTH_TOKEN` is configured.
 
 ### Dependency profiles
 
@@ -230,10 +233,16 @@ Copy `.env.example` to `.env` and fill only the settings you need. Important gro
 | Hardware | `HSX_ENABLE_CAMERA_STREAM`, `HSX_ENABLE_MOTION_MONITOR`, `HSX_ENABLE_VISION_CAPTURE`, `HSX_ENABLE_AUDIO_ALERTS`, `HSX_ENABLE_VOICE_ALERTS` | Opt-in camera, motion, and speaker services |
 | Notifications | `HSX_VAPID_*`, `HSX_NOTIFY_*`, `TELEGRAM_*` | Web Push, in-app, and Telegram routing |
 
-The primary API does not require bearer authentication and accepts requests from
-clients that can reach the configured listener. `HSX_ALLOWED_ORIGINS` remains an
-allowlist for the optional mesh listener. The separate mesh API continues to use
-its own TLS and token settings.
+The primary API accepts browser requests only from an exact origin listed in
+`HSX_ALLOWED_ORIGINS`; look-alike origins and opaque `Origin: null` are rejected.
+Requests without an `Origin` header must provide an `Authorization: Bearer` token.
+When `HSX_AUTH_TOKEN` is unset, Hsx generates a 256-bit token in `data/auth.token`
+(mode `0600` on POSIX). Enter that token in the browser's Hsx connection dialog;
+the web client keeps it in memory and tab-scoped `sessionStorage`, never in a URL
+or local storage. On Windows, read it locally with `Get-Content .\data\auth.token`;
+on the Debian host, use `sudo cat /opt/hsx/data/auth.token` and avoid sharing the
+terminal output. The separate mesh API continues to use its own TLS and token
+settings.
 
 Run `sudo scripts/check.sh` on Debian to check the service, listener, health
 endpoint, Tailscale/serve state, disk headroom, and clock synchronization.
@@ -326,8 +335,10 @@ bounded question in the web interface instead of guessing.
 
 ## Safety and security model
 
-- The primary API accepts requests without bearer authentication. Keep the service
-  bound to a trusted network.
+- The primary API rejects origins not explicitly listed in `HSX_ALLOWED_ORIGINS`.
+  Requests without an Origin header require the bearer token stored in
+  `data/auth.token`; the browser keeps it only in memory or tab-scoped session storage.
+  Keep the service bound to loopback and use Tailscale Serve for remote access.
 - Tool actions are checked against `config/permissions.yaml`. Unlisted actions run
   without a prompt and are audit-logged; listed actions ask once. Hard denies cannot
   be overridden. The Settings > Permissions panel edits the list and saved exceptions.

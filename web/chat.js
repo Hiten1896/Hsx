@@ -1,5 +1,6 @@
 let sessionId = loadSessionId();
 let apiContract;
+let apiToken = '';
 let pendingQuestion = null;
 let submitting = false;
 let activeChatController = null;
@@ -103,6 +104,11 @@ function makeSessionId() {
   return `web-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
 }
 
+function makeClientMessageId() {
+  return globalThis.crypto?.randomUUID?.()
+    || `client-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function loadSessionId() {
   return safeStorageGet('sessionStorage', 'hsx-session-id') || makeSessionId();
 }
@@ -125,10 +131,71 @@ function persistAttachments() {
 
 function apiFetch(url, options = {}) {
   const headers = new Headers(options.headers || {});
+  apiToken = apiToken || safeStorageGet('sessionStorage', 'hsx-api-token');
+  if (apiToken) headers.set('Authorization', `Bearer ${apiToken}`);
   const signal = options.signal || (globalThis.AbortSignal?.timeout
     ? AbortSignal.timeout(8000)
     : undefined);
   return fetch(url, { ...options, headers, signal });
+}
+
+async function ensureApiAuthentication() {
+  apiToken = safeStorageGet('sessionStorage', 'hsx-api-token');
+  if (apiToken) {
+    const response = await apiFetch(apiContract.endpoints.auth_check, { cache: 'no-store' });
+    if (response.ok) return;
+    apiToken = '';
+    try {
+      window.sessionStorage.removeItem('hsx-api-token');
+    } catch {
+      // The in-memory token is cleared even when storage is unavailable.
+    }
+  }
+
+  const dialog = document.getElementById('auth-dialog');
+  const form = document.getElementById('auth-form');
+  const input = document.getElementById('auth-token');
+  const message = document.getElementById('auth-message');
+  dialog.addEventListener('cancel', (event) => event.preventDefault());
+  await new Promise((resolve) => {
+    let checking = false;
+    const submit = async (event) => {
+      event.preventDefault();
+      if (checking) return;
+      const candidate = input.value.trim();
+      if (!candidate) {
+        message.textContent = 'Enter the access token from data/auth.token on your Hsx host.';
+        return;
+      }
+      checking = true;
+      apiToken = candidate;
+      safeStorageSet('sessionStorage', 'hsx-api-token', apiToken);
+      try {
+        const response = await apiFetch(apiContract.endpoints.auth_check, { cache: 'no-store' });
+        if (response.ok) {
+          input.value = '';
+          form.removeEventListener('submit', submit);
+          dialog.close();
+          resolve();
+          return;
+        }
+        const payload = await response.json().catch(() => ({}));
+        message.textContent = payload.error || 'That token was not accepted. Check it and try again.';
+      } catch {
+        message.textContent = 'Hsx could not be reached. Check the connection and try again.';
+      }
+      checking = false;
+      apiToken = '';
+      try {
+        window.sessionStorage.removeItem('hsx-api-token');
+      } catch {
+        // The rejected token is not retained in memory.
+      }
+    };
+    form.addEventListener('submit', submit);
+    dialog.showModal();
+    input.focus();
+  });
 }
 
 function renderMarkdown(text, container) {
@@ -1354,16 +1421,18 @@ async function updateFeedbackSettings() {
 
 function parseSseBlock(block) {
   let event = 'message';
+  let id = null;
   const data = [];
   for (const line of block.split(/\r?\n/)) {
     if (line.startsWith('event:')) event = line.slice(6).trim();
+    if (line.startsWith('id:')) id = Number(line.slice(3).trim());
     if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
   }
   if (!data.length) return null;
   try {
-    return { event, data: JSON.parse(data.join('\n')) };
+    return { event, data: JSON.parse(data.join('\n')), id };
   } catch {
-    return { event, data: { message: data.join('\n') } };
+    return { event, data: { message: data.join('\n') }, id };
   }
 }
 
@@ -1517,7 +1586,7 @@ function setupVoiceInput() {
     recognition.interimResults = true;
     recognition.lang = document.getElementById('voice-language-setting').value || navigator.language || 'en-US';
     voiceDraft = elements.prompt.value;
-    voiceFinalText = '';
+    const finalResults = new Map();
     recognition.onstart = () => {
       voiceIsListening = true;
       voiceStatusMessage = '';
@@ -1527,13 +1596,23 @@ function setupVoiceInput() {
       elements.composerStatus.textContent = 'Listening…';
     };
     recognition.onresult = (event) => {
-      const finalParts = [];
       const interimParts = [];
-      for (let index = 0; index < event.results.length; index += 1) {
+      const startIndex = Number.isInteger(event.resultIndex) ? event.resultIndex : 0;
+      for (let index = startIndex; index < event.results.length; index += 1) {
         const result = event.results[index];
-        (result.isFinal ? finalParts : interimParts).push(result[0].transcript);
+        const transcript = String(result[0]?.transcript || '').trim();
+        if (result.isFinal) {
+          if (transcript) finalResults.set(index, transcript);
+          else finalResults.delete(index);
+        } else if (transcript) {
+          interimParts.push(transcript);
+        }
       }
-      const finalText = finalParts.join(' ').trim();
+      const finalText = [...finalResults.entries()]
+        .sort(([left], [right]) => left - right)
+        .map(([, transcript]) => transcript)
+        .join(' ')
+        .trim();
       const separator = voiceDraft && finalText && !/\s$/.test(voiceDraft) ? ' ' : '';
       elements.prompt.value = `${voiceDraft}${separator}${finalText}`;
       elements.prompt.style.height = 'auto';
@@ -1764,31 +1843,16 @@ async function submitPrompt() {
   let assistantContent = '';
   let currentJob = null;
   let activity;
+  const clientMessageId = makeClientMessageId();
+  let lastEventId = 0;
+  let retries = 0;
   try {
-    const response = await apiFetch(apiContract.endpoints.chat_stream, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-      body: JSON.stringify({
-        message: requestMessage,
-        session_id: sessionId,
-        target_device: 'local_host',
-      }),
-    });
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'The request could not be completed.');
-    }
-    uploadedAttachments = [];
-    persistAttachments();
-    renderAttachments();
-    elements.prompt.value = '';
-    elements.prompt.dispatchEvent(new Event('input', { bubbles: true }));
-    updateSendButton();
-    activity = appendActivity('Thinking…');
-    activity.dataset.retryPrompt = requestMessage;
-    setBusy(true);
-    await readStream(response, ({ event, data }) => {
+    let streamInitialized = false;
+    const handleStreamEvent = ({ event, data, id }) => {
+      if (Number.isInteger(id)) {
+        if (id <= lastEventId) return;
+        lastEventId = id;
+      }
       if (event === 'message_start') {
         activeRunId = data.run_id || '';
         activity.dataset.jobId = activeRunId;
@@ -1834,13 +1898,61 @@ async function submitPrompt() {
       } else if (event === 'error') {
         elements.providerNotice.hidden = true;
         setBusy(false);
-        throw new Error(data.message || 'The task failed.');
+        const error = new Error(data.message || 'The task failed.');
+        error.noReconnect = true;
+        throw error;
       } else if (event === 'done' && activeChatController === controller) {
         elements.providerNotice.hidden = true;
         setBusy(false);
         elements.prompt.focus();
       }
-    });
+    };
+    while (true) {
+      const headers = new Headers({ 'Content-Type': 'application/json' });
+      if (lastEventId > 0) headers.set('Last-Event-ID', String(lastEventId));
+      const response = await apiFetch(apiContract.endpoints.chat_stream, {
+        method: 'POST',
+        headers,
+        signal: controller.signal,
+        body: JSON.stringify({
+          message: requestMessage,
+          session_id: sessionId,
+          target_device: 'local_host',
+          client_message_id: clientMessageId,
+        }),
+      });
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        if (response.status >= 500 && retries < 3 && !controller.signal.aborted) {
+          retries += 1;
+          elements.composerStatus.textContent = `Connection interrupted. Resuming (${retries}/3)…`;
+          await new Promise((resolve) => window.setTimeout(resolve, 250 * (2 ** (retries - 1))));
+          continue;
+        }
+        throw new Error(errorPayload.error || 'The request could not be completed.');
+      }
+      if (!streamInitialized) {
+        uploadedAttachments = [];
+        persistAttachments();
+        renderAttachments();
+        elements.prompt.value = '';
+        elements.prompt.dispatchEvent(new Event('input', { bubbles: true }));
+        updateSendButton();
+        activity = appendActivity('Thinking…');
+        activity.dataset.retryPrompt = requestMessage;
+        setBusy(true);
+        streamInitialized = true;
+      }
+      try {
+        await readStream(response, handleStreamEvent);
+        break;
+      } catch (error) {
+        if (controller.signal.aborted || error.noReconnect || retries >= 3) throw error;
+        retries += 1;
+        elements.composerStatus.textContent = `Connection interrupted. Resuming (${retries}/3)…`;
+        await new Promise((resolve) => window.setTimeout(resolve, 250 * (2 ** (retries - 1))));
+      }
+    }
     if (!assistantCard && currentJob && currentJob.state === 'running') {
       activity?.remove();
       appendMessage('assistant', 'Task started.', currentJob.id, { prompt: requestMessage });
@@ -2508,7 +2620,7 @@ function abortNotificationStream() {
 async function consumeNotificationStream(controller) {
   const headers = new Headers();
   headers.set('Last-Event-ID', String(notificationLastId));
-  const response = await fetch(apiContract.endpoints.notifications_stream, {
+  const response = await apiFetch(apiContract.endpoints.notifications_stream, {
     headers,
     signal: controller.signal,
     cache: 'no-store',
@@ -2634,8 +2746,23 @@ async function refreshArtifacts() {
       item.dataset.path = file.path;
       const links = document.createElement('a');
       const query = new URLSearchParams({ path: file.path });
-      links.href = `/api/files/download?${query}`;
+      links.href = '#';
       links.setAttribute('aria-label', `Download ${file.name}`);
+      links.addEventListener('click', async (event) => {
+        event.preventDefault();
+        try {
+          const response = await apiFetch(`/api/files/download?${query}`);
+          if (!response.ok) throw new Error('The file download was rejected.');
+          const objectUrl = URL.createObjectURL(await response.blob());
+          const downloadLink = document.createElement('a');
+          downloadLink.href = objectUrl;
+          downloadLink.download = file.name;
+          downloadLink.click();
+          window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+        } catch {
+          elements.composerStatus.textContent = `Could not download ${file.name}. Check the Hsx connection and try again.`;
+        }
+      });
       const name = document.createElement('span');
       name.className = 'artifact-name';
       name.textContent = file.name;
@@ -2901,6 +3028,7 @@ async function initialize() {
   ]);
   if (!tokensResponse.ok || !contractResponse.ok) throw new Error('Could not load the Hsx interface contract.');
   apiContract = await contractResponse.json();
+  await ensureApiAuthentication();
   try {
     const response = await apiFetch(apiContract.endpoints.conversations);
     if (response.ok) {

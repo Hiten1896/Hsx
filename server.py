@@ -1,6 +1,8 @@
 import base64
 import binascii
 import difflib
+import errno
+import hmac
 import io
 import json
 import logging
@@ -10,6 +12,7 @@ import queue
 import re
 import shutil
 import sqlite3
+import sys
 import threading
 import time
 import copy
@@ -58,6 +61,8 @@ from agent.tools.dynamic_registry import DYNAMIC_TOOLS, register_meta_tool
 from agent.workspace import Workspace, task_output_scope, workspace_search
 from config import (
     DATA_DIR,
+    ALLOWED_ORIGINS,
+    AUTH_TOKEN,
     HOST,
     GROQ_API_KEY,
     GROQ_MODEL,
@@ -142,6 +147,8 @@ def _hardware_audio_alert(*, succeeded: bool, message: str = "") -> None:
 
 def _emit_chat_event(job_id: str, event: str, payload: dict) -> None:
     CHAT_STREAMS.emit(job_id, event, payload)
+    if event == "done":
+        RUN_CANCEL_EVENTS.pop(job_id, None)
 
 
 def _activity_resolve_path(raw_path: str) -> Path | None:
@@ -1065,8 +1072,20 @@ def _run_chat_job(
 
 
 class HsxHandler(BaseHTTPRequestHandler):
-    def log_message(self, format: str, *args) -> None:
-        LOGGER.info("HTTP %s %s", self.client_address[0], format % args)
+    def log_message(self, _format: str, *args) -> None:
+        del _format
+        request_line = str(args[0]) if args else ""
+        method, separator, target = request_line.partition(" ")
+        if not separator:
+            method, target = "HTTP", ""
+        else:
+            target = target.split(" ", 1)[0]
+        path = unquote(urlsplit(target).path)
+        if AUTH_TOKEN:
+            path = path.replace(AUTH_TOKEN, "[redacted]")
+        status = str(args[1]) if len(args) > 1 else "-"
+        size = str(args[2]) if len(args) > 2 else "-"
+        LOGGER.info('HTTP %s "%s %s" %s %s', self.client_address[0], method, path, status, size)
 
     def _security_headers(self) -> None:
         self.send_header(
@@ -1085,8 +1104,32 @@ class HsxHandler(BaseHTTPRequestHandler):
         return urlsplit(self.path).path
 
     def _api_access_allowed(self) -> bool:
-        self._authorized_remote_control = True
-        return True
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            if origin != "null" and origin in ALLOWED_ORIGINS:
+                self._authorized_remote_control = True
+                return True
+            self._json(
+                {"error": "Origin not allowed. Add this exact scheme, host, and port to HSX_ALLOWED_ORIGINS."},
+                403,
+            )
+            return False
+
+        scheme, separator, token = self.headers.get("Authorization", "").partition(" ")
+        if separator and scheme.lower() == "bearer" and token.isascii() and hmac.compare_digest(token, AUTH_TOKEN):
+            self._authorized_remote_control = True
+            return True
+        self._json(
+            {"error": "This request has no Origin header. Supply an Authorization: Bearer token from data/auth.token."},
+            401,
+        )
+        return False
+
+    def _cors_headers(self) -> None:
+        origin = self.headers.get("Origin")
+        if origin in ALLOWED_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
 
     def _json(self, payload: dict, status: int = 200) -> None:
         data = json.dumps(payload).encode("utf-8")
@@ -1095,11 +1138,8 @@ class HsxHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
-        origin = self.headers.get("Origin")
-        if origin and origin != "null":
-            self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self._cors_headers()
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.end_headers()
         self.wfile.write(data)
@@ -1120,10 +1160,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
         self.send_header("X-Accel-Buffering", "no")
-        origin = self.headers.get("Origin")
-        if origin and origin != "null":
-            self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Vary", "Origin")
+        self._cors_headers()
         self.end_headers()
         try:
             while True:
@@ -1162,6 +1199,7 @@ class HsxHandler(BaseHTTPRequestHandler):
 
         self.send_response(200)
         self._security_headers()
+        self._cors_headers()
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
         self.send_header("Connection", "close")
@@ -1203,9 +1241,12 @@ class HsxHandler(BaseHTTPRequestHandler):
                 return
             self._serve_file(audio_path, inline=True, no_store=True)
             return
-        if not self._api_access_allowed():
+        if path.startswith("/api/") and not self._api_access_allowed():
             return
         query = parse_qs(urlsplit(self.path).query)
+        if path == "/api/auth/check":
+            self._json({"authenticated": True})
+            return
         if path == "/api/mesh/info":
             self._json(
                 {"enabled": False}
@@ -1377,6 +1418,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                     _ACTIVITY_THUMBNAILS[cache_key] = thumbnail
             self.send_response(200)
             self._security_headers()
+            self._cors_headers()
             self.send_header("Content-Type", "image/jpeg")
             self.send_header("Cache-Control", "private, no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
@@ -1894,6 +1936,22 @@ class HsxHandler(BaseHTTPRequestHandler):
             if not message:
                 self._json({"error": "Message is required."}, 400)
                 return
+            client_message_id = str(payload.get("client_message_id", "")).strip()
+            if client_message_id and (
+                len(client_message_id) > 128
+                or not client_message_id.isascii()
+                or any(not (char.isalnum() or char in "-_.:") for char in client_message_id)
+            ):
+                self._json({"error": "client_message_id must contain 1 to 128 safe ASCII characters."}, 400)
+                return
+            try:
+                last_event_id = int(self.headers.get("Last-Event-ID", "0"))
+            except ValueError:
+                self._json({"error": "Last-Event-ID must be an integer."}, 400)
+                return
+            if last_event_id < 0:
+                self._json({"error": "Last-Event-ID cannot be negative."}, 400)
+                return
             feedback = message.lower()
             if feedback in {"/good", "/bad"}:
                 session_id = str(payload.get("session_id", "default"))[:100]
@@ -1915,72 +1973,119 @@ class HsxHandler(BaseHTTPRequestHandler):
                 self._json({"error": str(error)}, 400 if isinstance(error, ValueError) else 403)
                 return
             session_id = str(payload.get("session_id", "default"))[:100]
-            task_directory = WORKSPACE.create_task_dir(message).relative_to(WORK_DIR).as_posix()
-            job = ASK_JOBS.create_running(
-                message,
-                session_id,
-                task_directory,
-                target_device,
-                bool(payload.get("sensitive", False)),
+            job = (
+                ASK_JOBS.get_by_client_message(session_id, client_message_id)
+                if client_message_id
+                else None
             )
-            cancel_event = threading.Event()
-            RUN_CANCEL_EVENTS[job["id"]] = cancel_event
-            SESSION_LAST_JOBS[session_id] = job["id"]
-            ROUTER_LOGGER.log_prompt(
-                session_id,
-                job["id"],
-                message,
-                sensitive=bool(payload.get("sensitive", False)),
-            )
-            POLICY.audit_event("job_created", session_id, job["id"], "queued")
-            event_queue = CHAT_STREAMS.register(job["id"])
-            threading.Thread(
-                target=_run_chat_job,
-                args=(
-                    job["id"],
-                    payload.get("approvals"),
-                    bool(payload.get("sensitive", False)),
-                    target_device,
-                    lambda text: _emit_chat_event(job["id"], "text_delta", {"text": text}),
-                    cancel_event,
-                    lambda message: _emit_chat_event(
-                        job["id"], "provider_notice", {"message": message}
+            if job and job["request"] != message:
+                self._json({"error": "client_message_id was already used for a different request."}, 409)
+                return
+            created = job is None
+            if job is None:
+                try:
+                    job, created = ASK_JOBS.create_or_get_running(
+                        message,
+                        session_id,
+                        target_device=target_device,
+                        sensitive=bool(payload.get("sensitive", False)),
+                        client_message_id=client_message_id,
+                    )
+                except ValueError as error:
+                    self._json({"error": str(error)}, 400)
+                    return
+            if created:
+                try:
+                    task_directory = WORKSPACE.create_task_dir(message).relative_to(WORK_DIR).as_posix()
+                    job = ASK_JOBS.update_task_directory(job["id"], task_directory)
+                except (KeyError, OSError, RuntimeError, ValueError) as error:
+                    ASK_JOBS.fail(job["id"], f"Could not create the task folder: {error}")
+                    POLICY.audit_event("job_failed", session_id, job["id"], "task_folder")
+                    self._json({"error": "Could not create a task folder for this request."}, 500)
+                    return
+                cancel_event = threading.Event()
+                RUN_CANCEL_EVENTS[job["id"]] = cancel_event
+                event_queue = CHAT_STREAMS.register(job["id"])
+                _emit_chat_event(job["id"], "message_start", {"run_id": job["id"]})
+                _emit_chat_event(job["id"], "job", {"id": job["id"], "state": "running"})
+                threading.Thread(
+                    target=_run_chat_job,
+                    args=(
+                        job["id"],
+                        payload.get("approvals"),
+                        bool(payload.get("sensitive", False)),
+                        target_device,
+                        lambda text: _emit_chat_event(job["id"], "text_delta", {"text": text}),
+                        cancel_event,
+                        lambda notice: _emit_chat_event(
+                            job["id"], "provider_notice", {"message": notice}
+                        ),
+                        lambda event, data: _emit_chat_event(job["id"], event, data),
                     ),
-                    lambda event, data: _emit_chat_event(job["id"], event, data),
-                ),
-                daemon=True,
-            ).start()
+                    daemon=True,
+                ).start()
+                replay = []
+                stream_finished = False
+            else:
+                event_queue, replay, stream_finished = CHAT_STREAMS.subscribe(job["id"], last_event_id)
+            if event_queue is None and job["state"] == "running":
+                self._json(
+                    {"error": "The live chat stream is unavailable; check the task status before retrying."},
+                    503,
+                )
+                return
+            SESSION_LAST_JOBS[session_id] = job["id"]
+            if created:
+                ROUTER_LOGGER.log_prompt(
+                    session_id,
+                    job["id"],
+                    message,
+                    sensitive=bool(payload.get("sensitive", False)),
+                )
+                POLICY.audit_event("job_created", session_id, job["id"], "queued")
             self.send_response(200)
             self._security_headers()
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "close")
             self.send_header("X-Accel-Buffering", "no")
+            self._cors_headers()
             self.end_headers()
+
+            def write_event(event_id: int, event_name: str, event_data: dict) -> None:
+                encoded = json.dumps(event_data, separators=(",", ":"))
+                self.wfile.write(f"id: {event_id}\nevent: {event_name}\ndata: {encoded}\n\n".encode())
+
             try:
-                initial_events = (
-                    f"event: message_start\ndata: {json.dumps({'run_id': job['id']})}\n\n"
-                    f"event: job\ndata: {json.dumps({'id': job['id'], 'state': 'running'})}\n\n"
-                )
-                self.wfile.write(initial_events.encode())
+                seen_done = False
+                if event_queue is None:
+                    write_event(last_event_id + 1, "message_start", {"run_id": job["id"]})
+                    write_event(last_event_id + 2, "job", _ask_job_payload(job))
+                    write_event(last_event_id + 3, "done", {})
+                    seen_done = True
+                else:
+                    for stream_event in replay:
+                        write_event(stream_event.id, stream_event.event, stream_event.data)
+                        if stream_event.event == "done":
+                            seen_done = True
+                            break
                 self.wfile.flush()
-                while True:
+                while event_queue is not None and not seen_done and not stream_finished:
                     try:
-                        event_name, event_data = event_queue.get(timeout=15)
+                        stream_event = event_queue.get(timeout=15)
                     except queue.Empty:
                         self.wfile.write(b": keepalive\n\n")
                         self.wfile.flush()
                         continue
-                    data = json.dumps(event_data, separators=(",", ":"))
-                    self.wfile.write(f"event: {event_name}\ndata: {data}\n\n".encode())
+                    write_event(stream_event.id, stream_event.event, stream_event.data)
                     self.wfile.flush()
-                    if event_name == "done":
+                    if stream_event.event == "done":
                         break
             except (BrokenPipeError, ConnectionResetError):
                 pass
             finally:
-                CHAT_STREAMS.remove(job["id"])
-                RUN_CANCEL_EVENTS.pop(job["id"], None)
+                if event_queue is not None:
+                    CHAT_STREAMS.remove(job["id"], event_queue)
                 self.close_connection = True
         elif path == "/api/memory":
             payload = self._body()
@@ -2104,11 +2209,8 @@ class HsxHandler(BaseHTTPRequestHandler):
         self.send_response(204)
         self._security_headers()
         self.send_header("Cache-Control", "no-store")
-        origin = self.headers.get("Origin")
-        if origin and origin != "null":
-            self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self._cors_headers()
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.end_headers()
 
@@ -2198,6 +2300,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         disposition = "inline" if inline else "attachment"
         self.send_response(status)
         self._security_headers()
+        self._cors_headers()
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Disposition", f"{disposition}; filename*=UTF-8''{quote(target.name)}")
         self.send_header("Accept-Ranges", "bytes")
@@ -2246,7 +2349,22 @@ class HsxHandler(BaseHTTPRequestHandler):
         self.wfile.write(page)
 
 
+def create_http_server() -> ThreadingHTTPServer:
+    try:
+        return ThreadingHTTPServer((HOST, PORT), HsxHandler)
+    except OSError as error:
+        if error.errno == errno.EADDRINUSE:
+            print(
+                f"Hsx cannot start: port {PORT} is already in use. Set HSX_PORT to a free port "
+                "or stop the process using it.",
+                file=sys.stderr,
+            )
+            raise SystemExit(2) from error
+        raise
+
+
 if __name__ == "__main__":
+    http_server = create_http_server()
     if GROQ_API_KEY:
         try:
             GroqProvider(GROQ_API_KEY, GROQ_MODEL)
@@ -2260,4 +2378,4 @@ if __name__ == "__main__":
         MOTION_MONITOR.on_event = _notify_motion_event
         MOTION_MONITOR.start()
     print(f"Hsx ready. Loaded {len(TOOLS)} skills: {', '.join(tool['name'] for tool in TOOLS)}")
-    ThreadingHTTPServer((HOST, PORT), HsxHandler).serve_forever()
+    http_server.serve_forever()
