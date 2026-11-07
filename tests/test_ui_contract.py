@@ -499,6 +499,16 @@ def test_feedback_and_telemetry_api_contract(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "LLM_TELEMETRY", type("Telemetry", (), {
         "snapshot": lambda self: {"provider": "groq", "router_confidence": 0.9, "latency_ms": 12.0},
     })())
+    provenance = {
+        "provider": "gemini",
+        "model": "gemini-test",
+        "provider_calls": [{"provider": "gemini", "model": "gemini-test"}],
+        "tool_names": ["read_file"],
+    }
+    monkeypatch.setattr(server, "PROVIDER_BANDIT", type("ProviderBandit", (), {
+        "job_provenance": lambda self, job_id: provenance,
+        "snapshot": lambda self: {"providers": {}},
+    })())
     feedback = []
     provider_feedback = []
     monkeypatch.setattr(server, "ROUTER_LOGGER", type("Logger", (), {
@@ -526,6 +536,8 @@ def test_feedback_and_telemetry_api_contract(tmp_path, monkeypatch):
             "client": "cli",
             "reason": "Not useful",
             "note": "Try a shorter response",
+            "prompt_messages": [{"role": "user", "content": "client supplied wrong prompt"}],
+            "response": "client supplied wrong response",
         },
     )
     assert status == 201
@@ -537,7 +549,40 @@ def test_feedback_and_telemetry_api_contract(tmp_path, monkeypatch):
     assert saved_feedback["reason"] == "Not useful"
     assert saved_feedback["note"] == "Try a shorter response"
     assert saved_feedback["metadata"]["client"] == "cli"
+    assert saved_feedback["metadata"]["provider"] == "gemini"
+    assert saved_feedback["metadata"]["model"] == "gemini-test"
+    assert saved_feedback["metadata"]["provider_calls"] == provenance["provider_calls"]
+    assert saved_feedback["metadata"]["tool_names"] == ["read_file"]
+    assert saved_feedback["prompt_messages"] == [{"role": "user", "content": "Prompt"}]
     assert saved_feedback["response"] == "Response"
+
+    status, _, body = _request(
+        "/api/feedback/settings",
+        method="POST",
+        payload={
+            "save_feedback": False,
+            "include_full_conversation": False,
+            "include_file_contents": False,
+        },
+    )
+    assert status == 200
+    assert json.loads(body)["save_feedback"] is False
+    status, _, body = _request(
+        "/api/feedback",
+        method="POST",
+        payload={"job_id": job["id"], "feedback": "up"},
+    )
+    assert status == 201
+    assert json.loads(body)["saved"] is False
+
+    status, _, body = _request(
+        "/api/feedback/delete",
+        method="POST",
+        payload={"confirm": True},
+    )
+    assert status == 200
+    assert json.loads(body)["deleted"] == 1
+    assert feedback_store.settings()["count"] == 0
 
     stopped = []
     monkeypatch.setattr(server.POLICY, "stop_all", lambda: stopped.append(True))

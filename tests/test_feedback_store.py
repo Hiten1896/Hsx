@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import pytest
 
@@ -15,6 +16,7 @@ def test_feedback_write_read_export_redacts_private_values(tmp_path):
         note="Token=abc123 phone +1 (555) 123-4567",
         prompt_messages=[{"role": "user", "content": "Contact user@example.com"}],
         response="Password: s3cret",
+        provider_calls=[{"provider": "gemini", "model": "gemini-test"}],
     )
 
     record = store.export_records()[0]
@@ -23,6 +25,7 @@ def test_feedback_write_read_export_redacts_private_values(tmp_path):
     assert "user@example.com" not in json.dumps(record)
     assert "s3cret" not in json.dumps(record)
     assert "555" not in json.dumps(record)
+    assert record["metadata"]["provider_calls"] == [{"provider": "gemini", "model": "gemini-test"}]
     assert store.settings()["count"] == 1
 
 
@@ -99,3 +102,113 @@ def test_feedback_export_full_conversation_requires_setting_and_file_opt_in(tmp_
     assert '"data": "file bytes"' in json.dumps(opt_in_export)
     with pytest.raises(ValueError, match="YYYY-MM-DD"):
         store.export_records(since="not-a-date")
+
+
+def test_feedback_redacts_structured_secret_values(tmp_path):
+    store = FeedbackStore(tmp_path / "feedback.sqlite")
+    store.record(
+        conversation_id="conversation-1",
+        message_id="message-1",
+        rating="up",
+        prompt_messages=[{
+            "role": "user",
+            "content": {
+                "api_key": "must-not-export",
+                "Authorization": "Bearer must-not-export-either",
+                "safe": "ordinary text",
+            },
+        }],
+    )
+
+    record = store.export_records()[0]
+    serialized = json.dumps(record)
+    assert "must-not-export" not in serialized
+    assert record["prompt_messages"][0]["content"]["api_key"] == "[REDACTED]"
+    assert record["prompt_messages"][0]["content"]["Authorization"] == "[REDACTED]"
+
+
+def test_feedback_export_cli_writes_redacted_jsonl_without_file_contents(tmp_path):
+    from tools.export_feedback import main
+
+    database = tmp_path / "feedback.sqlite"
+    output = tmp_path / "feedback.jsonl"
+    store = FeedbackStore(database)
+    store.record(
+        conversation_id="conversation-1",
+        message_id="message-1",
+        rating="down",
+        prompt_messages=[{
+            "role": "user",
+            "content": "Contact user@example.com",
+            "attachment_contents": "private file contents",
+        }],
+        response="Phone +1 (555) 123-4567",
+    )
+
+    assert main(["--database", str(database), "--output", str(output)]) == 0
+    lines = output.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    exported = json.loads(lines[0])
+    assert "user@example.com" not in lines[0]
+    assert "555" not in lines[0]
+    assert "private file contents" not in lines[0]
+    assert exported["prompt_messages"][0]["content"] == "Contact [REDACTED]"
+
+
+def test_feedback_store_migrates_provider_call_metadata(tmp_path):
+    database = tmp_path / "feedback.sqlite"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """CREATE TABLE feedback (
+                id INTEGER PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                rating TEXT NOT NULL,
+                reason TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '',
+                provider TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                tool_names TEXT NOT NULL DEFAULT '[]',
+                app_version TEXT NOT NULL DEFAULT '',
+                client TEXT NOT NULL,
+                prompt_messages TEXT NOT NULL DEFAULT '[]',
+                response TEXT NOT NULL DEFAULT '',
+                full_conversation TEXT NOT NULL DEFAULT '[]',
+                UNIQUE (conversation_id, message_id)
+            )"""
+        )
+
+    store = FeedbackStore(database)
+    store.record(
+        conversation_id="conversation-1",
+        message_id="message-1",
+        rating="up",
+        provider_calls=[{"provider": "groq", "model": "groq-test"}],
+    )
+    assert store.export_records()[0]["metadata"]["provider_calls"] == [
+        {"provider": "groq", "model": "groq-test"},
+    ]
+
+
+def test_provider_bandit_keeps_job_specific_provenance(tmp_path):
+    from agent.llm_client import ProviderBandit
+
+    state_path = tmp_path / "provider-bandit.json"
+    bandit = ProviderBandit(state_path)
+    bandit.remember_job_provider("job-1", "gemini", "gemini-test")
+    bandit.remember_job_provider("job-1", "groq", "groq-test")
+    bandit.remember_job_tool("job-1", "read_file")
+    bandit.remember_job_tool("job-1", "read_file")
+    bandit.remember_job_tool("job-1", "summarize_document")
+
+    restarted = ProviderBandit(state_path)
+    assert restarted.job_provenance("job-1") == {
+        "provider": "groq",
+        "model": "groq-test",
+        "provider_calls": [
+            {"provider": "gemini", "model": "gemini-test"},
+            {"provider": "groq", "model": "groq-test"},
+        ],
+        "tool_names": ["read_file", "summarize_document"],
+    }

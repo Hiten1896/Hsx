@@ -111,10 +111,10 @@ terminal client over SSH for keyboard-first work on the HP itself.
 
 ### Feedback and local export
 
-Ratings and optional notes are stored in the Hsx data directory on this computer only. The web Settings panel shows the saved count, can disable saving, and can delete all saved feedback after confirmation. Exports redact secrets, email addresses, phone numbers, and long tokens by default:
+Ratings and optional notes are stored in the Hsx data directory on this computer only. Each saved rating includes the exact user message and assistant response, the job's provider/model calls, and the tools used. The web Settings panel shows the saved count, can disable saving, and can delete all saved feedback after confirmation. Exports redact secrets, email addresses, phone numbers, and long tokens by default:
 
 ```sh
-python tools/export_feedback.py --format jsonl --since 2025-01-01
+python tools/export_feedback.py --format jsonl --since 2025-01-01 --output feedback.jsonl
 ```
 
 By default, each export contains only the last user prompt and assistant response. Full-conversation export and file-content export require their respective Settings opt-ins; file contents additionally require `--include-file-contents`. Feedback is never sent to an external service.

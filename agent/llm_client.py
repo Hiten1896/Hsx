@@ -35,6 +35,8 @@ class ProviderBandit:
             if not isinstance(state, dict):
                 raise ValueError(f"Invalid provider bandit state in {self.state_path}")
             self._state.update(state)
+        for key in ("job_models", "job_provider_calls", "job_tools"):
+            self._state.setdefault(key, {})
 
     def _provider_stats(self, name: str) -> dict[str, Any]:
         return self._state["providers"].setdefault(name, {
@@ -96,13 +98,39 @@ class ProviderBandit:
             stats["latency_samples"] = samples + 1
             self._save()
 
-    def remember_job_provider(self, job_id: str, provider: str) -> None:
+    def remember_job_provider(self, job_id: str, provider: str, model: str = "") -> None:
         if not job_id or not provider:
             return
         with self._lock:
             self._state["job_providers"][job_id] = provider
+            self._state["job_models"][job_id] = model
+            call = {"provider": provider, "model": model}
+            calls = self._state["job_provider_calls"].setdefault(job_id, [])
+            if call not in calls:
+                calls.append(call)
+            self._trim_jobs("job_models")
+            self._trim_jobs("job_provider_calls")
             self._trim_jobs("job_providers")
             self._save()
+
+    def remember_job_tool(self, job_id: str, tool_name: str) -> None:
+        if not job_id or not tool_name:
+            return
+        with self._lock:
+            tools = self._state["job_tools"].setdefault(job_id, [])
+            if tool_name not in tools:
+                tools.append(tool_name)
+            self._trim_jobs("job_tools")
+            self._save()
+
+    def job_provenance(self, job_id: str) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "provider": self._state["job_providers"].get(job_id, ""),
+                "model": self._state["job_models"].get(job_id, ""),
+                "provider_calls": list(self._state["job_provider_calls"].get(job_id, [])),
+                "tool_names": list(self._state["job_tools"].get(job_id, [])),
+            }
 
     def record_feedback(self, job_id: str, feedback: str) -> None:
         if feedback not in {"good", "bad"}:
@@ -137,6 +165,10 @@ PROVIDER_BANDIT = ProviderBandit()
 
 def record_provider_feedback(job_id: str, feedback: str) -> None:
     PROVIDER_BANDIT.record_feedback(job_id, feedback)
+
+
+def record_job_tool(job_id: str, tool_name: str) -> None:
+    PROVIDER_BANDIT.remember_job_tool(job_id, tool_name)
 
 
 @dataclass
@@ -379,8 +411,10 @@ def call_llm(
             if used_panel
             else getattr(router, "active_provider", "")
         )
-        PROVIDER_BANDIT.remember_job_provider(
-            job_id,
-            response_provider,
+        response_model = (
+            getattr(panel.judge, "model", "unknown")
+            if used_panel
+            else getattr(router, "active_model", "unknown")
         )
+        PROVIDER_BANDIT.remember_job_provider(job_id, response_provider, response_model)
     return NormalizedResponse(blocks)

@@ -754,6 +754,7 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
             else "The action is blocked by the host safety policy.",
         }
     else:
+        PROVIDER_BANDIT.remember_job_tool(job_id, tool_name)
         tool_input = dict(arguments)
         if tool_name in {"system_execute", "shell"} and permission_request and approved:
             tool_input["_approved_elevation"] = True
@@ -1660,13 +1661,9 @@ class HsxHandler(BaseHTTPRequestHandler):
             if job:
                 conversation_id = conversation_id or job["session_id"]
                 message_id = message_id or job_id
-                telemetry = LLM_TELEMETRY.snapshot()
-                tool_names = [
-                    str(item.get("type"))
-                    for item in job.get("device_actions", [])
-                    if isinstance(item, dict) and item.get("type")
-                ]
-                prompt_messages = payload.get("prompt_messages") or [{
+                provenance = PROVIDER_BANDIT.job_provenance(job_id)
+                tool_names = provenance["tool_names"]
+                prompt_messages = [{
                     "role": "user",
                     "content": job["request"],
                 }]
@@ -1678,13 +1675,14 @@ class HsxHandler(BaseHTTPRequestHandler):
                         rating="up" if feedback in {"good", "up"} else "down",
                         reason=str(payload.get("reason", "")),
                         note=str(payload.get("note", "")),
-                        provider=str(telemetry.get("provider", "")),
-                        model=str(telemetry.get("model", "")),
+                        provider=provenance["provider"],
+                        model=provenance["model"],
+                        provider_calls=provenance["provider_calls"],
                         tool_names=tool_names,
                         app_version=os.getenv("HSX_APP_VERSION", "0.0.0+local"),
                         client=str(payload.get("client", "web")),
                         prompt_messages=prompt_messages,
-                        response=str(payload.get("response", job.get("result", ""))),
+                        response=str(job.get("result", "")),
                         full_conversation=full_conversation,
                     )
                 except (OSError, sqlite3.Error, TypeError, ValueError) as error:

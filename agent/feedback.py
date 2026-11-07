@@ -19,6 +19,17 @@ DEFAULT_REDACTIONS = (
     re.compile(r"(?<!\w)(?:\+?\d[\d(). -]{7,}\d)(?!\w)"),
     re.compile(r"\b[A-Za-z0-9_-]{32,}\b"),
 )
+_SECRET_FIELD_NAMES = {
+    "accesskey",
+    "apikey",
+    "authorization",
+    "bearertoken",
+    "clientsecret",
+    "password",
+    "privatekey",
+    "secret",
+    "token",
+}
 
 
 def redact_text(value: str) -> str:
@@ -52,6 +63,7 @@ class FeedbackStore:
                     note TEXT NOT NULL DEFAULT '',
                     provider TEXT NOT NULL DEFAULT '',
                     model TEXT NOT NULL DEFAULT '',
+                    provider_calls TEXT NOT NULL DEFAULT '[]',
                     tool_names TEXT NOT NULL DEFAULT '[]',
                     app_version TEXT NOT NULL DEFAULT '',
                     client TEXT NOT NULL CHECK (client IN ('web', 'cli')),
@@ -69,6 +81,11 @@ class FeedbackStore:
                            ('include_file_contents', '0');
                 """
             )
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(feedback)")}
+            if "provider_calls" not in columns:
+                connection.execute(
+                    "ALTER TABLE feedback ADD COLUMN provider_calls TEXT NOT NULL DEFAULT '[]'"
+                )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10)
@@ -116,6 +133,7 @@ class FeedbackStore:
         note: str = "",
         provider: str = "",
         model: str = "",
+        provider_calls: list[dict[str, str]] | None = None,
         tool_names: list[str] | None = None,
         app_version: str = "",
         client: str = "web",
@@ -136,6 +154,9 @@ class FeedbackStore:
         if not isinstance(prompts, list) or not all(isinstance(item, dict) for item in prompts):
             raise ValueError("Feedback prompt_messages must be a list of message objects.")
         prompts = _redact_value(prompts)
+        calls = provider_calls or []
+        if not isinstance(calls, list) or not all(isinstance(item, dict) for item in calls):
+            raise ValueError("Feedback provider_calls must be a list of provider/model objects.")
         full = (
             _redact_value(full_conversation, include_data=settings["include_file_contents"])
             if settings["include_full_conversation"]
@@ -147,13 +168,14 @@ class FeedbackStore:
             connection.execute(
                 """INSERT INTO feedback (
                     created_at, conversation_id, message_id, rating, reason, note,
-                    provider, model, tool_names, app_version, client,
+                    provider, model, provider_calls, tool_names, app_version, client,
                     prompt_messages, response, full_conversation
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(conversation_id, message_id) DO UPDATE SET
                     created_at = excluded.created_at,
                     rating = excluded.rating, reason = excluded.reason, note = excluded.note,
                     provider = excluded.provider, model = excluded.model,
+                    provider_calls = excluded.provider_calls,
                     tool_names = excluded.tool_names, app_version = excluded.app_version,
                     client = excluded.client, prompt_messages = excluded.prompt_messages,
                     response = excluded.response, full_conversation = excluded.full_conversation""",
@@ -166,6 +188,7 @@ class FeedbackStore:
                     redact_text(note[:2000]),
                     redact_text(provider[:100]),
                     redact_text(model[:200]),
+                    json.dumps(_redact_value(calls), ensure_ascii=False),
                     json.dumps(tool_names or [], ensure_ascii=False),
                     app_version[:80],
                     client,
@@ -223,6 +246,7 @@ class FeedbackStore:
                     "message_id": row["message_id"],
                     "provider": row["provider"],
                     "model": row["model"],
+                    "provider_calls": json.loads(row["provider_calls"]),
                     "tool_names": json.loads(row["tool_names"]),
                     "app_version": row["app_version"],
                     "client": row["client"],
@@ -238,7 +262,11 @@ def _redact_value(value, *, include_data: bool = False):
         return [_redact_value(item, include_data=include_data) for item in value]
     if isinstance(value, dict):
         return {
-            key: _redact_value(item, include_data=include_data)
+            key: (
+                "[REDACTED]"
+                if _is_secret_field(key)
+                else _redact_value(item, include_data=include_data)
+            )
             for key, item in value.items()
             if include_data or key.lower() not in {
                 "data",
@@ -250,6 +278,13 @@ def _redact_value(value, *, include_data: bool = False):
             }
         }
     return value
+
+
+def _is_secret_field(key: object) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", str(key).casefold())
+    return normalized in _SECRET_FIELD_NAMES or normalized.endswith(
+        ("apikey", "token", "password", "secret")
+    )
 
 
 def _without_file_contents(value):

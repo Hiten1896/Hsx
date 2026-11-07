@@ -27,6 +27,7 @@ class FailingProvider:
 
 class WorkingProvider:
     name = "secondary"
+    model = "secondary-model"
 
     def generate(self, request: LLMRequest) -> Iterator[LLMEvent]:
         yield LLMEvent(type="text_delta", text="fallback answer")
@@ -205,6 +206,12 @@ def test_llm_client_records_provider_attempts_and_links_user_feedback(monkeypatc
     assert stats["primary"]["failures"] == 1
     assert stats["secondary"]["successes"] == 1
     assert stats["secondary"]["thumbs_up"] == 1
+    assert bandit.job_provenance("job-2") == {
+        "provider": "secondary",
+        "model": "secondary-model",
+        "provider_calls": [{"provider": "secondary", "model": "secondary-model"}],
+        "tool_names": [],
+    }
 
 
 def test_router_falls_back_after_http_503():

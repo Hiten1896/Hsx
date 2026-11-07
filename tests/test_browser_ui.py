@@ -11,6 +11,7 @@ from playwright.sync_api import sync_playwright
 
 import server
 from agent.conversations import ConversationStore
+from agent.feedback import FeedbackStore
 from agent.notifier import Notifier
 
 BROWSER_MUSIC_STREAM_IDS: list[str] = []
@@ -291,6 +292,7 @@ class BrowserFakeHandler(server.HsxHandler):
 
 def browser_app(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "CONVERSATIONS", ConversationStore(tmp_path / "conversations.sqlite"))
+    monkeypatch.setattr(server, "FEEDBACK_STORE", FeedbackStore(tmp_path / "feedback.sqlite"))
     monkeypatch.setattr(server, "NOTIFIER", Notifier(tmp_path / "notifications.sqlite"))
     monkeypatch.setattr(server, "AUTH_TOKEN", "browser-testing-token")
     host = ThreadingHTTPServer(("127.0.0.1", 0), BrowserFakeHandler)
@@ -542,6 +544,36 @@ def test_browser_history_survives_reload_and_another_browser_and_supports_action
     second.get_by_role("button", name="Delete chat: Renamed saved thread").first.click()
     assert second.locator(".chat-history-row").count() == 0
     second.close()
+
+
+def test_browser_feedback_settings_can_disable_saving_and_delete_all(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    server.FEEDBACK_STORE.record(
+        conversation_id="feedback-session",
+        message_id="feedback-message",
+        rating="up",
+        prompt_messages=[{"role": "user", "content": "A test prompt"}],
+        response="A test response",
+    )
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.locator("#settings-toggle").click()
+    page.locator("#settings-tab-privacy").click()
+    assert page.locator("#feedback-count").inner_text() == "1 feedback entry"
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/feedback/settings")
+        and response.request.method == "POST"
+    ) as settings_response:
+        page.locator("#save-feedback-setting").uncheck()
+    assert settings_response.value.ok
+    assert server.FEEDBACK_STORE.settings()["save_feedback"] is False
+    page.once("dialog", lambda dialog: dialog.accept())
+    page.locator("#delete-feedback-button").click()
+    page.wait_for_function(
+        "() => document.querySelector('#feedback-count').textContent === '0 feedback entries'"
+    )
+    assert server.FEEDBACK_STORE.settings()["count"] == 0
 
 
 def test_browser_settings_notifications_and_failure_keep_working(browser_app, browser_page):

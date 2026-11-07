@@ -29,6 +29,12 @@ def test_high_confidence_safe_zero_argument_tool_runs_without_llm(tmp_path, monk
     log_path = tmp_path / "router.jsonl"
     monkeypatch.setattr(orchestrator, "ROUTER_LOGGER", RouterEventLogger(log_path))
     calls = []
+    provenance_calls = []
+    monkeypatch.setattr(
+        orchestrator,
+        "record_job_tool",
+        lambda job_id, tool_name: provenance_calls.append((job_id, tool_name)),
+    )
 
     def system_status():
         calls.append("called")
@@ -51,6 +57,7 @@ def test_high_confidence_safe_zero_argument_tool_runs_without_llm(tmp_path, monk
     )
 
     assert calls == ["called"]
+    assert provenance_calls == [("fast-job", "system_status")]
     assert answer == "The request completed, but returned no readable details."
     assert [message["role"] for message in history] == ["user", "assistant", "user", "assistant"]
     assert history[1]["content"][0]["type"] == "tool_use"

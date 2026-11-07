@@ -9,7 +9,7 @@ from collections.abc import Callable
 from agent.activity_trace import tool_end_event, tool_start_event
 from agent.ask_user import ApprovalRequest, AskUserRequest
 from agent.devices import system_body_context
-from agent.llm_client import call_llm
+from agent.llm_client import call_llm, record_job_tool
 from agent.llm.types import to_plain_data
 from agent.ml.cache import SEMANTIC_CACHE
 from agent.ml.intent_learning import UNCERTAIN_INTENTS
@@ -225,6 +225,8 @@ def run_agent(
     cancel_event=None,
 ):
     def emit_activity_start(tool_name: str, arguments: dict, call_id: str) -> dict:
+        if job_id:
+            record_job_tool(job_id, tool_name)
         event = tool_start_event(tool_name, arguments, call_id)
         if on_activity_event is not None:
             on_activity_event("tool_start", event)

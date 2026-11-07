@@ -64,13 +64,13 @@ it does not imply live hardware or production-provider verification.
 | Security headers/CSP, sanitized markdown and port-conflict messaging | DONE + TESTED | `server.py`, `web/chat.js`, `tests/test_phase13b_security.py`, `tests/test_browser_ui.py`; response headers, markdown rendering, and the occupied-port path are covered. |
 | Health endpoint, check script, rotating logs, systemd memory/restart policy | DONE + TESTED | `server.py`, `scripts/check.sh`, `deploy/hsx.logrotate`, `deploy/hsx.service`; files and local checks are verified, but HP systemd/Tailscale operation has not been tested live. |
 
-## Phase 7: Feedback dataset — PARTLY
+## Phase 7: Feedback dataset — DONE + TESTED
 
 | Requirement | Status | Evidence |
 |---|---|---|
-| Persist exact message, provider, model and tools for ratings | PARTLY | `agent/feedback.py`, `tests/test_feedback_store.py`; full provenance completeness needs verification. |
-| Redacted JSONL export with secrets/contact data removed and file contents excluded | NOT STARTED | No feedback export script was found in `scripts/`. |
-| Settings to disable saving and delete stored feedback | PARTLY | `server.py`, `web/index.html`, `web/chat.js`, `tests/test_feedback_store.py`; browser workflow not verified. |
+| Persist exact message, provider/model calls, and tools used for ratings | DONE + TESTED | `agent/feedback.py`, `agent/llm_client.py`, `agent/orchestrator.py`, `server.py`, `tests/test_feedback_store.py`, `tests/test_llm_router.py`, `tests/test_orchestrator_router.py`, and `tests/test_ui_contract.py`; job provenance is retained per job and client-supplied message/response values are not trusted. |
+| Redacted JSONL export with secrets/contact data removed and file contents excluded by default | DONE + TESTED | `tools/export_feedback.py`, `agent/feedback.py`, `tests/test_feedback_store.py`; email, phone, structured secret fields, file-content omission, and JSONL output are covered. |
+| Settings to disable saving and delete stored feedback | DONE + TESTED | `server.py`, `web/index.html`, `web/chat.js`, `tests/test_feedback_store.py`, `tests/test_ui_contract.py`, and the feedback Settings browser test; disabling prevents new rows and deletion requires confirmation. |
 
 ## Phase 8: New skills — NOT STARTED
 
@@ -96,14 +96,12 @@ it does not imply live hardware or production-provider verification.
   installed; after installing the project browser runtime, full-suite runs
   passed, including Chromium interactions and viewport screenshots.
 - Latest complete-suite verification: `.\.venv\Scripts\python.exe -m pytest -q`
-  exited 0 after Phase 6 authentication, SSE, idempotency, and browser tests were
-  included. The full suite includes expected platform skips.
+  exited 0 with Phase 7 feedback provenance, JSONL export, settings API, and browser
+  coverage included. The full suite includes expected platform skips.
 - Ruff: `.\.venv\Scripts\ruff.exe check .` exited 0: “All checks passed!”
 - `node --check web\chat.js` and `git diff --check` exited 0.
+- Browser UI checks ran locally in Chromium, including Activity Trace screenshots
+  at 360, 768, and 1280 px.
 - HP deployment, Tailscale routing, systemd behavior, and camera/microphone hardware
-  remain not verified from this Windows development host.
-- `node --check web\chat.js` exited 0.
-- Browser UI checks ran locally in Chromium, including Activity Trace
-  screenshots at 360, 768, and 1280 px. Live camera/audio hardware and
-  external provider behavior were not verified; device/provider services
-  are simulated in tests.
+  remain not verified from this Windows development host. Provider behavior is
+  tested against local fakes, not live external services.
