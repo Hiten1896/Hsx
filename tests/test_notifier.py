@@ -3,7 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from agent.notifier import Notifier, PushResponseError
+from agent.notifier import NOTIFIER, Notifier, PushResponseError
+
+
+def test_notifier_singleton_is_exported_and_shared_with_server():
+    import server
+
+    assert isinstance(NOTIFIER, Notifier)
+    assert server.NOTIFIER is NOTIFIER
 
 
 def test_notification_routes_deduplicate_and_store_titles_only(tmp_path: Path):
@@ -33,6 +40,7 @@ def test_notification_routes_deduplicate_and_store_titles_only(tmp_path: Path):
 
 def test_camera_motion_events_are_persisted_for_the_live_web_center(tmp_path: Path):
     notifier = Notifier(tmp_path / "notifications.db", routes={"camera_motion": ["inapp"]})
+    notifier.update_settings({"camera_motion": True})
     notification = notifier.notify(
         "camera_motion",
         "Motion detected by the Hsx host camera",

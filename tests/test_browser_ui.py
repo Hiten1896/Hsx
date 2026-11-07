@@ -38,6 +38,16 @@ class BrowserFakeHandler(server.HsxHandler):
             self.end_headers()
             self.wfile.write(image)
             return
+        if path == "/api/camera/snapshot":
+            image = base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l3sAAAAASUVORK5CYII="
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(image)))
+            self.end_headers()
+            self.wfile.write(image)
+            return
         if self._request_path() == "/api/files/preview":
             self._json({"content": "one\ntwo\nthree"})
             return
@@ -194,6 +204,17 @@ class BrowserFakeHandler(server.HsxHandler):
                 }),
                 ("text_delta", {"text": "Binary file ready."}),
                 ("job", {"id": "activity-binary-job", "state": "done", "result": "Binary file ready."}),
+                ("done", {}),
+            ]
+        elif payload.get("message") == "camera inline":
+            events = [
+                ("message_start", {"run_id": "camera-inline-run"}),
+                ("camera_snapshot", {"source": "/api/camera/snapshot"}),
+                ("job", {
+                    "id": "camera-inline-run",
+                    "state": "done",
+                    "result": "Here is the current camera view.",
+                }),
                 ("done", {}),
             ]
         elif payload.get("message") == "show capabilities":
@@ -416,6 +437,20 @@ def test_browser_resumes_chat_stream_with_same_client_message_id(browser_app, br
     assert BROWSER_RESUME_REQUESTS[0][0] == BROWSER_RESUME_REQUESTS[1][0]
     assert BROWSER_RESUME_REQUESTS[0][1] == ""
     assert BROWSER_RESUME_REQUESTS[1][1] == "2"
+
+
+def test_browser_renders_camera_snapshot_inline_in_the_active_message(browser_app, browser_page):
+    base_url, _ = browser_app
+    _, page = browser_page
+    page.goto(f"{base_url}/web/")
+    page.locator('body[data-ready="true"]').wait_for(timeout=10000)
+    page.locator("#prompt-input").fill("camera inline")
+    page.locator("#send-button").click()
+    snapshot = page.locator(".message-inline-camera-snapshot")
+    snapshot.wait_for(timeout=5000)
+    assert snapshot.get_attribute("alt") == "Camera snapshot"
+    assert snapshot.evaluate("image => image.naturalWidth") == 1
+    assert page.get_by_text("Here is the current camera view.").is_visible()
 
 
 def test_artifact_download_uses_authenticated_fetch(browser_app, browser_page):

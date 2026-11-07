@@ -10,6 +10,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from config import DATA_DIR
+
 
 def read_cpu_temperature() -> float | None:
     """Read CPU temperature from /sys/class/thermal or sensors; return None if unavailable."""
@@ -537,3 +539,6 @@ class Notifier:
     def get_broadcast_events_after(self, after_id: int) -> list[dict]:
         with self._condition:
             return [e for e in self._broadcast_events if e["id"] > after_id]
+
+
+NOTIFIER = Notifier(DATA_DIR / "notifications.db")

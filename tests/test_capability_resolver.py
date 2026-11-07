@@ -1,6 +1,18 @@
 from types import SimpleNamespace
 
+import pytest
+
 from skills.capability_resolver import skill as resolver
+
+
+def test_resolver_rejects_unreviewed_packages_without_running_installer(monkeypatch):
+    calls = []
+    monkeypatch.setattr(resolver.subprocess, "run", lambda *args, **kwargs: calls.append(args))
+
+    with pytest.raises(ValueError, match="not in Hsx's reviewed recipe catalog"):
+        resolver.run("unreviewed-package", "install a missing utility")
+
+    assert calls == []
 
 
 def test_resolver_refuses_to_install_outside_a_virtual_environment(monkeypatch):

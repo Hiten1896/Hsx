@@ -22,7 +22,7 @@ from agent.policy import POLICY
 from agent.autonomy import classify_action
 from agent.rag import RAG_INDEX
 from agent.router import INTENT_ROUTER, LLM_TELEMETRY, ROUTER_LOGGER
-from agent.swarm import plan_task, review_proposal, write_proposal, write_proposal_with_repair
+from agent.swarm import plan_task, write_proposal_with_repair
 from config import MEMORY_DB
 
 MEMORY = MemoryManager(MEMORY_DB)
@@ -355,6 +355,11 @@ def run_agent(
             if is_describe:
                 frame = CAMERA.wait_for_frame(-1, timeout=3.0) or CAMERA.latest_frame()
                 if frame and frame.data:
+                    if on_activity_event is not None:
+                        on_activity_event(
+                            "camera_snapshot",
+                            {"source": "/api/camera/snapshot"},
+                        )
                     encoded = base64.b64encode(frame.data).decode("ascii")
                     vision_resp = call_llm(
                         [{"role": "user", "content": [

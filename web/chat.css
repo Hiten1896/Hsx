@@ -144,6 +144,8 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visib
 .message-action:disabled { cursor: default; opacity: .45; }
 .message-feedback { display: flex; align-items: center; gap: 2px; }
 .message-feedback[hidden], .artifacts-list[hidden], .notification-toast[hidden] { display: none; }
+.message-inline-camera-snapshot { display: block; width: min(100%, 560px); max-height: min(60vh, 480px); margin-top: 12px; border: 1px solid var(--border); border-radius: 10px; object-fit: contain; }
+.camera-snapshot-error { color: var(--warning); font-size: 11px; }
 .feedback-status { overflow: hidden; max-width: 130px; color: var(--success); font-size: 10px; white-space: nowrap; }
 .message-time { flex: 0 0 auto; color: #78847b; font-size: 10px; white-space: nowrap; }
 .message-card[data-role="user"] .message-actions { width: fit-content; margin: 4px 0 0 auto; }

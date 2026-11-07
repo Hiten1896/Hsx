@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from agent.ml.planner import PlanStep, StepState, TaskPlan, is_complex_task
+from agent.ml.planner import is_complex_task
 from agent.swarm.roles import write_proposal_with_repair
 import server
 
@@ -38,7 +38,7 @@ class TestPlanRoutingAndRepair(unittest.TestCase):
             return "```python\ndef run_task():\n    return 'hello'\n```"
 
         def fake_validator(prompt: str) -> str:
-            return "Proposal looks acceptable."
+            return '{"approved": true, "tests_reviewed": true, "rationale": "safe"}'
 
         result = write_proposal_with_repair(
             "Overall goal",
@@ -57,7 +57,7 @@ class TestPlanRoutingAndRepair(unittest.TestCase):
             return "```python\nexec('bad_code')\n```"
 
         def fake_validator(prompt: str) -> str:
-            return "Proposal looks acceptable."
+            return '{"approved": true, "tests_reviewed": true, "rationale": "safe"}'
 
         with self.assertRaises(ValueError) as ctx:
             write_proposal_with_repair(

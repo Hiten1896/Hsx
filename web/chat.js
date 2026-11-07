@@ -704,6 +704,30 @@ function appendActivity(label) {
 
 const activityImageObjectUrls = new Set();
 
+async function appendInlineCameraSnapshot(article) {
+  const content = article?.querySelector('.message-content');
+  if (!content || article.dataset.cameraSnapshotRendered === 'true') return;
+  article.dataset.cameraSnapshotRendered = 'true';
+  try {
+    const response = await apiFetch(apiContract.endpoints.camera_snapshot);
+    if (!response.ok) throw new Error(`The snapshot endpoint returned HTTP ${response.status}.`);
+    const blob = await response.blob();
+    if (!blob.type.startsWith('image/')) throw new Error('The snapshot endpoint did not return an image.');
+    const image = document.createElement('img');
+    image.className = 'message-inline-camera-snapshot';
+    image.alt = 'Camera snapshot';
+    image.src = URL.createObjectURL(blob);
+    activityImageObjectUrls.add(image.src);
+    content.append(image);
+    scrollToLatest();
+  } catch (error) {
+    const notice = document.createElement('p');
+    notice.className = 'camera-snapshot-error';
+    notice.textContent = `Camera snapshot unavailable: ${error.message}`;
+    content.append(notice);
+  }
+}
+
 function activityIcon(name, extraClass = '') {
   const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   icon.classList.add('activity-icon');
@@ -1934,6 +1958,7 @@ async function submitPrompt() {
   let assistantCard = null;
   let assistantContent = '';
   let currentJob = null;
+  let cameraSnapshotPending = false;
   let activity;
   const clientMessageId = makeClientMessageId();
   let lastEventId = 0;
@@ -1985,7 +2010,8 @@ async function submitPrompt() {
           if (!activity?.querySelector('.activity-step')) activity?.remove();
           const text = assistantContent || data.result || data.error || 'The task was cancelled.';
           assistantCard?.remove();
-          appendMessage('assistant', text, data.id, { prompt: requestMessage });
+          assistantCard = appendMessage('assistant', text, data.id, { prompt: requestMessage });
+          if (cameraSnapshotPending) void appendInlineCameraSnapshot(assistantCard);
         }
       } else if (event === 'error') {
         elements.providerNotice.hidden = true;
@@ -1995,6 +2021,8 @@ async function submitPrompt() {
         throw error;
       } else if (event === 'camera_state') {
         handleCameraStateEvent(data);
+      } else if (event === 'camera_snapshot') {
+        cameraSnapshotPending = data.source === apiContract.endpoints.camera_snapshot;
       } else if (event === 'done' && activeChatController === controller) {
         elements.providerNotice.hidden = true;
         setBusy(false);

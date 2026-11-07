@@ -19,6 +19,7 @@ import copy
 import uuid
 from collections.abc import Callable
 from http.cookies import SimpleCookie
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
@@ -51,7 +52,7 @@ from agent.mesh.node_gateway import MeshGateway
 from agent.ml.memory import EXPERIENCE_MEMORY
 from agent.memory import MemoryManager
 from agent.music_catalog import MUSIC_CATALOG
-from agent.notifier import Notifier
+from agent.notifier import NOTIFIER
 from agent.orchestrator import run_agent
 from agent.policy import POLICY
 from agent.router import INTENT_ROUTER, LLM_TELEMETRY, ROUTER_LOGGER
@@ -129,7 +130,6 @@ IMPROVEMENTS = SelfImprovement(
 )
 DEVICES = DeviceRegistry(approval_guard=APPROVAL_GUARD)
 WORKSPACE = Workspace(WORKSPACE_DIR, WORK_DIR)
-NOTIFIER = Notifier(DATA_DIR / "notifications.db")
 FEEDBACK_STORE = FeedbackStore(DATA_DIR / "feedback.db")
 CONVERSATIONS = ConversationStore(DATA_DIR / "conversations.db")
 _RESOURCE_ALERT_LOCK = threading.Lock()

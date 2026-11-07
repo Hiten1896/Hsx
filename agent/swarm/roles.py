@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import re
 from collections.abc import Callable
 
+LOGGER = logging.getLogger("hsx.swarm.roles")
 MAX_PROPOSAL_CHARS = 12_000
 PYTHON_BLOCK = re.compile(r"```python\s*(.*?)```", re.IGNORECASE | re.DOTALL)
 UNFENCED_CODE = re.compile(r"(?m)^\s*\+?\s*(?:import\s|from\s+\S+\s+import\s|def\s+\w+\s*\(|class\s+\w+)")
@@ -133,6 +135,8 @@ def _validate_python_tree(tree: ast.AST, dynamic_depth: int = 0) -> None:
             )
             if function_name in {"eval", "exec", "compile"}:
                 if dynamic_depth >= 5 or not isinstance(node.func, ast.Name) or not node.args:
+                    raise ValueError("Coder proposal uses a restricted dynamic-code operation.")
+                if function_name == "exec" and isinstance(node.args[0], ast.Constant):
                     raise ValueError("Coder proposal uses a restricted dynamic-code operation.")
                 default_mode = "eval" if function_name == "eval" else "exec"
                 code_source = _literal_code_source(node.args[0], default_mode)
