@@ -47,6 +47,7 @@ let cameraVisionDetections = [];
 let cameraVisionSourceSize = { width: 0, height: 0 };
 let conversationSaveTimer = null;
 let restoringConversation = false;
+const MAX_CAMERA_LIVE_DELAY_MS = 1000;
 
 const elements = {
   composer: document.getElementById('composer-form'),
@@ -2572,10 +2573,12 @@ async function toggleCamera() {
       throw new Error(data.error || `Camera start failed (HTTP ${response.status}).`);
     }
     cameraEnabled = true;
+    cameraAvailable = true;
     startCameraVision();
     window.clearTimeout(cameraAutoOffTimer);
     cameraAutoOffTimer = window.setTimeout(stopCameraAndStandby, 5 * 60 * 1000);
-    await refreshCamera();
+    setCameraStatus(true, 'Live feed active…');
+    startCameraStream();
   } catch (error) {
     setCameraStatus(false, `Camera did not start: ${error.message || 'Unknown camera error.'}`);
   }
@@ -2911,11 +2914,23 @@ async function startCameraStream() {
       const { value, done } = await reader.read();
       if (done) throw new Error('Camera stream ended.');
       buffer = concatenateBytes(buffer, value);
+      let newestFrame = null;
       while (true) {
         const frame = takeCameraFrame(buffer);
         if (!frame) break;
         buffer = frame.remaining;
-        showCameraFrame(frame);
+        newestFrame = frame;
+      }
+      if (newestFrame) {
+        const frameAgeMs = Date.now() - (newestFrame.capturedAt * 1000 - cameraClockOffsetMs);
+        if (frameAgeMs > MAX_CAMERA_LIVE_DELAY_MS) {
+          controller.abort();
+          if (cameraStreamController === controller) cameraStreamController = null;
+          cameraRetryDelay = 500;
+          scheduleCameraReconnect();
+          break;
+        }
+        showCameraFrame(newestFrame);
       }
       if (buffer.length > 2 * 1024 * 1024 + 16_384) {
         throw new Error('Camera stream is out of sync.');
@@ -2952,10 +2967,11 @@ function updateCameraClock() {
     cameraAvailable
     && cameraStreamController
     && !document.hidden
-    && currentDelayMs > 5000
+    && currentDelayMs > MAX_CAMERA_LIVE_DELAY_MS
   ) {
     cameraStreamController.abort();
     cameraStreamController = null;
+    cameraRetryDelay = 500;
     scheduleCameraReconnect();
   }
 }

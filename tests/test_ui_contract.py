@@ -325,6 +325,15 @@ def test_camera_is_lazy_and_run_state_resets_after_failure_or_stop():
     assert ".camera-badge-standby" in css
     assert "let cameraEnabled = false;" in script
     assert "function toggleCamera()" in script
+    camera_toggle = script[script.index("async function toggleCamera()"):script.index("function findBytes(")]
+    assert "cameraAvailable = true;" in camera_toggle
+    assert "startCameraStream();" in camera_toggle
+    assert "await refreshCamera();" not in camera_toggle
+    assert "const MAX_CAMERA_LIVE_DELAY_MS = 1000;" in script
+    camera_stream = script[script.index("async function startCameraStream()"):script.index("function updateCameraClock()")]
+    assert "let newestFrame = null;" in camera_stream
+    assert "frameAgeMs > MAX_CAMERA_LIVE_DELAY_MS" in camera_stream
+    assert "scheduleCameraReconnect();" in camera_stream
     camera_refresh = script[script.index("async function refreshCamera()"):script.index("function handleCameraStateEvent")]
     assert "apiContract.endpoints.camera_status" in camera_refresh
     assert "apiContract.endpoints.camera_start" not in camera_refresh
