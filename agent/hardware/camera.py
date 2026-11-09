@@ -14,7 +14,7 @@ FRAME_RATE = 15
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 MAX_FRAME_BYTES = 2 * 1024 * 1024
-MAX_FRAME_AGE_SECONDS = 3.0
+MAX_FRAME_AGE_SECONDS = 5.0
 JPEG_START = b"\xff\xd8"
 JPEG_END = b"\xff\xd9"
 
@@ -40,16 +40,23 @@ class CameraService:
     def __init__(
         self,
         *,
-        device: str | None = None,
+        device: str | int | None = None,
         restart_min_seconds: float = 2.0,
         restart_max_seconds: float = 30.0,
         frame_rate: int = FRAME_RATE,
         width: int = FRAME_WIDTH,
         height: int = FRAME_HEIGHT,
     ):
-        self.device = device or os.getenv("HSX_CAMERA_DEVICE", "/dev/video0")
-        if not self.device.startswith("/dev/") or "\n" in self.device or "\r" in self.device:
-            raise ValueError("Camera device must be a /dev path.")
+        raw_device = device if device is not None else os.getenv("HSX_CAMERA_DEVICE", "0")
+        if isinstance(raw_device, int) or (isinstance(raw_device, str) and raw_device.isdigit()):
+            self.device = int(raw_device)
+            self._is_windows_index = True
+        else:
+            self.device = str(raw_device)
+            self._is_windows_index = False
+            if not self.device.startswith("/dev/") or "\n" in self.device or "\r" in self.device:
+                raise ValueError("Camera device must be a /dev path or integer index.")
+
         if restart_min_seconds <= 0 or restart_max_seconds < restart_min_seconds:
             raise ValueError("Camera restart bounds are invalid.")
         if (
@@ -77,33 +84,74 @@ class CameraService:
         self._owner_timers: dict[str, threading.Timer] = {}
 
     def command(self, ffmpeg: str) -> list[str]:
-        return [
-            ffmpeg,
-            "-nostdin",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-threads",
-            "1",
-            "-f",
-            "v4l2",
-            "-framerate",
-            str(self.frame_rate),
-            "-video_size",
-            f"{self.width}x{self.height}",
-            "-i",
-            self.device,
-            "-an",
-            "-vf",
-            f"scale={self.width}:{self.height}",
-            "-c:v",
-            "mjpeg",
-            "-q:v",
-            "8",
-            "-f",
-            "image2pipe",
-            "pipe:1",
-        ]
+        if self._is_windows_index:
+            return [
+                ffmpeg,
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-fflags",
+                "nobuffer",
+                "-flags",
+                "low_delay",
+                "-threads",
+                "1",
+                "-f",
+                "dshow",
+                "-vcodec",
+                "mjpeg",
+                "-framerate",
+                "30",
+                "-video_size",
+                f"{self.width}x{self.height}",
+                "-i",
+                "video=Hy-FHD(5307)-Camera",
+                "-an",
+                "-r",
+                str(self.frame_rate),
+                "-vf",
+                f"scale={self.width}:{self.height}",
+                "-c:v",
+                "mjpeg",
+                "-q:v",
+                "8",
+                "-f",
+                "image2pipe",
+                "pipe:1",
+            ]
+        else:
+            return [
+                ffmpeg,
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-fflags",
+                "nobuffer",
+                "-flags",
+                "low_delay",
+                "-threads",
+                "1",
+                "-f",
+                "v4l2",
+                "-framerate",
+                str(self.frame_rate),
+                "-video_size",
+                f"{self.width}x{self.height}",
+                "-i",
+                str(self.device),
+                "-an",
+                "-vf",
+                f"scale={self.width}:{self.height}",
+                "-c:v",
+                "mjpeg",
+                "-q:v",
+                "8",
+                "-f",
+                "image2pipe",
+                "pipe:1",
+            ]
 
     def start(self) -> bool:
         with self._lifecycle_lock:
@@ -129,7 +177,7 @@ class CameraService:
             raise ValueError("Camera session lease must be between 0 and 1800 seconds.")
         if shutil.which("ffmpeg") is None:
             raise RuntimeError("ffmpeg is not installed on this host.")
-        if not os.path.exists(self.device):
+        if not self._is_windows_index and not os.path.exists(str(self.device)):
             raise RuntimeError(f"Camera device is unavailable: {self.device}")
 
         already_owned = self.has_owner(owner)
@@ -239,7 +287,7 @@ class CameraService:
             frame = self._frame
         return {
             "running": process is not None and process.poll() is None,
-            "device_available": os.path.exists(self.device),
+            "device_available": True if self._is_windows_index else os.path.exists(str(self.device)),
             "frame_age_seconds": (
                 round(time.monotonic() - frame.captured_at, 3) if frame else None
             ),
@@ -298,7 +346,7 @@ class CameraService:
             return
         delay = self.restart_min_seconds
         while not self._stop.is_set():
-            if not os.path.exists(self.device):
+            if not self._is_windows_index and not os.path.exists(str(self.device)):
                 self._last_error = f"Camera device is unavailable: {self.device}"
                 self._stop.wait(delay)
                 delay = min(self.restart_max_seconds, delay * 2)

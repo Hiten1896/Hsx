@@ -132,9 +132,26 @@ DEVICES = DeviceRegistry(approval_guard=APPROVAL_GUARD)
 WORKSPACE = Workspace(WORKSPACE_DIR, WORK_DIR)
 FEEDBACK_STORE = FeedbackStore(DATA_DIR / "feedback.db")
 CONVERSATIONS = ConversationStore(DATA_DIR / "conversations.db")
+
+def _normalize_message_content(messages: list) -> list:
+    """Normalize message content to plain strings for local LLMs like Ollama."""
+    normalized = []
+    for msg in messages:
+        msg_copy = dict(msg)
+        content = msg_copy.get("content")
+        if isinstance(content, list):
+            msg_copy["content"] = " ".join(
+                str(part.get("text", "")) for part in content if isinstance(part, dict)
+            )
+        elif not isinstance(content, str):
+            msg_copy["content"] = str(content or "")
+        normalized.append(msg_copy)
+    return normalized
+
 def _store_session_history(session_id: str, history: list) -> None:
     SESSION_HISTORIES[session_id] = history
     SESSION_HISTORY_UPDATED[session_id] = datetime.now(UTC)
+
 _RESOURCE_ALERT_LOCK = threading.Lock()
 _RESOURCE_ALERT_STATE = {"cpu": False, "memory": False, "disk": False}
 _ACTIVITY_IMAGE_LOCK = threading.Lock()
@@ -147,6 +164,7 @@ _ACTIVITY_FILE_TOOLS = {
     "make_website", "report", "run_code", "shell", "system_execute", "video_edit",
 }
 MESH_GATEWAY = MeshGateway.from_environment()
+
 def _hardware_audio_alert(*, succeeded: bool, message: str = "") -> None:
     try:
         if succeeded:
@@ -156,9 +174,7 @@ def _hardware_audio_alert(*, succeeded: bool, message: str = "") -> None:
     except (OSError, RuntimeError, ValueError):
         LOGGER.exception("Could not queue a hardware audio alert.")
 
-
 _FAILED_RUN_IDS: set[str] = set()
-
 
 def _emit_chat_event(job_id: str, event: str, payload: dict) -> None:
     if event == "error":
@@ -168,7 +184,6 @@ def _emit_chat_event(job_id: str, event: str, payload: dict) -> None:
     CHAT_STREAMS.emit(job_id, event, payload)
     if event == "done":
         RUN_CANCEL_EVENTS.pop(job_id, None)
-
 
 def _activity_resolve_path(raw_path: str) -> Path | None:
     candidate = Path(raw_path).expanduser()
@@ -188,7 +203,6 @@ def _activity_resolve_path(raw_path: str) -> Path | None:
             return resolved
     return None
 
-
 def _activity_snapshot(path: Path | None) -> dict | None:
     if path is None or not path.is_file():
         return None
@@ -207,7 +221,6 @@ def _activity_snapshot(path: Path | None) -> dict | None:
     except UnicodeDecodeError:
         return {"path": path, "binary": True, "size": len(data), "text": ""}
     return {"path": path, "binary": False, "size": len(data), "text": text}
-
 
 def _activity_diff(before: dict | None, after: dict | None, path: str) -> dict | None:
     if after is None:
@@ -277,7 +290,6 @@ def _activity_diff(before: dict | None, after: dict | None, path: str) -> dict |
         "truncated": total_lines > 1000,
     }
 
-
 def _persist_activity_event(task_dir: str, event: str, payload: dict, job_id: str = "") -> None:
     target_id = job_id or (task_dir if task_dir else "default")
     scratch_dir = DATA_DIR / "scratch" / target_id
@@ -290,7 +302,6 @@ def _persist_activity_event(task_dir: str, event: str, payload: dict, job_id: st
             trace.write(json.dumps({"event": event, "data": payload}, ensure_ascii=False) + "\n")
     except (OSError, ValueError):
         pass
-
 
 def _register_activity_images(paths: list[str]) -> list[dict]:
     registered = []
@@ -311,7 +322,6 @@ def _register_activity_images(paths: list[str]) -> list[dict]:
         registered.append({"id": image_id, "path": redact_activity_text(display_path, 500)})
     return registered
 
-
 def _activity_display_path(raw_path: str) -> str:
     path = _activity_resolve_path(raw_path)
     if path is None:
@@ -320,7 +330,6 @@ def _activity_display_path(raw_path: str) -> str:
         return path.relative_to(WORKSPACE.root).as_posix()
     except ValueError:
         return ""
-
 
 def _retry_activity_tool(job_id: str, call_id: str) -> tuple[dict, int]:
     with _ACTIVITY_RETRY_LOCK:
@@ -390,7 +399,6 @@ def _retry_activity_tool(job_id: str, call_id: str) -> tuple[dict, int]:
             _ACTIVITY_RETRY_CALLS.pop(call_id, None)
     return {"activity": safe_activity, "status": "failed" if failed else "completed"}, 200
 
-
 def _result_paths_for_activity(result: dict) -> list[str]:
     values = []
     for key in ("path", "output_path", "file", "filename"):
@@ -399,9 +407,7 @@ def _result_paths_for_activity(result: dict) -> list[str]:
             values.append(value.strip())
     return values
 
-
 def _job_error(error: Exception) -> str:
-    """Return a useful, bounded error without exposing configured secrets."""
     message = str(error) or error.__class__.__name__
     for name in (
         "ANTHROPIC_API_KEY",
@@ -417,7 +423,6 @@ def _job_error(error: Exception) -> str:
             message = message.replace(value, "***")
     return message[:1000]
 
-
 def _record_job_telemetry(
     job: dict,
     duration_seconds: float,
@@ -429,11 +434,12 @@ def _record_job_telemetry(
     error_message: str = "",
 ) -> None:
     try:
+        normalized_history = _normalize_message_content(history) if history else None
         LOG_RECORDER.record_execution(
             job.get("request", ""),
             response,
             run_id=job.get("id", ""),
-            history=history,
+            history=normalized_history,
             succeeded=succeeded,
             error=error_message,
             sensitive=sensitive,
@@ -459,7 +465,6 @@ def _record_job_telemetry(
     except (OSError, RuntimeError, TypeError, ValueError):
         LOGGER.exception("Could not persist local ML task telemetry for job %s.", job["id"])
 
-
 def _record_feedback_learning(job: dict, history: list, rating: str) -> None:
     normalized_rating = "up" if rating in {"good", "up"} else "down" if rating in {"bad", "down"} else ""
     if not normalized_rating or job.get("sensitive"):
@@ -474,16 +479,16 @@ def _record_feedback_learning(job: dict, history: list, rating: str) -> None:
         )
         SFT_DATASET.remove_job(job_id)
         if normalized_rating == "up":
+            normalized_history = _normalize_message_content(history) if history else None
             SFT_DATASET.record_success(
                 job.get("request", ""),
                 job.get("result", ""),
                 job_id=job_id,
-                history=history,
+                history=normalized_history,
                 sensitive=False,
             )
     except (OSError, RuntimeError, TypeError, ValueError):
         LOGGER.exception("Could not persist feedback learning data for job %s.", job.get("id", ""))
-
 
 def _notify_motion_event(event: dict) -> None:
     snapshot = str(event.get("snapshot", "")).strip()
@@ -507,7 +512,6 @@ def _notify_motion_event(event: dict) -> None:
             cooldown_seconds=120.0,
             dedupe_key=f"camera-motion:{snapshot}",
         )
-
 
 def _notify_resource_alerts(metrics: SystemMetrics) -> None:
     disk = shutil.disk_usage(WORKSPACE_DIR)
@@ -545,14 +549,12 @@ def _notify_resource_alerts(metrics: SystemMetrics) -> None:
             dedupe_key="system_temp",
         )
 
-
 def _notify_system_anomaly(_event: dict) -> None:
     NOTIFIER.notify(
         "health_alert",
         "Unusual system behavior detected on the Hsx host",
         dedupe_key=f"system-anomaly:{int(time.time() // 300)}",
     )
-
 
 def _generate_greeting(time_of_day: str) -> str:
     if time_of_day not in {"morning", "afternoon", "evening"}:
@@ -592,7 +594,6 @@ def _generate_greeting(time_of_day: str) -> str:
         raise RuntimeError("The cloud provider returned an empty greeting.")
     return text[:180]
 
-
 def _is_user_upload_path(raw_path: str) -> bool:
     parts = Path(raw_path.replace("\\", "/")).parts
     return any(
@@ -600,7 +601,6 @@ def _is_user_upload_path(raw_path: str) -> bool:
         or re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{4} uploads(?: \(\d+\))?", part.casefold())
         for part in parts
     )
-
 
 def _camera_status_payload(include_host: bool = True, session_id: str = "") -> dict:
     status = CAMERA.health_check()
@@ -627,7 +627,6 @@ def _camera_status_payload(include_host: bool = True, session_id: str = "") -> d
         }
     return payload
 
-
 def _session_artifacts(session_id: str) -> list[dict]:
     ARTIFACTS.migrate_from_workspace(WORKSPACE, session_id, ASK_JOBS, ARTIFACT_SUFFIXES)
     artifacts = ARTIFACTS.list(session_id)
@@ -643,7 +642,6 @@ def _session_artifacts(session_id: str) -> list[dict]:
             visible.append(artifact)
     return visible[:200]
 
-
 def _register_artifact(session_id: str, raw_path: str) -> None:
     if not raw_path:
         return
@@ -657,7 +655,6 @@ def _register_artifact(session_id: str, raw_path: str) -> None:
         ARTIFACTS.record(session_id, relative)
     except (OSError, ValueError):
         LOGGER.warning("Ignoring invalid user-facing artifact path.")
-
 
 def _fail_job(
     job_id: str,
@@ -694,7 +691,6 @@ def _fail_job(
     POLICY.audit_event("job_failed", job["session_id"], job_id, "failed")
     _hardware_audio_alert(succeeded=False)
 
-
 def _resume_ask_job(job_id: str) -> None:
     job = ASK_JOBS.get(job_id)
     if job is None or job["state"] != "running":
@@ -702,7 +698,7 @@ def _resume_ask_job(job_id: str) -> None:
     lock = _session_lock(job["session_id"])
     started_at = time.perf_counter()
     device_actions = list(job.get("device_actions") or [])
-    resume_history = copy.deepcopy(job["checkpoint"])
+    resume_history = _normalize_message_content(job.get("checkpoint", []))
     scratch_dir = DATA_DIR / "scratch" / job_id
     scratch_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -776,7 +772,8 @@ def _resume_ask_job(job_id: str) -> None:
         _fail_job(job_id, job, error, started_at=started_at)
         return
     else:
-        _store_session_history(job["session_id"], history)
+        normalized_history = _normalize_message_content(history)
+        _store_session_history(job["session_id"], normalized_history)
         ASK_JOBS.complete(job_id, response, device_actions)
         _record_job_telemetry(
             job,
@@ -784,14 +781,13 @@ def _resume_ask_job(job_id: str) -> None:
             succeeded=True,
             sensitive=job.get("sensitive", False),
             response=response,
-            history=history,
+            history=normalized_history,
         )
         POLICY.audit_event("job_done", job["session_id"], job_id, "done")
         _hardware_audio_alert(succeeded=True)
     finally:
         if scratch_dir.exists():
             shutil.rmtree(scratch_dir, ignore_errors=True)
-
 
 def _resume_approval_job(job_id: str, approved: bool) -> None:
     job = ASK_JOBS.get(job_id)
@@ -800,7 +796,7 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
     lock = _session_lock(job["session_id"])
     started_at = time.perf_counter()
     device_actions = list(job.get("device_actions") or [])
-    resume_history = copy.deepcopy(job["checkpoint"])
+    resume_history = _normalize_message_content(job.get("checkpoint", []))
     approval = job.get("approval") or {}
     tool_name = str(approval.get("tool", ""))
     arguments = approval.get("arguments")
@@ -883,7 +879,7 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
                 POLICY.audit_event("microphone_access", job["session_id"], job_id, "started")
                 result = {
                     "success": True,
-                    "message": "The HP microphone is on for this session. Audio is discarded and is not recorded.",
+                    "message": "The microphone is on for this session. Audio is discarded and is not recorded.",
                     "_hsx_device_action": "microphone_start",
                 }
             except (OSError, RuntimeError, TypeError, ValueError) as error:
@@ -982,7 +978,8 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
         _fail_job(job_id, job, error, started_at=started_at)
         return
 
-    _store_session_history(job["session_id"], history)
+    normalized_history = _normalize_message_content(history)
+    _store_session_history(job["session_id"], normalized_history)
     ASK_JOBS.complete(job_id, response, device_actions)
     _record_job_telemetry(
         job,
@@ -990,19 +987,17 @@ def _resume_approval_job(job_id: str, approved: bool) -> None:
         succeeded=True,
         sensitive=job.get("sensitive", False),
         response=response,
-        history=history,
+        history=normalized_history,
     )
     _emit_chat_event(job_id, "job", _ask_job_payload(ASK_JOBS.get(job_id)))
     _emit_chat_event(job_id, "done", {})
     POLICY.audit_event("job_done", job["session_id"], job_id, "done")
-
 
 def _session_lock(session_id: str):
     with SESSION_LOCKS_GUARD:
         if session_id not in SESSION_LOCKS:
             SESSION_LOCKS[session_id] = threading.Lock()
         return SESSION_LOCKS[session_id]
-
 
 def _task_result_path(job: dict) -> str:
     directory = Path(job["task_dir"]) if job.get("task_dir") else Path(".")
@@ -1015,7 +1010,6 @@ def _task_result_path(job: dict) -> str:
     except (OSError, ValueError):
         return ""
     return files[0]["path"] if files else ""
-
 
 def _run_chat_job(
     job_id: str,
@@ -1102,7 +1096,7 @@ def _run_chat_job(
     scratch_dir.mkdir(parents=True, exist_ok=True)
     try:
         with lock, task_output_scope(WORKSPACE, job["request"], job["task_dir"]):
-            history = copy.deepcopy(SESSION_HISTORIES.get(job["session_id"], []))
+            history = _normalize_message_content(SESSION_HISTORIES.get(job["session_id"], []))
             response, updated_history = run_agent(
                 job["request"],
                 history,
@@ -1186,7 +1180,8 @@ def _run_chat_job(
         latest = ASK_JOBS.get(job_id)
         if latest is None or latest["state"] != "running":
             return
-        _store_session_history(job["session_id"], updated_history)
+        normalized_history = _normalize_message_content(updated_history)
+        _store_session_history(job["session_id"], normalized_history)
         completed = ASK_JOBS.complete(job_id, response, device_actions)
         if completed is None or completed["state"] != "done":
             return
@@ -1196,7 +1191,7 @@ def _run_chat_job(
             succeeded=True,
             sensitive=sensitive,
             response=response,
-            history=updated_history,
+            history=normalized_history,
         )
         _emit_chat_event(job_id, "job", _ask_job_payload(ASK_JOBS.get(job_id)))
         _emit_chat_event(job_id, "done", {})
@@ -1205,7 +1200,6 @@ def _run_chat_job(
     finally:
         if scratch_dir.exists():
             shutil.rmtree(scratch_dir, ignore_errors=True)
-
 
 class HsxHandler(BaseHTTPRequestHandler):
     def log_message(self, _format: str, *args) -> None:
@@ -1870,7 +1864,7 @@ class HsxHandler(BaseHTTPRequestHandler):
                     "role": "user",
                     "content": job["request"],
                 }]
-                full_conversation = SESSION_HISTORIES.get(job["session_id"], [])
+                full_conversation = _normalize_message_content(SESSION_HISTORIES.get(job["session_id"], []))
                 try:
                     saved = FEEDBACK_STORE.record(
                         conversation_id=conversation_id,
@@ -2621,6 +2615,18 @@ def _retention_worker() -> None:
 
 
 if __name__ == "__main__":
+    import subprocess
+    ollama_process = None
+    try:
+        ollama_process = subprocess.Popen(
+            ["ollama", "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        time.sleep(2)
+    except (OSError, FileNotFoundError):
+        LOGGER.warning("Could not launch Ollama automatically; ensure it is running in the background.")
+
     http_server = create_http_server()
     _run_retention_maintenance()
     threading.Thread(target=_retention_worker, name="hsx-retention", daemon=True).start()
@@ -2631,10 +2637,18 @@ if __name__ == "__main__":
             LOGGER.warning("Could not validate the Groq model at startup: %s", error)
     if os.getenv("HSX_ENABLE_SYSTEM_MONITOR", "1").strip().lower() not in {"0", "false", "off", "no"}:
         ANOMALY_MONITOR.on_sample = _notify_resource_alerts
-        ANOMALY_MONITOR.on_anomaly = _notify_system_anomaly
         ANOMALY_MONITOR.start()
     if MOTION_MONITOR.enabled():
         MOTION_MONITOR.on_event = _notify_motion_event
         MOTION_MONITOR.start()
-    print(f"Hsx ready. Loaded {len(TOOLS)} skills: {', '.join(tool['name'] for tool in TOOLS)}")
-    http_server.serve_forever()
+    print("Hsx Online")
+
+    try:
+        http_server.serve_forever()
+    finally:
+        if ollama_process is not None and ollama_process.poll() is None:
+            ollama_process.terminate()
+            try:
+                ollama_process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                ollama_process.kill()

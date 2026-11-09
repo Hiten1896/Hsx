@@ -14,8 +14,15 @@ from agent.hardware.camera import CAMERA
 class CameraStream:
     """Legacy stream handle that delegates device ownership to CameraService."""
 
-    def __init__(self, *, device: str | None = None, rtsp_url: str | None = None, **_options):
-        selected = device or os.getenv("HSX_CAMERA_DEVICE", "/dev/video0")
+    def __init__(self, *, device: str | int | None = None, rtsp_url: str | None = None, **_options):
+        raw_device = device if device is not None else os.getenv("HSX_CAMERA_DEVICE", "0")
+        
+        # Normalize device to match CameraService representation
+        if isinstance(raw_device, int) or (isinstance(raw_device, str) and raw_device.isdigit()):
+            selected = int(raw_device)
+        else:
+            selected = str(raw_device)
+
         if selected != CAMERA.device:
             raise ValueError("CameraService owns the configured device; set HSX_CAMERA_DEVICE to change it.")
         if rtsp_url:

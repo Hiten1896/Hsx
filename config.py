@@ -82,6 +82,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_COMPATIBLE_URL = os.getenv("OPENAI_COMPATIBLE_URL", "")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "").strip()
 MODE = os.getenv("HSX_MODE", "jarvis").strip().lower()
 HOST = os.getenv("HSX_HOST", "127.0.0.1").strip() or "127.0.0.1"
 PORT = int(os.getenv("HSX_PORT", "8000"))

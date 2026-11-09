@@ -1,6 +1,6 @@
 # Anthropic provider SDK. It is loaded only when Anthropic is configured;
 # the other supported providers use the shared HTTP client below the router.
-anthropic
+#anthropic
 # Environment configuration.
 python-dotenv
 PyYAML

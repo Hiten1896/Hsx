@@ -29,7 +29,7 @@ class MotionMonitor:
     def __init__(
         self,
         *,
-        device: str | None = None,
+        device: str | int | None = None,
         snapshot_dir: Path | None = None,
         events_path: Path | None = None,
         config_path: Path | None = None,
@@ -38,7 +38,16 @@ class MotionMonitor:
         max_snapshots: int = 500,
         on_event: Callable[[dict], None] | None = None,
     ):
-        self.device = device or os.getenv("HSX_CAMERA_DEVICE", "/dev/video0")
+        raw_device = device if device is not None else os.getenv("HSX_CAMERA_DEVICE", "0")
+        if isinstance(raw_device, int) or (isinstance(raw_device, str) and raw_device.isdigit()):
+            self.device = int(raw_device)
+            self._is_windows_index = True
+        else:
+            self.device = str(raw_device)
+            self._is_windows_index = False
+            if not re.fullmatch(r"/dev/video\d+", self.device):
+                raise ValueError("Motion camera device must be a /dev/videoN path or integer index.")
+
         self.snapshot_dir = snapshot_dir or DATA_DIR / "snapshots" / "motion"
         self.events_path = events_path or DATA_DIR / "motion_events.json"
         self.config_path = config_path or DATA_DIR / "motion.conf"
@@ -46,8 +55,6 @@ class MotionMonitor:
         self.restart_seconds = restart_seconds
         self.max_snapshots = max_snapshots
         self.on_event = on_event
-        if not re.fullmatch(r"/dev/video\d+", self.device):
-            raise ValueError("Motion camera device must be a /dev/videoN path.")
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._process: subprocess.Popen | None = None
@@ -66,7 +73,11 @@ class MotionMonitor:
 
     def _write_config(self) -> None:
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.snapshot_dir, 0o700)
+        try:
+            os.chmod(self.snapshot_dir, 0o700)
+        except OSError:
+            pass
+        
         settings = (
             "daemon off\n"
             "setup_mode off\n"
@@ -88,7 +99,10 @@ class MotionMonitor:
         temporary = self.config_path.with_suffix(self.config_path.suffix + ".tmp")
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         temporary.write_text(settings, encoding="utf-8")
-        os.chmod(temporary, 0o600)
+        try:
+            os.chmod(temporary, 0o600)
+        except OSError:
+            pass
         temporary.replace(self.config_path)
 
     def health_check(self) -> dict:
@@ -198,11 +212,14 @@ class MotionMonitor:
             try:
                 os.chmod(path, 0o600)
             except OSError:
-                LOGGER.warning("Could not restrict permissions on Motion snapshot %s.", path)
+                pass
             self._seen.add(path.name)
         try:
             atomic_write_json(self.events_path, existing[-MAX_EVENTS:])
-            os.chmod(self.events_path, 0o600)
+            try:
+                os.chmod(self.events_path, 0o600)
+            except OSError:
+                pass
         except (OSError, TypeError, ValueError):
             LOGGER.exception("Could not persist Motion snapshot events.")
             return
