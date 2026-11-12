@@ -1,7 +1,9 @@
-/opt/hsx/logs/*.log {
+__DIR__/logs/*.jsonl __DIR__/logs/*.log {
+    su __USER__ __USER__
     weekly
     rotate 8
     compress
+    delaycompress
     missingok
     notifempty
     copytruncate

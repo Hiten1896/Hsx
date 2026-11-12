@@ -1,4 +1,6 @@
 import base64
+import functools
+import inspect
 import json
 import logging
 import re
@@ -23,6 +25,7 @@ from agent.policy import POLICY
 from agent.autonomy import classify_action
 from agent.rag import RAG_INDEX
 from agent.router import INTENT_ROUTER, LLM_TELEMETRY, ROUTER_LOGGER
+from agent.subagents import AGENT_CONTEXT
 from agent.swarm import plan_task, write_proposal_with_repair
 from config import MEMORY_DB
 
@@ -247,7 +250,7 @@ def _serializable_history(history: list) -> list:
     return convert(history)
 
 
-def run_agent(
+def _run_agent_impl(
     user_input: str,
     conversation_history: list,
     tools: list,
@@ -1294,3 +1297,30 @@ def _local_response(user_input: str, history: list) -> str:
     if "2+2" in lowered or "2 + 2" in lowered:
         return "4"
     return "I can answer directly here or create files locally in your workspace."
+
+
+_RUN_AGENT_SIGNATURE = inspect.signature(_run_agent_impl)
+
+
+@functools.wraps(_run_agent_impl)
+def run_agent(*args, **kwargs):
+    """Run the agent loop and publish the run's context so sub-agents can inherit it."""
+    try:
+        bound = _RUN_AGENT_SIGNATURE.bind_partial(*args, **kwargs)
+        bound.apply_defaults()
+        values = bound.arguments
+    except TypeError:
+        values = kwargs
+    existing = AGENT_CONTEXT.get() or {}
+    token = AGENT_CONTEXT.set({
+        "session_id": values.get("session_id", "default"),
+        "job_id": values.get("job_id", ""),
+        "on_activity_event": values.get("on_activity_event"),
+        "cancel_event": values.get("cancel_event"),
+        "sensitive": bool(values.get("sensitive", False)),
+        "depth": existing.get("depth", 0),
+    })
+    try:
+        return _run_agent_impl(*args, **kwargs)
+    finally:
+        AGENT_CONTEXT.reset(token)

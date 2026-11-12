@@ -20,3 +20,5 @@ python-pptx
 pywebpush
 textual
 rich
+docker
+mcp

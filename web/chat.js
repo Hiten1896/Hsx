@@ -1437,6 +1437,9 @@ function renderActivityEvent(trace, event, data) {
     : (data.past || `Used ${humanizeTool(data.tool)}`);
   const target = step.querySelector('.activity-target-chip');
   target.textContent = (data.past || isRunning || status !== 'completed') ? (data.target || humanizeTool(data.tool)) : '';
+  if (target.textContent.trim().toLowerCase() === step.querySelector('.activity-verb').textContent.trim().toLowerCase()) {
+    target.textContent = '';  // e.g. "Checked [checked]" would just repeat itself
+  }
   target.dataset.filePath = data.file_path || '';
   target.title = data.file_path || data.target || data.tool || '';
   target.classList.toggle('activity-file-target', Boolean(data.file_path));

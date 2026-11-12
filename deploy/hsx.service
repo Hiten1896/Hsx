@@ -1,27 +1,23 @@
 [Unit]
-Description=Hsx local AI agent
-After=network-online.target
+Description=Hsx personal AI agent
+After=network-online.target tailscaled.service
 Wants=network-online.target
-StartLimitIntervalSec=300
-StartLimitBurst=5
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-User=hsx
-SupplementaryGroups=audio
-WorkingDirectory=/opt/hsx
-EnvironmentFile=/opt/hsx/.env
-EnvironmentFile=-/etc/hsx/secrets.env
-Environment=HSX_VENV_DIR=/opt/hsx/venv
-ExecStart=/bin/bash /opt/hsx/scripts/run_hsx.sh
-Restart=on-failure
+User=__USER__
+WorkingDirectory=__DIR__
+ExecStart=__DIR__/.venv/bin/python server.py
+Restart=always
 RestartSec=5
-MemoryHigh=1400M
-MemoryMax=1536M
-StandardOutput=append:/opt/hsx/logs/hsx_service.log
-StandardError=append:/opt/hsx/logs/hsx_service.log
-NoNewPrivileges=false
+TimeoutStopSec=20
+Environment=PYTHONUNBUFFERED=1
+SupplementaryGroups=video audio dialout
+Nice=5
 PrivateTmp=true
+# Optional: cap memory so a runaway job can never freeze the always-on machine.
+# MemoryMax=6G
 
 [Install]
 WantedBy=multi-user.target

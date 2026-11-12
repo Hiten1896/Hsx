@@ -51,7 +51,8 @@ class CameraService:
         raw_device = device if device is not None else os.getenv("HSX_CAMERA_DEVICE", "0")
         if isinstance(raw_device, int) or (isinstance(raw_device, str) and raw_device.isdigit()):
             self.device = int(raw_device)
-            self._is_windows_index = True
+            # A bare index is a DirectShow index on Windows and /dev/video<N> on Linux.
+            self._is_windows_index = os.name == "nt"
         else:
             self.device = str(raw_device)
             self._is_windows_index = False
@@ -80,6 +81,13 @@ class CameraService:
         self._process: subprocess.Popen | None = None
         self._frame: CameraFrame | None = None
         self._last_error = ""
+        self._frames_seen = 0
+        self._dshow_raw = False  # Windows: retry without forcing MJPEG if the camera only offers raw video
+        self._last_stderr = ""
+        try:
+            self._input_fps = max(1, min(60, int(os.getenv("HSX_CAMERA_INPUT_FPS", "30") or 30)))
+        except ValueError:
+            self._input_fps = 30
         self._lifecycle_lock = threading.RLock()
         self._owners: set[str] = set()
         self._owner_timers: dict[str, threading.Timer] = {}
@@ -92,8 +100,26 @@ class CameraService:
             return devices[0]
         return "0"
 
+    def _linux_device(self) -> str:
+        return f"/dev/video{self.device}" if isinstance(self.device, int) else str(self.device)
+
+    def _dshow_codec_args(self) -> list[str]:
+        return [] if self._dshow_raw else ["-vcodec", "mjpeg"]
+
+    def _drain_stderr(self, process: subprocess.Popen) -> None:
+        stream = process.stderr
+        if stream is None:
+            return
+        try:
+            for raw in iter(stream.readline, b""):
+                line = raw.decode("utf-8", errors="replace").strip()
+                if line:
+                    self._last_stderr = line[:300]
+        except (OSError, ValueError):
+            pass
+
     def command(self, ffmpeg: str) -> list[str]:
-        if self._is_windows_index or os.name == "nt":
+        if os.name == "nt":
             return [
                 ffmpeg,
                 "-nostdin",
@@ -108,10 +134,9 @@ class CameraService:
                 "1",
                 "-f",
                 "dshow",
-                "-vcodec",
-                "mjpeg",
+                *self._dshow_codec_args(),
                 "-framerate",
-                "30",
+                str(self._input_fps),
                 "-video_size",
                 f"{self.width}x{self.height}",
                 "-i",
@@ -149,7 +174,7 @@ class CameraService:
                 "-video_size",
                 f"{self.width}x{self.height}",
                 "-i",
-                str(self.device),
+                self._linux_device(),
                 "-an",
                 "-vf",
                 f"scale={self.width}:{self.height}",
@@ -186,7 +211,7 @@ class CameraService:
             raise ValueError("Camera session lease must be between 0 and 1800 seconds.")
         if shutil.which("ffmpeg") is None:
             raise RuntimeError("ffmpeg is not installed on this host.")
-        if not self._is_windows_index and os.name != "nt" and not os.path.exists(str(self.device)):
+        if os.name != "nt" and not os.path.exists(self._linux_device()):
             raise RuntimeError(f"Camera device is unavailable: {self.device}")
 
         already_owned = self.has_owner(owner)
@@ -296,7 +321,7 @@ class CameraService:
             frame = self._frame
         return {
             "running": process is not None and process.poll() is None,
-            "device_available": True if self._is_windows_index or os.name == "nt" else os.path.exists(str(self.device)),
+            "device_available": True if os.name == "nt" else os.path.exists(self._linux_device()),
             "frame_age_seconds": (
                 round(time.monotonic() - frame.captured_at, 3) if frame else None
             ),
@@ -317,6 +342,7 @@ class CameraService:
                 time.time(),
             )
             self._last_error = ""
+            self._frames_seen += 1
             self._condition.notify_all()
 
     def _consume_mjpeg(self, stream) -> None:
@@ -355,20 +381,23 @@ class CameraService:
             return
         delay = self.restart_min_seconds
         while not self._stop.is_set():
-            if not self._is_windows_index and os.name != "nt" and not os.path.exists(str(self.device)):
+            if os.name != "nt" and not os.path.exists(self._linux_device()):
                 self._last_error = f"Camera device is unavailable: {self.device}"
                 self._stop.wait(delay)
                 delay = min(self.restart_max_seconds, delay * 2)
                 continue
             process = None
+            frames_before = self._frames_seen
             try:
                 process = subprocess.Popen(
                     self.command(ffmpeg),
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
                     close_fds=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
                 )
+                threading.Thread(target=self._drain_stderr, args=(process,), daemon=True).start()
                 with self._condition:
                     self._process = process
                     self._condition.notify_all()
@@ -377,6 +406,11 @@ class CameraService:
                 self._consume_mjpeg(process.stdout)
                 if not self._stop.is_set():
                     self._last_error = "FFmpeg camera capture stopped; retrying."
+                    if self._last_stderr:
+                        self._last_error += f" ({self._last_stderr})"
+                    if self._frames_seen == frames_before and os.name == "nt":
+                        # No frame arrived: many Windows webcams cannot deliver MJPEG at this size, so alternate.
+                        self._dshow_raw = not self._dshow_raw
                     LOGGER.warning("%s", self._last_error)
             except (OSError, RuntimeError, ValueError):
                 self._last_error = "Could not start the FFmpeg camera capture."

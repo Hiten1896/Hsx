@@ -16,6 +16,7 @@ APPROVAL_REQUIRED_ACTIONS = {
     "shutdown_reboot",
     "sudo",
     "system_services",
+    "remote_mutation",
 }
 
 
@@ -64,7 +65,11 @@ class PolicyEngine:
                approved: bool | str | None = None, *, approver: str = "system") -> dict:
         name = str(skill.get("name", "unknown"))
         action = classify_action(name, arguments)
-        if is_hard_denied(name, arguments) or action == "read_secrets":
+        if name.startswith("remote_"):
+            from agent.remote_policy import classify_remote_action
+
+            action = classify_remote_action(name, arguments)
+        if is_hard_denied(name, arguments) or action in {"read_secrets", "remote_blocked"}:
             self._audit(session, name, arguments, action, "hard_deny", "denied")
             return {"allowed": False, "status": "denied", "error": "Hsx always blocks actions that expose secrets or disable its security controls."}
         if approved is False or approved == "reject":
@@ -131,6 +136,18 @@ class PolicyEngine:
                 "host_impact": "Writes firmware to the selected connected device; it does not install software on the HP.",
                 "security_risk": "The device's existing program may be erased or replaced. Confirm the target and firmware file.",
             })
+        elif name.startswith("remote_"):
+            if name == "remote_files" and "command" not in review:
+                review["command"] = redact_activity_text(
+                    f"{arguments.get('action', 'access')} {arguments.get('path', '')}", 400
+                )
+            review.update({
+                "host_impact": "Runs on the HP PC as the Hsx service user. What changes depends on the command or path shown.",
+                "security_risk": (
+                    "The command can change files, packages or services on the HP PC. Approve only if the command, "
+                    "folder and purpose are what you expect."
+                ),
+            })
         elif name in {"system_execute", "shell", "run_code"}:
             review.update({
                 "host_impact": (
@@ -185,6 +202,10 @@ class PolicyEngine:
 
     @staticmethod
     def _plain_action(action: str, name: str, arguments: dict) -> str:
+        if name.startswith("remote_"):
+            from agent.remote_policy import describe_remote_action
+
+            return describe_remote_action(name, arguments)
         if action == "install_packages":
             return f"install {arguments.get('package', 'a package')} in its own Python environment"
         if action == "firmware_flash":
@@ -226,6 +247,7 @@ class PolicyEngine:
             "install_packages": "Possible consequence: a pinned package is downloaded into Hsx's project environment.",
             "external_services": "Possible consequence: request data needed for this action may be sent to an external service.",
             "firmware_flash": "Possible consequence: writing firmware can erase or replace a device's current program.",
+            "remote_mutation": "Possible consequence: files, packages or services on the HP PC may change and some changes cannot be undone.",
             "read_secrets": "This action is blocked; sensitive files and credentials cannot be exposed.",
             "pipe_to_shell": "This action is blocked; downloaded or piped scripts cannot be executed.",
         }
