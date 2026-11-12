@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 import json
+import os
 import random
 import threading
 import time
@@ -286,7 +287,14 @@ def call_llm(
     router = default_router()
     providers = getattr(router, "providers", None)
     if isinstance(providers, list):
-        ranked_providers = PROVIDER_BANDIT.rank(providers, prefer_cloud=prefer_cloud)
+        # Keep the order configured in .env (HSX_PROVIDER, then HSX_FALLBACKS). The bandit
+        # re-orders by random sampling and latency, which pushes a slow local model behind
+        # cloud providers; use it only when HSX_ADAPTIVE_ROUTING=1 or cloud is preferred.
+        adaptive = os.getenv("HSX_ADAPTIVE_ROUTING", "0").strip().lower() in {"1", "true", "on", "yes"}
+        if adaptive or prefer_cloud:
+            ranked_providers = PROVIDER_BANDIT.rank(providers, prefer_cloud=prefer_cloud)
+        else:
+            ranked_providers = list(providers)
         if required_provider:
             required = [
                 provider for provider in ranked_providers

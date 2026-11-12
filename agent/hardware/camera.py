@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -54,8 +55,8 @@ class CameraService:
         else:
             self.device = str(raw_device)
             self._is_windows_index = False
-            if not self.device.startswith("/dev/") or "\n" in self.device or "\r" in self.device:
-                raise ValueError("Camera device must be a /dev path or integer index.")
+            if "\n" in self.device or "\r" in self.device or not self.device.strip():
+                raise ValueError("Camera device must not be empty or contain line breaks.")
 
         if restart_min_seconds <= 0 or restart_max_seconds < restart_min_seconds:
             raise ValueError("Camera restart bounds are invalid.")
@@ -83,8 +84,16 @@ class CameraService:
         self._owners: set[str] = set()
         self._owner_timers: dict[str, threading.Timer] = {}
 
+    def _dshow_device_name(self) -> str:
+        if isinstance(self.device, str) and self.device.strip():
+            return self.device.strip()
+        devices = detect_camera_devices()
+        if devices:
+            return devices[0]
+        return "0"
+
     def command(self, ffmpeg: str) -> list[str]:
-        if self._is_windows_index:
+        if self._is_windows_index or os.name == "nt":
             return [
                 ffmpeg,
                 "-nostdin",
@@ -106,7 +115,7 @@ class CameraService:
                 "-video_size",
                 f"{self.width}x{self.height}",
                 "-i",
-                "video=Hy-FHD(5307)-Camera",
+                f"video={self._dshow_device_name()}",
                 "-an",
                 "-r",
                 str(self.frame_rate),
@@ -177,7 +186,7 @@ class CameraService:
             raise ValueError("Camera session lease must be between 0 and 1800 seconds.")
         if shutil.which("ffmpeg") is None:
             raise RuntimeError("ffmpeg is not installed on this host.")
-        if not self._is_windows_index and not os.path.exists(str(self.device)):
+        if not self._is_windows_index and os.name != "nt" and not os.path.exists(str(self.device)):
             raise RuntimeError(f"Camera device is unavailable: {self.device}")
 
         already_owned = self.has_owner(owner)
@@ -287,7 +296,7 @@ class CameraService:
             frame = self._frame
         return {
             "running": process is not None and process.poll() is None,
-            "device_available": True if self._is_windows_index else os.path.exists(str(self.device)),
+            "device_available": True if self._is_windows_index or os.name == "nt" else os.path.exists(str(self.device)),
             "frame_age_seconds": (
                 round(time.monotonic() - frame.captured_at, 3) if frame else None
             ),
@@ -346,7 +355,7 @@ class CameraService:
             return
         delay = self.restart_min_seconds
         while not self._stop.is_set():
-            if not self._is_windows_index and not os.path.exists(str(self.device)):
+            if not self._is_windows_index and os.name != "nt" and not os.path.exists(str(self.device)):
                 self._last_error = f"Camera device is unavailable: {self.device}"
                 self._stop.wait(delay)
                 delay = min(self.restart_max_seconds, delay * 2)
@@ -391,3 +400,62 @@ class CameraService:
 
 
 CAMERA = CameraService()
+
+DEVICE_LISTING_TTL_SECONDS = 60.0
+_device_listing_cache: dict[str, object] = {"fetched_at": 0.0, "devices": []}
+
+
+def detect_camera_devices() -> list[str]:
+    """Auto-detect video capture device names on this host.
+
+    Uses DirectShow device names on Windows (ffmpeg -list_devices true -f dshow
+    -i dummy) and v4l2 device names on Linux. Results are cached briefly so the
+    web UI can poll without respawning ffmpeg.
+    """
+    now = time.monotonic()
+    if now - float(_device_listing_cache["fetched_at"]) < DEVICE_LISTING_TTL_SECONDS:
+        return list(_device_listing_cache["devices"])
+
+    devices: list[str] = []
+    ffmpeg = shutil.which("ffmpeg")
+    if os.name == "nt" and ffmpeg:
+        try:
+            result = subprocess.run(
+                [ffmpeg, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+                capture_output=True,
+                timeout=10,
+                text=True,
+                errors="replace",
+            )
+            for line in (result.stderr or "").splitlines():
+                match = re.search(r'"([^"]+)"\s*\(video\)', line)
+                if match:
+                    devices.append(match.group(1))
+        except (OSError, subprocess.SubprocessError):
+            devices = []
+
+    if not devices and shutil.which("v4l2-ctl"):
+        try:
+            result = subprocess.run(
+                ["v4l2-ctl", "--list-devices"],
+                capture_output=True,
+                timeout=10,
+                text=True,
+                errors="replace",
+            )
+            for line in (result.stdout or "").splitlines():
+                line = line.strip()
+                if line and not line.startswith("/dev/"):
+                    devices.append(line)
+        except (OSError, subprocess.SubprocessError):
+            devices = []
+
+    if not devices:
+        for index in range(3):
+            device_path = f"/dev/video{index}"
+            if os.path.exists(device_path):
+                devices.append(device_path)
+
+    _device_listing_cache["fetched_at"] = now
+    _device_listing_cache["devices"] = devices
+    return list(devices)

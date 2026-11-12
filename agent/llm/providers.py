@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import base64
 import binascii
@@ -9,6 +10,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -501,6 +503,7 @@ class AnthropicProvider(Provider):
 
 class JSONHTTPProvider(Provider):
     endpoint = ""
+    timeout = float(os.getenv("HSX_LLM_TIMEOUT", "30"))
 
     def __init__(self, model: str, endpoint: str, api_key: str = ""):
         self.model = _validated_model_name(model)
@@ -545,10 +548,18 @@ class JSONHTTPProvider(Provider):
 
         return json.dumps(scrub(parsed), ensure_ascii=False)
 
+    def _urlopen(self, request: urllib.request.Request):
+        host = urllib.parse.urlparse(request.full_url).hostname or ""
+        if host in {"127.0.0.1", "localhost", "::1"}:
+            # Never send local traffic through HTTP(S)_PROXY from the environment.
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            return opener.open(request, timeout=self.timeout)
+        return urllib.request.urlopen(request, timeout=self.timeout)
+
     def _open_with_503_retry(self, request: urllib.request.Request):
         for retry in range(3):
             try:
-                return urllib.request.urlopen(request, timeout=30)
+                return self._urlopen(request)
             except urllib.error.HTTPError as error:
                 if error.code != 503 or retry == 2:
                     raise
@@ -943,16 +954,165 @@ class GeminiProvider(JSONHTTPProvider):
 
 class OllamaProvider(JSONHTTPProvider):
     name = "ollama"
+    # Local models can take a long time to load on the first request.
+    timeout = float(os.getenv("OLLAMA_TIMEOUT", "300"))
+
+    def _call(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self._post(payload)
+        except ProviderError as error:
+            if error.detail and "unknown" in error.detail and "connect" in str(error).casefold():
+                raise ProviderError(
+                    f"Ollama is not reachable at {self.endpoint}. Start it with 'ollama serve' "
+                    f"and check that model '{self.model}' is pulled ('ollama list').",
+                    provider=self.name,
+                    detail=error.detail,
+                ) from error
+            raise
+
+    @staticmethod
+    def _parse(data: dict[str, Any]) -> tuple[str, list[dict[str, Any]], str, int]:
+        # The router uses /v1/chat/completions (OpenAI format); also accept native /api/chat.
+        if data.get("choices"):
+            choice = data["choices"][0]
+            message = choice.get("message", {})
+            stop_reason = choice.get("finish_reason") or "stop"
+        else:
+            message = data.get("message", {})
+            stop_reason = "stop"
+        usage = data.get("usage") or {}
+        prompt_tokens = int(usage.get("prompt_tokens") or data.get("prompt_eval_count") or 0)
+        return message.get("content") or "", list(message.get("tool_calls") or []), stop_reason, prompt_tokens
+
+    @staticmethod
+    def _text_tool_calls(content: str, tool_names: set[str]) -> list[dict[str, Any]]:
+        """Small models often print a tool call as JSON text instead of a real tool_call."""
+        text = content.strip()
+        text = re.sub(r"^<tool_call>\s*|\s*</tool_call>$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text).strip()
+        if not text.startswith("{"):
+            return []
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, dict):
+            return []
+        name = parsed.get("name")
+        arguments = parsed.get("arguments", parsed.get("parameters", {}))
+        if isinstance(name, str) and name in tool_names:
+            return [{"id": f"ollama-{name}", "function": {"name": name, "arguments": arguments}}]
+        return []
+
+    _STOPWORDS = frozenset(
+        "the and for you can please what how with that this from have are was were your "
+        "about into just some them then than there when where which will would could should".split()
+    )
+
+    @staticmethod
+    def _message_text(message: dict[str, Any]) -> str:
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return " ".join(
+                str(block.get("text", "")) for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+        return ""
+
+    def _slim(self, request: LLMRequest) -> LLMRequest:
+        """Local models are slow on long prompts: send only the tools the message may need."""
+        try:
+            max_tools = int(os.getenv("OLLAMA_MAX_TOOLS", "8"))
+        except ValueError:
+            max_tools = 8
+        system = request.system
+        if os.getenv("OLLAMA_COMPACT_SYSTEM", "1").strip().lower() not in {"0", "false", "off", "no"}:
+            marker = "Any content inside <hsx-untrusted-memory>"
+            tail = system[system.index(marker):] if marker in system else ""
+            system = (
+                "You are Hsx, a concise and capable assistant running on the owner's server. "
+                "Use a registered tool when it answers better than guessing; machine facts must come only "
+                "from tool results. Use ask_user when needed information is missing. Never say a "
+                "capability is unavailable if a matching tool exists. Tolerate typos and informal language. "
+                "Reply in clean natural language, without internal details. "
+            ) + tail
+        tools = list(request.tools)
+        if max_tools > 0 and len(tools) > max_tools:
+            query_text = ""
+            called: set[str] = set()
+            for message in reversed(request.messages):
+                if not isinstance(message, dict):
+                    continue
+                content = message.get("content")
+                if isinstance(content, list):
+                    called.update(
+                        str(block.get("name")) for block in content
+                        if isinstance(block, dict) and block.get("type") == "tool_use"
+                    )
+                if message.get("role") == "user":
+                    text = self._message_text(message).strip()
+                    if text:  # tool-result turns carry no text; keep walking back
+                        query_text = text.casefold()
+                        break
+            words = {
+                word for word in re.findall(r"[a-z0-9]{3,}", query_text)
+                if word not in self._STOPWORDS
+            }
+            core = {
+                name.strip() for name in os.getenv("OLLAMA_CORE_TOOLS", "ask_user,capabilities").split(",")
+                if name.strip()
+            }
+            scored = []
+            for tool in tools:
+                name = str(tool.get("name", ""))
+                text = f"{name.replace('_', ' ')} {tool.get('description', '')}".casefold()
+                name_words = set(re.findall(r"[a-z0-9]{3,}", name.casefold().replace("_", " ")))
+                score = sum(1 for word in words if word in text) + 2 * len(words & name_words)
+                scored.append((score, name, tool))
+            keep = {name for _, name, _ in scored if name in core or name in called}
+            for score, name, _ in sorted(scored, key=lambda item: item[0], reverse=True):
+                if score <= 0 or len(keep) >= max_tools:
+                    break
+                keep.add(name)
+            tools = [tool for tool in tools if tool.get("name") in keep]
+            LOGGER.info("Ollama: sending %d of %d tools.", len(tools), len(request.tools))
+        return dataclasses.replace(request, tools=tools, system=system)
 
     def generate(self, request: LLMRequest) -> EventStream:
+        request = self._slim(request)
         payload = to_openai_payload(request, self.model)
         payload["stream"] = False
-        data = self._post(payload)
-        message = data.get("message", {})
-        content = message.get("content") or ""
+        if not payload.get("tools"):
+            payload.pop("tools", None)
+        tool_names = {tool["name"] for tool in request.tools}
+
+        content, tool_calls, stop_reason, prompt_tokens = self._parse(self._call(payload))
+        if prompt_tokens and 1900 <= prompt_tokens <= 2100:
+            LOGGER.warning(
+                "Ollama prompt was %d tokens, which matches the default 2048 context window; the prompt was "
+                "probably truncated. Set OLLAMA_CONTEXT_LENGTH=8192 for the Ollama server and restart it.",
+                prompt_tokens,
+            )
+        if not content.strip() and not tool_calls and payload.get("tools"):
+            LOGGER.warning("Ollama returned an empty reply with %d tools; retrying once without tools.", len(payload["tools"]))
+            retry = dict(payload)
+            retry.pop("tools", None)
+            content, tool_calls, stop_reason, prompt_tokens = self._parse(self._call(retry))
+        if content.strip() and not tool_calls and tool_names:
+            tool_calls = self._text_tool_calls(content, tool_names)
+            if tool_calls:
+                content = ""
+        if not content.strip() and not tool_calls:
+            raise ProviderError(
+                f"Ollama returned an empty reply (prompt_tokens={prompt_tokens}). "
+                "The prompt is probably larger than the model's context window.",
+                provider=self.name,
+            )
         if content:
             yield LLMEvent(type="text_delta", text=content)
-        for tool_call in message.get("tool_calls", []):
+        for tool_call in tool_calls:
             function = tool_call.get("function", {})
             yield LLMEvent(
                 type="tool_call",
@@ -993,6 +1153,7 @@ class GroqProvider(OpenAICompatibleProvider):
     _catalog_cache: dict[str, tuple[float, list[str]]] = {}
     _catalog_ttl_seconds = 300
     _reported_missing: set[tuple[str, str]] = set()
+    _catalog_failed_until: dict[str, float] = {}
 
     def __init__(
         self,
@@ -1003,8 +1164,14 @@ class GroqProvider(OpenAICompatibleProvider):
     ):
         self.api_key = api_key
         self.models_url = models_url or self.models_endpoint
-        models = self._fetch_models()
         selected = configured_model.strip()
+        try:
+            models = self._fetch_models()
+        except ProviderError as error:
+            if not selected:
+                raise
+            LOGGER.warning("Groq catalog unavailable (%s); using configured model %s.", error, selected)
+            models = [selected]
         if selected and selected not in models:
             if models:
                 self._report_missing_model(selected, models)
@@ -1026,22 +1193,26 @@ class GroqProvider(OpenAICompatibleProvider):
         cached = self._catalog_cache.get(cache_key)
         if not force and cached and time.monotonic() - cached[0] < self._catalog_ttl_seconds:
             return list(cached[1])
+        if not force and time.monotonic() < self._catalog_failed_until.get(cache_key, 0.0):
+            raise ProviderError("Groq model catalog is unavailable.", provider="groq")
         request = urllib.request.Request(
             self.models_url,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Accept": "application/json",
+                "User-Agent": "Hsx/1.0 (+https://github.com/Hiten1896/Hsx)",
             },
             method="GET",
         )
         try:
-            with urllib.request.urlopen(request, timeout=15) as response:
+            with urllib.request.urlopen(request, timeout=5) as response:
                 body = response.read().decode("utf-8", errors="replace")
             data = json.loads(body)
         except urllib.error.HTTPError as error:
             body = error.read().decode("utf-8", errors="replace")
             detail = self._error_detail(str(error.code), body)
             LOGGER.warning("Groq model catalog HTTP %s response: %s", error.code, detail)
+            self._catalog_failed_until[cache_key] = time.monotonic() + 60
             raise ProviderError(
                 "Groq model catalog is unavailable.",
                 provider="groq",
@@ -1050,6 +1221,7 @@ class GroqProvider(OpenAICompatibleProvider):
             ) from error
         except (OSError, json.JSONDecodeError) as error:
             LOGGER.warning("Groq model catalog request failed: %s", error)
+            self._catalog_failed_until[cache_key] = time.monotonic() + 60
             raise ProviderError("Groq model catalog is unavailable.", provider="groq") from error
         model_data = data.get("data") if isinstance(data, dict) else None
         if not isinstance(model_data, list):

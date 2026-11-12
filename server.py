@@ -2,7 +2,10 @@ import base64
 import binascii
 import difflib
 import errno
+import glob
 import hmac
+import http.client
+import socket
 import io
 import json
 import logging
@@ -12,6 +15,7 @@ import queue
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -20,6 +24,7 @@ import uuid
 from collections.abc import Callable
 from http.cookies import SimpleCookie
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
@@ -38,7 +43,7 @@ from agent.devices import DeviceRegistry, system_body_state
 from agent.feedback import FeedbackStore, feedback_context_metadata
 from agent.conversations import ConversationStore
 from agent.hardware import AUDIO_ALERTS, CAMERA, MICROPHONE, MOTION_MONITOR
-from agent.hardware.camera import MAX_FRAME_AGE_SECONDS, camera_session_owner
+from agent.hardware.camera import MAX_FRAME_AGE_SECONDS, camera_session_owner, detect_camera_devices
 from agent.hardware.microphone import microphone_session_owner
 from agent.llm.router import default_router
 from agent.llm.types import LLMRequest
@@ -46,7 +51,6 @@ from agent.llm_client import PROVIDER_BANDIT, call_llm, record_provider_feedback
 from agent.llm.providers import GroqProvider, ProviderError
 from agent.ml.anomaly import ANOMALY_MONITOR, SystemMetrics
 from agent.ml.forecaster import FORECASTER, classify_job
-from agent.ml.dataset_exporter import SFT_DATASET
 from agent.ml.intent_learning import UNCERTAIN_INTENTS
 from agent.ml.log_recorder import LOG_RECORDER
 from agent.mesh.node_gateway import MeshGateway
@@ -164,6 +168,18 @@ _ACTIVITY_FILE_TOOLS = {
     "make_website", "report", "run_code", "shell", "system_execute", "video_edit",
 }
 MESH_GATEWAY = MeshGateway.from_environment()
+
+# Remote HP PC camera (MJPEG over Tailscale). The browser loads it in an <img>, so its
+# origin must be allowed by the CSP img-src below or the feed is blocked. Same variable
+# name the setup notes use: HSX_CAMERA_STREAM_URL.
+CAMERA_STREAM_URL = os.environ.get(
+    "HSX_CAMERA_STREAM_URL", "http://100.88.218.65:8080/stream?token=hsx-change-me"
+).strip()
+_camera_url_parts = urlsplit(CAMERA_STREAM_URL)
+CAMERA_STREAM_ORIGIN = (
+    f"{_camera_url_parts.scheme}://{_camera_url_parts.netloc}" if _camera_url_parts.netloc else ""
+)
+REMOTE_CAMERA_NAME = os.environ.get("HSX_REMOTE_CAMERA_NAME", "").strip()
 
 def _hardware_audio_alert(*, succeeded: bool, message: str = "") -> None:
     try:
@@ -477,16 +493,6 @@ def _record_feedback_learning(job: dict, history: list, rating: str) -> None:
             job.get("result", ""),
             normalized_rating,
         )
-        SFT_DATASET.remove_job(job_id)
-        if normalized_rating == "up":
-            normalized_history = _normalize_message_content(history) if history else None
-            SFT_DATASET.record_success(
-                job.get("request", ""),
-                job.get("result", ""),
-                job_id=job_id,
-                history=normalized_history,
-                sensitive=False,
-            )
     except (OSError, RuntimeError, TypeError, ValueError):
         LOGGER.exception("Could not persist feedback learning data for job %s.", job.get("id", ""))
 
@@ -1011,6 +1017,159 @@ def _task_result_path(job: dict) -> str:
         return ""
     return files[0]["path"] if files else ""
 
+_REMOTE_INFO_CACHE: dict = {"at": 0.0, "value": {}}
+
+
+def _remote_stream_token() -> str:
+    return parse_qs(_camera_url_parts.query).get("token", [""])[0]
+
+
+def _tailscale_hostname(ip: str) -> str:
+    """Tailscale machine name for an IP (the HP PC's own name, e.g. amd1)."""
+    try:
+        result = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True, text=True, timeout=4, check=False,
+        )
+        data = json.loads(result.stdout or "{}")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return ""
+    for peer in [*(data.get("Peer") or {}).values(), data.get("Self") or {}]:
+        if ip in (peer.get("TailscaleIPs") or []):
+            return str(peer.get("HostName") or str(peer.get("DNSName", "")).split(".")[0])
+    return ""
+
+
+def _remote_camera_info() -> dict:
+    """Detect (never hardcode) what the remote camera is called.
+
+    Order: HSX_REMOTE_CAMERA_NAME override -> the stream service's own /info ->
+    Tailscale machine name -> reverse DNS -> the host address.
+    """
+    now = time.time()
+    if _REMOTE_INFO_CACHE["value"] and now - _REMOTE_INFO_CACHE["at"] < 60:
+        return _REMOTE_INFO_CACHE["value"]
+    host_ip = _camera_url_parts.hostname or ""
+    camera, machine, source = REMOTE_CAMERA_NAME, "", ("env" if REMOTE_CAMERA_NAME else "")
+    if CAMERA_STREAM_ORIGIN:
+        from urllib.request import urlopen
+
+        for path in ("/info", "/status", "/health"):
+            try:
+                with urlopen(f"{CAMERA_STREAM_ORIGIN}{path}?token={_remote_stream_token()}", timeout=2) as response:
+                    data = json.loads(response.read(4096).decode("utf-8", "replace"))
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            machine = str(data.get("hostname") or data.get("host") or data.get("machine") or "")[:60]
+            found = str(data.get("name") or data.get("camera") or data.get("device") or data.get("hardware") or "")[:80]
+            if found and not camera:
+                camera, source = found, "stream /info"
+            if machine or found:
+                break
+    if not machine and host_ip:
+        machine = _tailscale_hostname(host_ip)
+        if machine and not source:
+            source = "tailscale"
+    if not machine and host_ip:
+        try:
+            machine = socket.gethostbyaddr(host_ip)[0].split(".")[0]
+            source = source or "reverse DNS"
+        except OSError:
+            pass
+    label = " · ".join(part for part in (machine, camera) if part) or host_ip
+    info = {
+        "label": label,
+        "name": camera,
+        "host": machine,
+        "address": host_ip,
+        "source": source or "address",
+        "remote": bool(CAMERA_STREAM_ORIGIN),
+    }
+    if machine or camera:
+        _REMOTE_INFO_CACHE.update(at=now, value=info)
+    return info
+
+
+def _remote_name_payload() -> dict:
+    if CAMERA_STREAM_ORIGIN:
+        return _remote_camera_info()
+    label = str(system_info().get("hostname") or "")
+    return {"label": label, "name": "", "host": label, "address": "", "source": "this host", "remote": False}
+
+
+_PART_STAMP = re.compile(rb"x-(?:hsx-)?(?:captured-at|capture-time|timestamp):\s*([0-9.]+)", re.I)
+_PART_LENGTH = re.compile(rb"content-length:\s*(\d+)", re.I)
+
+
+def _iter_mjpeg_frames(upstream, stop: threading.Event):
+    """Yield (jpeg_bytes, source_timestamp_or_None) from a multipart MJPEG stream."""
+    buffer = bytearray()
+    while not stop.is_set():
+        chunk = upstream.read1(65536) if hasattr(upstream, "read1") else upstream.read(65536)
+        if not chunk:
+            return
+        buffer += chunk
+        while True:
+            start = buffer.find(b"\xff\xd8")
+            if start < 0:
+                if len(buffer) > 65536:
+                    del buffer[:-8192]
+                break
+            head = bytes(buffer[:start])
+            lengths = _PART_LENGTH.findall(head)
+            if lengths:
+                size = int(lengths[-1])
+                if size > 8 * 1024 * 1024:
+                    buffer.clear()
+                    break
+                if len(buffer) < start + size:
+                    break
+                frame = bytes(buffer[start:start + size])
+                del buffer[:start + size]
+            else:
+                end = buffer.find(b"\xff\xd9", start + 2)
+                if end < 0:
+                    if len(buffer) > 8 * 1024 * 1024:
+                        buffer.clear()
+                    break
+                frame = bytes(buffer[start:end + 2])
+                del buffer[:end + 2]
+            stamps = _PART_STAMP.findall(head)
+            yield frame, (float(stamps[-1]) if stamps else None)
+
+
+def _detect_host_cameras() -> list:
+    """List camera devices on the Hsx host.
+
+    The HP PC server node runs Debian 13 headless, where cameras are V4L2
+    devices (/dev/videoN) rather than Windows DirectShow devices, so device
+    discovery uses ``v4l2-ctl --list-devices`` there.
+    """
+    if sys.platform == "win32":
+        return detect_camera_devices()
+    devices: list[str] = []
+    try:
+        result = subprocess.run(
+            ["v4l2-ctl", "--list-devices"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        current_name = ""
+        for line in result.stdout.splitlines():
+            if line and not line[0].isspace():
+                current_name = line.strip()
+            elif current_name and re.fullmatch(r"\s*/dev/video\d+\s*", line):
+                devices.append(f"{current_name} ({line.strip()})")
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if devices:
+        return devices
+    return sorted(glob.glob("/dev/video*"))
+
 def _run_chat_job(
     job_id: str,
     approvals: dict | None = None,
@@ -1222,7 +1381,7 @@ class HsxHandler(BaseHTTPRequestHandler):
             "Content-Security-Policy",
             "default-src 'self'; base-uri 'self'; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com; "
             "font-src 'self' data:; form-action 'self'; "
-            "img-src 'self' data: blob:; media-src 'self' blob:; "
+            "img-src 'self' data: blob: " + CAMERA_STREAM_ORIGIN + "; media-src 'self' blob:; "
             "object-src 'none'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; "
             "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
         )
@@ -1378,6 +1537,127 @@ class HsxHandler(BaseHTTPRequestHandler):
         except (OSError, TimeoutError):
             return
 
+    def _stream_remote_camera(self) -> None:
+        """Relay the remote (HP PC) MJPEG camera so the browser never needs Tailscale or the token.
+
+        Only the newest frame is forwarded, so a slow link drops frames instead of falling behind.
+        Each frame is stamped with its capture time and the source system's clock. When the browser
+        disconnects, the upstream connection is shut at once so the HP PC stops its camera.
+        """
+        if not CAMERA_STREAM_URL or not _camera_url_parts.hostname:
+            self._json({"error": "No remote camera is configured (HSX_CAMERA_STREAM_URL)."}, 404)
+            return
+        connection_class = (
+            http.client.HTTPSConnection if _camera_url_parts.scheme == "https" else http.client.HTTPConnection
+        )
+        target = _camera_url_parts.path or "/"
+        if _camera_url_parts.query:
+            target += "?" + _camera_url_parts.query
+        upstream_connection = connection_class(_camera_url_parts.hostname, _camera_url_parts.port, timeout=10)
+        upstream_sock = None
+        try:
+            upstream_connection.request("GET", target)
+            # http.client hands the socket to the response for streaming bodies, so keep our own
+            # reference: shutting it down is what makes the HP PC notice and stop its camera.
+            upstream_sock = upstream_connection.sock
+            upstream = upstream_connection.getresponse()
+            if upstream.status != 200:
+                raise OSError(f"the camera service answered HTTP {upstream.status}")
+        except (OSError, http.client.HTTPException) as error:
+            upstream_connection.close()
+            self._json({"error": f"Remote camera unreachable: {error}. Check Tailscale and the camera service."}, 502)
+            return
+        # Offset of the HP clock vs this server's clock (HTTP Date has 1 s resolution, so
+        # anything under 2 s is treated as "clocks agree" to avoid a jittery clock).
+        source_offset = 0.0
+        try:
+            source_offset = parsedate_to_datetime(upstream.headers.get("Date", "")).timestamp() + 0.5 - time.time()
+        except (TypeError, ValueError):
+            pass
+        if abs(source_offset) < 2.0:
+            source_offset = 0.0
+
+        condition = threading.Condition()
+        stop = threading.Event()
+        state = {"frame": None, "version": 0, "closed": False, "error": ""}
+
+        def close_upstream() -> None:
+            stop.set()
+            try:
+                if upstream_sock is not None:
+                    upstream_sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                upstream.close()
+            except OSError:
+                pass
+            upstream_connection.close()
+
+        def reader() -> None:
+            try:
+                for data, stamp in _iter_mjpeg_frames(upstream, stop):
+                    arrived = time.time()
+                    if stamp is not None:
+                        source_time, captured = stamp, stamp - source_offset
+                    else:
+                        captured, source_time = arrived, arrived + source_offset
+                    with condition:
+                        state["frame"] = (data, captured, source_time)
+                        state["version"] += 1
+                        condition.notify_all()
+            except (OSError, http.client.HTTPException, ValueError) as error:
+                state["error"] = str(error)
+            finally:
+                with condition:
+                    state["closed"] = True
+                    condition.notify_all()
+
+        threading.Thread(target=reader, name="hsx-remote-camera", daemon=True).start()
+        with condition:
+            condition.wait_for(lambda: state["version"] > 0 or state["closed"], timeout=10)
+            first = state["frame"]
+        if first is None:
+            close_upstream()
+            self._json(
+                {"error": "Connected, but no video arrived in 10 s (camera busy or the camera service is failing)."},
+                503,
+            )
+            return
+
+        self.send_response(200)
+        self._security_headers()
+        self._cors_headers()
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Connection", "close")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("X-Hsx-Server-Time", f"{time.time():.6f}")
+        self.end_headers()
+        version = 0
+        try:
+            self.connection.settimeout(5.0)
+            while True:
+                with condition:
+                    condition.wait_for(lambda: state["version"] != version or state["closed"], timeout=5)
+                    if state["version"] == version:
+                        return
+                    data, captured, source_time = state["frame"]
+                    version = state["version"]
+                self.wfile.write(
+                    b"--frame\r\nContent-Type: image/jpeg\r\n"
+                    + f"Content-Length: {len(data)}\r\n".encode("ascii")
+                    + f"X-Hsx-Captured-At: {captured:.6f}\r\n".encode("ascii")
+                    + f"X-Hsx-Source-Time: {source_time:.6f}\r\n\r\n".encode("ascii")
+                    + data
+                    + b"\r\n"
+                )
+                self.wfile.flush()
+        except (OSError, TimeoutError):
+            return
+        finally:
+            close_upstream()
+
     def do_GET(self) -> None:
         path = self._request_path()
         if path.startswith("/api/music/stream/"):
@@ -1477,6 +1757,13 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif path == "/api/camera/stream":
             self._stream_camera()
             return
+        elif path == "/api/camera/remote-stream":
+            self._stream_remote_camera()
+            return
+        elif path == "/api/camera/remote-info":
+            self._json(_remote_name_payload())
+        elif path == "/api/camera/devices":
+            self._json({"devices": _detect_host_cameras()})
         elif path == "/api/mode":
             self._json({"mode": MODE})
         elif path == "/api/jobs":
@@ -2549,6 +2836,16 @@ class HsxHandler(BaseHTTPRequestHandler):
             self._json({"error": "Not found."}, 404)
             return
         page = asset.read_bytes()
+        if asset.name == "index.html" and CAMERA_STREAM_URL:
+            import html as _html
+            import re as _re
+
+            page = _re.sub(
+                rb'data-remote-camera="[^"]*"',
+                b'data-remote-camera="1"',
+                page,
+                count=1,
+            )
         content_type = {
             ".css": "text/css",
             ".js": "text/javascript",
@@ -2616,16 +2913,52 @@ def _retention_worker() -> None:
 
 if __name__ == "__main__":
     import subprocess
+    import urllib.request as _urlreq
+
+    def _ollama_up(base_url: str) -> bool:
+        try:
+            opener = _urlreq.build_opener(_urlreq.ProxyHandler({}))
+            with opener.open(f"{base_url}/api/tags", timeout=1):
+                return True
+        except OSError:
+            return False
+
     ollama_process = None
-    try:
-        ollama_process = subprocess.Popen(
-            ["ollama", "serve"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+    _ollama_base = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").strip().rstrip("/")
+    if _ollama_base.endswith("/v1"):
+        _ollama_base = _ollama_base[:-3]
+    if _ollama_up(_ollama_base):
+        # Something (usually the tray app) already owns the port. A second `ollama serve`
+        # would fail silently and the old instance, with its default 2048-token context,
+        # would keep answering.
+        LOGGER.warning(
+            "Ollama is already running, so its context settings were NOT applied. Quit the Ollama "
+            "tray app and any other ollama process and restart this server."
         )
-        time.sleep(2)
-    except (OSError, FileNotFoundError):
-        LOGGER.warning("Could not launch Ollama automatically; ensure it is running in the background.")
+    else:
+        try:
+            ollama_env = os.environ.copy()
+            ollama_env.setdefault("OLLAMA_CONTEXT_LENGTH", "8192")
+            ollama_env.setdefault("OLLAMA_KEEP_ALIVE", "30m")
+            ollama_process = subprocess.Popen(
+                ["ollama", "serve"],
+                env=ollama_env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+            for _ in range(30):
+                if ollama_process.poll() is not None:
+                    LOGGER.warning("Ollama exited right after launch (code %s).", ollama_process.returncode)
+                    ollama_process = None
+                    break
+                if _ollama_up(_ollama_base):
+                    break
+                time.sleep(1)
+            else:
+                LOGGER.warning("Ollama did not become ready within 30 seconds.")
+        except (OSError, FileNotFoundError):
+            LOGGER.warning("Could not launch Ollama automatically; ensure it is running in the background.")
 
     http_server = create_http_server()
     _run_retention_maintenance()

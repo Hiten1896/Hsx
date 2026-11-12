@@ -172,7 +172,10 @@ def default_router() -> LLMRouter:
         elif name == "ollama" and ollama_model:
             from config import OLLAMA_URL
 
-            providers.append(OllamaProvider(ollama_model, f"{OLLAMA_URL.rstrip('/')}/v1/chat/completions"))
+            base = OLLAMA_URL.strip().rstrip("/")
+            if base.endswith("/v1"):
+                base = base[:-3]
+            providers.append(OllamaProvider(ollama_model, f"{base}/v1/chat/completions"))
         elif name == "openrouter" and keys.get(name):
             openrouter_model = model_setting("OPENROUTER_MODEL", "google/gemini-3.6-flash")
             providers.append(OpenAICompatibleProvider("openrouter", keys[name], openrouter_model, "https://openrouter.ai/api/v1/chat/completions"))

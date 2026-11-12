@@ -767,7 +767,7 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 .chat-history-action:hover { color: var(--text); background: var(--surface-raised); }
 .chat-controls { background: color-mix(in srgb, var(--background) 94%, transparent); }
 .camera-sidebar { min-height: 0; border-color: var(--border); background: var(--sidebar); }
-.camera-sidebar { grid-template-rows: auto minmax(0, 1fr); gap: 12px; }
+.camera-sidebar { grid-template-rows: minmax(0, 1fr); gap: 12px; }
 .camera-sidebar > .camera-panel { min-height: 0; overflow: hidden; }
 .camera-sidebar > .artifacts-panel { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; max-height: none; margin-top: 0; overflow: hidden; }
 .camera-sidebar > .artifacts-panel .artifacts-heading { position: relative; z-index: 1; background: var(--surface); }
@@ -1264,3 +1264,255 @@ kbd { padding: 2px 4px; border: 1px solid #3c473f; border-radius: 4px; color: #a
 .activity-running button { padding: 4px 7px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; font-size: 9px; }
 .activity-running button:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
 @media (hover: none) { .chat-history-action { opacity: 1; } }
+
+
+/* Live cameras panel — reuses existing .camera-panel / .camera-view / .camera-metrics styles. */
+.camera-feeds-panel {
+  position: fixed; z-index: 41; inset: 0 0 0 auto;
+  display: flex; flex-direction: column; gap: 12px;
+  width: min(var(--camera-feeds-width, 340px), 94vw); height: 100dvh;
+  overflow-y: auto; padding: 22px 18px;
+  border-left: 1px solid var(--border);
+  background: var(--sidebar);
+  transform: translateX(105%);
+  transition: transform .2s ease;
+}
+.camera-feeds-panel.is-open { transform: translateX(0); }
+.camera-feeds-panel > .camera-panel { flex: 0 0 auto; }
+.camera-feeds-close {
+  position: absolute; z-index: 8; top: 10px; right: 10px;
+  display: grid; place-items: center; width: 34px; height: 34px; padding: 0;
+  border: 1px solid var(--border); border-radius: 50%;
+  color: var(--text); background: var(--surface-raised);
+}
+.camera-feeds-close:hover { border-color: var(--muted); background: var(--surface); }
+.camera-feeds-close svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-width: 2; }
+.camera-feeds-resize-handle {
+  position: absolute; z-index: 7; top: 0; bottom: 0; left: 0; width: 12px;
+  cursor: ew-resize; touch-action: none;
+}
+.camera-feeds-resize-handle::after {
+  content: ""; position: absolute; top: 50%; left: 4px; width: 4px; height: 48px;
+  transform: translateY(-50%); border-radius: 4px;
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
+}
+.camera-feeds-list { display: flex; flex-direction: column; gap: 12px; }
+.camera-feeds-panel .camera-view { width: 100%; aspect-ratio: 16 / 9; }
+.camera-feeds-panel video.camera-frame { width: 100%; height: 100%; object-fit: cover; }
+body.camera-feeds-resizing { cursor: ew-resize; user-select: none; }
+@media (min-width: 701px) { .camera-toggle { display: inline-flex; } }
+/* Desktop: the panel takes the artifact sidebar's grid column, so chat and header controls move with it. */
+@media (min-width: 1101px) {
+  .app-shell.camera-feeds-open { grid-template-columns: 258px minmax(0, 1fr) var(--camera-feeds-width, 340px); }
+  .app-shell.camera-feeds-open .camera-sidebar { display: none; }
+  .app-shell.camera-feeds-open .camera-feeds-panel {
+    position: relative; inset: auto; width: auto; max-width: none;
+    transform: none; border-left: 1px solid var(--border);
+  }
+}
+@media (min-width: 1500px) {
+  .app-shell.camera-feeds-open { grid-template-columns: 276px minmax(0, 1fr) var(--camera-feeds-width, 370px); }
+}
+/* === v18 fixes ============================================================
+   1. Composer auto-grows (Claude-style) with no visible scrollbar.
+   2. Camera panel open => chat history hides automatically; chat column has
+      a hard minimum width; on narrower windows the camera panel overlays
+      instead of squeezing the chat.
+   ========================================================================= */
+.composer textarea { overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none; }
+.composer textarea::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.composer textarea { max-height: 240px; }
+
+@media (min-width: 1101px) {
+  /* Never squeeze the chat below a comfortable 520px. */
+  .app-shell.camera-feeds-open { grid-template-columns: 258px minmax(520px, 1fr) var(--camera-feeds-width, 340px); }
+  /* Camera panel expanded => close the chat history panel automatically. */
+  .app-shell.camera-feeds-open .history-panel { display: none; }
+}
+@media (min-width: 1101px) and (max-width: 1360px) {
+  /* Not enough room for three columns: overlay the camera panel, keep chat wide. */
+  .app-shell.camera-feeds-open { grid-template-columns: 258px minmax(0, 1fr); }
+  .app-shell.camera-feeds-open .camera-feeds-panel {
+    position: fixed; z-index: 41; inset: 0 0 0 auto;
+    width: min(var(--camera-feeds-width, 340px), 94vw); height: 100dvh;
+    transform: none; border-left: 1px solid var(--border);
+  }
+}
+@media (min-width: 1500px) {
+  .app-shell.camera-feeds-open { grid-template-columns: 276px minmax(520px, 1fr) var(--camera-feeds-width, 370px); }
+}
+
+/* === v19 fixes ============================================================
+   1. Camera panel docks beside the chat (chat shifts, never covered) at every
+      desktop width, and the chat history sidebar closes automatically.
+   2. Sidebar toggle button (beside notifications) opens/closes chat history.
+   3. Per-camera refresh buttons; compact camera names.
+   ========================================================================= */
+.sidebar-toggle { display: inline-flex; }
+.camera-feeds-panel[hidden] { display: none; }
+
+@media (min-width: 701px) {
+  .app-shell { --sb-w: 230px; --right-w: 0px; grid-template-columns: var(--sb-w) minmax(0, 1fr) var(--right-w); transition: grid-template-columns .2s ease; }
+  .app-shell > aside.sidebar { grid-column: 1; grid-row: 1; }
+  .app-shell > main.chat-area { grid-column: 2; grid-row: 1; }
+  .app-shell > aside.camera-sidebar, .app-shell > aside.camera-feeds-panel { grid-column: 3; grid-row: 1; }
+  .app-shell.sidebar-collapsed { --sb-w: 0px; }
+  .app-shell.sidebar-collapsed > aside.sidebar { visibility: hidden; padding-right: 0; padding-left: 0; border-right: 0; pointer-events: none; }
+}
+@media (min-width: 1101px) { .app-shell { --sb-w: 258px; --right-w: 340px; } .app-shell.sidebar-collapsed { --sb-w: 0px; } }
+@media (min-width: 1500px) { .app-shell { --sb-w: 276px; --right-w: 370px; } .app-shell.sidebar-collapsed { --sb-w: 0px; } }
+@media (min-width: 701px) {
+  /* Camera panel open: docked column, chat shifts, sidebar column collapses. */
+  .app-shell.camera-feeds-open { --right-w: var(--camera-feeds-width, 340px); grid-template-columns: var(--sb-w) minmax(0, 1fr) var(--right-w); }
+  .app-shell.camera-feeds-open > aside.camera-sidebar { display: none; }
+  .app-shell.camera-feeds-open > aside.camera-feeds-panel {
+    position: relative; inset: auto; z-index: 1; width: auto; max-width: none; height: 100dvh;
+    transform: none; border-left: 1px solid var(--border);
+  }
+  .app-shell.camera-feeds-open .sidebar .history-panel { display: flex; }
+}
+
+/* === v20: shared slim panel bar, identical camera cards ================= */
+.panel-bar { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; height: 32px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--surface) 70%, var(--sidebar)); }
+.panel-bar h2 { flex: 1 1 auto; min-width: 0; margin: 0; overflow: hidden; color: var(--text); font-size: 11.5px; font-weight: 600; letter-spacing: .02em; text-overflow: ellipsis; white-space: nowrap; }
+.panel-bar-button { display: grid; flex: 0 0 auto; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; }
+.panel-bar-button:hover { color: var(--text); background: var(--surface-raised); }
+.panel-bar-button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+
+/* Camera panel = bar + scrolling list */
+.camera-feeds-panel { gap: 0; padding: 0; overflow: hidden; }
+.camera-feeds-panel > .camera-feeds-list { flex: 1 1 auto; min-height: 0; padding: 10px 12px 14px; overflow-y: auto; scrollbar-width: thin; gap: 10px; }
+.camera-feeds-panel .camera-panel { grid-template-rows: 30px auto 26px; }
+.camera-feeds-panel .camera-heading { height: 30px; padding: 0 8px 0 12px; }
+.camera-feeds-panel .camera-heading h2 { font-size: 10.5px; font-weight: 600; letter-spacing: .01em; color: var(--muted); }
+.camera-feeds-panel .camera-heading-actions { flex: 0 0 auto; gap: 5px; }
+.camera-feeds-panel .camera-heading .camera-badge { min-height: 20px; padding: 1px 6px; font-size: 7.5px; }
+.camera-feeds-panel .camera-heading .panel-refresh { width: 22px; height: 22px; border-radius: 6px; }
+.camera-feeds-panel .camera-heading .panel-refresh svg { width: 12px; height: 12px; }
+.camera-feeds-panel .camera-metrics { font-size: 9px; }
+.camera-feeds-panel .camera-clip-time { z-index: 2; }
+.camera-feeds-panel .camera-placeholder strong, .camera-feeds-panel .camera-placeholder span { text-align: center; }
+
+/* Artifacts panel = bar + content */
+.camera-sidebar { padding: 0; grid-template-rows: auto minmax(0, 1fr); gap: 0; }
+.camera-sidebar > .artifacts-panel { margin: 10px 12px 12px; }
+.artifacts-location { max-width: none; margin: 0; padding: 7px 12px; border-bottom: 1px solid var(--border); }
+
+/* Document viewer dialog uses the same slim bar */
+.activity-file-viewer > header { height: 32px; padding: 0 6px 0 12px; }
+.activity-file-viewer h2 { font-size: 11px; }
+.activity-file-viewer header button { width: 24px; height: 24px; border-radius: 6px; color: var(--muted); font-size: 18px; line-height: 1; }
+.activity-file-viewer header button:hover { color: var(--text); background: var(--surface-raised); }
+#activity-viewer-content { max-height: calc(85dvh - 33px); }
+
+/* Header toggles */
+.sidebar-toggle[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
+.artifacts-toggle { display: none; }
+@media (min-width: 1101px) {
+  .artifacts-toggle { display: inline-flex; }
+  .app-shell.artifacts-hidden:not(.camera-feeds-open) { --right-w: 0px; }
+  .app-shell.artifacts-hidden > aside.camera-sidebar { display: none; }
+}
+@media (max-width: 700px) {
+  .camera-sidebar .panel-bar, .camera-feeds-panel .panel-bar { height: calc(32px + env(safe-area-inset-top, 0px)); padding-top: env(safe-area-inset-top, 0px); }
+}
+
+/* === v21: camera cards keep their natural height and scale with the panel ===
+   Cards no longer flex-shrink (that made the 16:9 video overflow its row and cover the
+   header/metrics). The list is a grid: wider panel => bigger cards, then more columns. */
+.camera-feeds-panel > .camera-feeds-list {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  align-content: start; align-items: start; grid-auto-rows: max-content; gap: 10px;
+}
+.camera-feeds-panel > .camera-feeds-list > .camera-panel {
+  display: flex; flex-direction: column; min-width: 0; height: auto; flex: none; overflow: hidden;
+}
+.camera-feeds-panel .camera-heading { flex: 0 0 30px; min-width: 0; }
+.camera-feeds-panel .camera-heading h2 { flex: 1 1 auto; min-width: 0; }
+.camera-feeds-panel .camera-view { flex: none; width: 100%; height: auto; aspect-ratio: 16 / 9; min-height: 0; background: #000; }
+.camera-feeds-panel .camera-metrics { flex: 0 0 26px; }
+/* Keep the picture's own aspect ratio (no stretching/cropping) as the card scales. */
+.camera-feeds-panel .camera-frame, .camera-feeds-panel video.camera-frame, .camera-feeds-panel .camera-ai-canvas {
+  width: 100%; height: 100%; object-fit: contain; background: #000;
+}
+
+/* === v22: status + delay live in the feed's top bar, source-system time sits bottom-left === */
+.camera-delay { font: 8px var(--font-code); color: var(--muted); white-space: nowrap; }
+.camera-delay[data-state="connected"] { color: var(--success); }
+.camera-delay[data-state="warning"] { color: var(--warning); }
+.camera-delay[data-state="disconnected"] { color: var(--danger); }
+.camera-feeds-panel .camera-delay { font-size: 7.5px; }
+.camera-feeds-panel .camera-panel { grid-template-rows: 30px auto; }
+.camera-feeds-panel .camera-clip-time { right: auto; bottom: 8px; left: 8px; font-variant-numeric: tabular-nums; pointer-events: none; }
+.camera-feeds-panel .camera-view { cursor: pointer; }
+
+/* ===== Tool activity redesign: Claude / ChatGPT / Codex / Claude Code style ===== */
+.activity-trace { width: min(790px, 100%); margin: 0 auto 14px; color: var(--muted); font-size: 12px; }
+.activity-thinking { min-height: 30px; color: var(--muted); font-size: 12px; }
+.activity-thinking span { background: linear-gradient(90deg, var(--muted) 0%, var(--text) 50%, var(--muted) 100%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: activity-shimmer 1.8s linear infinite; }
+@keyframes activity-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* one quiet line per step */
+.activity-steps { display: grid; gap: 1px; }
+.activity-row-toggle { display: flex; align-items: center; gap: 8px; height: 30px; min-height: 30px; padding: 0 8px; border-radius: 8px; }
+.activity-row-toggle:hover, .activity-row-toggle:focus-visible { background: var(--surface-raised); }
+.activity-step-icon { order: 0; color: var(--muted); }
+.activity-verb { order: 1; max-width: none; flex: 0 0 auto; color: var(--text); font-weight: 500; }
+.activity-target-chip { order: 2; flex: 0 1 auto; min-width: 0; padding: 1px 7px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); background: var(--code-background); font: 11px var(--font-code); }
+.activity-target-chip:empty { display: none; }
+.activity-change-count { order: 3; margin-left: auto; }
+.activity-metadata { order: 4; margin-left: 0; font: 11px var(--font-code); color: var(--muted); }
+.activity-change-count + .activity-metadata { margin-left: 0; }
+.activity-status-icon { order: 5; }
+.activity-chevron { order: 6; opacity: 0; transition: opacity .12s, transform .15s; }
+.activity-row-toggle:hover .activity-chevron, .activity-row-toggle:focus-visible .activity-chevron, .activity-row-toggle[aria-expanded="true"] .activity-chevron { opacity: 1; }
+.activity-step[data-status="completed"] .activity-status-icon { color: var(--success); }
+
+/* running step: shimmering verb, live timer */
+.activity-step[data-status="running"] .activity-verb { background: linear-gradient(90deg, var(--muted) 0%, var(--text) 50%, var(--muted) 100%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: activity-shimmer 1.6s linear infinite; }
+.activity-step[data-status="waiting"] .activity-verb, .activity-step[data-status="waiting_approval"] .activity-verb { color: var(--warning); }
+.activity-step[data-status="waiting"] .activity-row-toggle, .activity-step[data-status="waiting_approval"] .activity-row-toggle { background: color-mix(in srgb, var(--warning) 10%, transparent); }
+.activity-step.is-failed .activity-row-toggle { background: color-mix(in srgb, var(--danger) 8%, transparent); }
+
+/* details hang off a thin rail, like Claude Code's result lines */
+.activity-details { margin: 2px 0 8px 15px; padding: 4px 0 4px 16px; border-left: 2px solid var(--border); border-radius: 0; background: transparent; color: var(--muted); }
+.activity-step.is-failed .activity-details { border-left-color: var(--danger); }
+
+/* labelled Input / Output / Command blocks with Copy */
+.activity-io { margin: 6px 0; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--code-background); }
+.activity-io > header { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--border); background: var(--surface-raised); }
+.activity-io-label { color: var(--muted); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+.activity-io-copy, .activity-io-more { border: 0; color: var(--muted); background: transparent; font-size: 11px; }
+.activity-io-copy { margin-left: auto; padding: 3px 7px; border-radius: 5px; }
+.activity-io-copy:hover, .activity-io-more:hover { color: var(--text); background: var(--surface-raised); }
+.activity-io-more { display: block; width: 100%; padding: 5px 10px; border-top: 1px solid var(--border); text-align: left; }
+.activity-io pre { max-width: 100%; max-height: 360px; margin: 0; overflow: auto; padding: 9px 11px; border-radius: 0; background: transparent; color: var(--text); font: 11px/1.55 var(--font-code); white-space: pre-wrap; overflow-wrap: anywhere; }
+.activity-exit { padding: 1px 7px; border-radius: 999px; font: 10px var(--font-code); color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.activity-exit[data-ok="true"] { color: var(--success); background: color-mix(in srgb, var(--success) 14%, transparent); }
+
+/* compact capabilities list instead of ~30 big cards */
+.activity-capability-groups { display: grid; gap: 10px; }
+.activity-capability-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.activity-capability-summary { color: var(--muted); font-size: 11px; }
+.activity-capability-search { width: 170px; max-width: 100%; height: 28px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--code-background); font: inherit; font-size: 11px; }
+.activity-capability-group h4 { margin: 4px 0 4px; color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.activity-capability-group[hidden], .activity-capability-card[hidden] { display: none; }
+.activity-capability-card { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; column-gap: 9px; padding: 6px 4px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; }
+.activity-capability-card:last-child { border-bottom: 0; }
+.activity-capability-card strong { color: var(--text); font: 600 12px var(--font-code); }
+.activity-capability-card p { grid-column: 2 / 4; margin: 1px 0 0; overflow: hidden; color: var(--muted); font-size: 11px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.activity-capability-card:hover p { white-space: normal; }
+.activity-capability-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warning); }
+.activity-capability-dot[data-status="works now"] { background: var(--success); }
+.activity-capability-status { padding: 1px 8px; border-radius: 999px; font-size: 10px; color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, transparent); }
+.activity-capability-status[data-status="works now"] { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+
+/* collapsed group header, e.g. "Used 4 tools" */
+.activity-group-summary, .activity-show-steps { min-height: 30px; padding: 0 8px; border-radius: 8px; color: var(--muted); font-size: 12px; }
+.activity-group-summary:hover, .activity-show-steps:hover { background: var(--surface-raised); color: var(--text); }
+.activity-group-summary::before { content: "›"; display: inline-block; margin-right: 6px; transition: transform .15s; }
+.activity-group-summary[aria-expanded="true"]::before { transform: rotate(90deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-thinking span, .activity-step[data-status="running"] .activity-verb { animation: none; background: none; color: var(--text); -webkit-background-clip: initial; background-clip: initial; }
+}

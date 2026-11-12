@@ -47,7 +47,22 @@ let cameraVisionDetections = [];
 let cameraVisionSourceSize = { width: 0, height: 0 };
 let conversationSaveTimer = null;
 let restoringConversation = false;
+const browserCameraFeeds = [];
 const MAX_CAMERA_LIVE_DELAY_MS = 1000;
+// Remote HP PC camera. The server decides whether one is configured (data-remote-camera) and
+// relays the stream through /api/camera/remote-stream, so the browser never sees the URL or token.
+const REMOTE_CAMERA_ENABLED = Boolean((document.querySelector('.app-shell')?.dataset.remoteCamera || '').trim());
+const MAX_REMOTE_CAMERA_DELAY_MS = 5000;
+let remoteCameraMode = false;
+let remoteResumeOnVisible = false;
+
+function liveDelayLimitMs() {
+  return remoteCameraMode ? MAX_REMOTE_CAMERA_DELAY_MS : MAX_CAMERA_LIVE_DELAY_MS;
+}
+
+function formatFeedTime(milliseconds) {
+  return new Date(milliseconds).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
 
 const elements = {
   composer: document.getElementById('composer-form'),
@@ -75,6 +90,7 @@ const elements = {
   dropHint: document.getElementById('drop-hint'),
   sidebar: document.getElementById('app-sidebar'),
   cameraSidebar: document.getElementById('camera-sidebar'),
+  cameraFeedsPanel: document.getElementById('camera-feeds-panel'),
   panelBackdrop: document.getElementById('panel-backdrop'),
   artifactsList: document.getElementById('artifacts-list'),
   activityList: document.getElementById('agent-activity-strip'),
@@ -118,6 +134,15 @@ function makeSessionId() {
 function makeClientMessageId() {
   return globalThis.crypto?.randomUUID?.()
     || `client-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
 function persistSessionId() {
@@ -758,6 +783,14 @@ function appendActivity(label) {
     updateActivityGrouping(activity);
   });
   elements.stream.appendChild(fragment);
+  const thinkingStarted = Date.now();
+  const thinkingBase = label.replace(/…$/, '');
+  const thinkingTimer = setInterval(() => {
+    const span = activity.querySelector('.activity-thinking span');
+    if (!span || !activity.isConnected) { clearInterval(thinkingTimer); return; }
+    const seconds = Math.round((Date.now() - thinkingStarted) / 1000);
+    span.textContent = seconds >= 3 ? `${thinkingBase} · ${seconds}s` : thinkingBase;
+  }, 1000);
   scrollToLatest();
   return activity;
 }
@@ -1185,12 +1218,81 @@ function appendActivityArtifact(trace, data) {
   steps.append(card);
 }
 
+function humanizeTool(name) {
+  return String(name || 'tool').replace(/[_-]+/g, ' ').trim();
+}
+
+function appendIOBlock(parent, label, text, { prompt = '', badge = '', clampLines = 12 } = {}) {
+  const wrap = document.createElement('section');
+  wrap.className = 'activity-io';
+  const head = document.createElement('header');
+  const title = document.createElement('span');
+  title.className = 'activity-io-label';
+  title.textContent = label;
+  head.append(title);
+  if (badge) {
+    const pill = document.createElement('span');
+    pill.className = 'activity-exit';
+    pill.dataset.ok = String(/^(exit )?0$/.test(String(badge).replace(/^exit\s*/i, '')) || badge === 'ok');
+    pill.textContent = badge;
+    head.append(pill);
+  }
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'activity-io-copy';
+  copy.textContent = 'Copy';
+  copy.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    try { await navigator.clipboard.writeText(text); copy.textContent = 'Copied'; }
+    catch { copy.textContent = 'Could not copy'; }
+    setTimeout(() => { copy.textContent = 'Copy'; }, 1500);
+  });
+  head.append(copy);
+  const pre = document.createElement('pre');
+  const lines = String(text).split('\n');
+  const clamped = lines.length > clampLines;
+  const shown = clamped ? lines.slice(0, clampLines).join('\n') : String(text);
+  pre.textContent = prompt + shown;
+  wrap.append(head, pre);
+  if (clamped) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'activity-io-more';
+    more.textContent = `+${lines.length - clampLines} more lines`;
+    let open = false;
+    more.addEventListener('click', (event) => {
+      event.stopPropagation();
+      open = !open;
+      pre.textContent = prompt + (open ? String(text) : shown);
+      more.textContent = open ? 'Show less' : `+${lines.length - clampLines} more lines`;
+    });
+    wrap.append(more);
+  }
+  parent.append(wrap);
+  return wrap;
+}
+
 function appendCapabilityCards(details, groups) {
   if (!Array.isArray(groups)) return;
-  const cards = document.createElement('div');
-  cards.className = 'activity-capability-groups';
-  groups.forEach((group) => {
-    if (!group || typeof group.name !== 'string' || !Array.isArray(group.items)) return;
+  const valid = groups.filter((group) => group && typeof group.name === 'string' && Array.isArray(group.items));
+  const all = valid.flatMap((group) => group.items.filter((item) => item && typeof item.name === 'string'));
+  const ready = all.filter((item) => /works now|ready|ok/i.test(String(item.status || ''))).length;
+  const root = document.createElement('div');
+  root.className = 'activity-capability-groups';
+  const bar = document.createElement('div');
+  bar.className = 'activity-capability-bar';
+  const summary = document.createElement('span');
+  summary.className = 'activity-capability-summary';
+  summary.textContent = `${all.length} tools · ${ready} ready · ${all.length - ready} need setup`;
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.placeholder = 'Filter tools';
+  search.setAttribute('aria-label', 'Filter tools');
+  search.className = 'activity-capability-search';
+  bar.append(summary, search);
+  root.append(bar);
+  const rows = [];
+  valid.forEach((group) => {
     const section = document.createElement('section');
     section.className = 'activity-capability-group';
     const heading = document.createElement('h4');
@@ -1198,8 +1300,11 @@ function appendCapabilityCards(details, groups) {
     section.append(heading);
     group.items.forEach((item) => {
       if (!item || typeof item.name !== 'string') return;
-      const card = document.createElement('article');
-      card.className = 'activity-capability-card';
+      const row = document.createElement('article');
+      row.className = 'activity-capability-card';
+      const dot = document.createElement('i');
+      dot.className = 'activity-capability-dot';
+      dot.dataset.status = item.status || 'needs setup';
       const title = document.createElement('strong');
       title.textContent = item.name;
       const status = document.createElement('span');
@@ -1208,12 +1313,22 @@ function appendCapabilityCards(details, groups) {
       status.textContent = item.status || 'needs setup';
       const detail = document.createElement('p');
       detail.textContent = item.detail || 'No setup details are available.';
-      card.append(title, status, detail);
-      section.append(card);
+      row.append(dot, title, status, detail);
+      row.dataset.search = `${item.name} ${item.detail || ''} ${group.name}`.toLowerCase();
+      rows.push({ row, section });
+      section.append(row);
     });
-    cards.append(section);
+    root.append(section);
   });
-  details.append(cards);
+  search.addEventListener('input', () => {
+    const query = search.value.trim().toLowerCase();
+    rows.forEach(({ row }) => { row.hidden = Boolean(query) && !row.dataset.search.includes(query); });
+    root.querySelectorAll('.activity-capability-group').forEach((section) => {
+      section.hidden = ![...section.querySelectorAll('.activity-capability-card')].some((row) => !row.hidden);
+    });
+  });
+  search.addEventListener('click', (event) => event.stopPropagation());
+  details.append(root);
 }
 
 function updateActivityGrouping(trace) {
@@ -1222,9 +1337,9 @@ function updateActivityGrouping(trace) {
     .filter((step) => ['running', 'failed', 'waiting'].includes(step.dataset.status));
   const summary = trace.querySelector('.activity-group-summary');
   const toggle = trace.querySelector('.activity-show-steps');
-  if (completed.length > 6) {
+  if (completed.length >= 3) {
     summary.hidden = false;
-    summary.textContent = `${completed.every((step) => step.dataset.past === 'Ran') ? 'Ran' : 'Completed'} ${completed.length} steps`;
+    summary.textContent = `Used ${completed.length} tools`;
     const expanded = trace.dataset.groupsExpanded === 'true';
     summary.setAttribute('aria-expanded', String(expanded));
     completed.forEach((step) => { step.hidden = !expanded; });
@@ -1317,9 +1432,11 @@ function renderActivityEvent(trace, event, data) {
           : data.past || 'Completed';
   toggle.setAttribute('aria-label', `${stateLabel} ${data.target || data.tool || ''}`);
   step.querySelector('.activity-step-icon use').setAttribute('href', `#activity-icon-${data.icon || 'gear'}`);
-  step.querySelector('.activity-verb').textContent = `Tool: ${data.tool || 'unknown'}`;
+  step.querySelector('.activity-verb').textContent = (isRunning || status !== 'completed')
+    ? stateLabel
+    : (data.past || `Used ${humanizeTool(data.tool)}`);
   const target = step.querySelector('.activity-target-chip');
-  target.textContent = data.target || data.tool || 'request';
+  target.textContent = (data.past || isRunning || status !== 'completed') ? (data.target || humanizeTool(data.tool)) : '';
   target.dataset.filePath = data.file_path || '';
   target.title = data.file_path || data.target || data.tool || '';
   target.classList.toggle('activity-file-target', Boolean(data.file_path));
@@ -1346,9 +1463,18 @@ function renderActivityEvent(trace, event, data) {
   statusIcon.dataset.state = isRunning ? 'running' : status;
   statusIcon.classList.toggle('is-running', isRunning);
   const diff = data.diff;
-  step.querySelector('.activity-metadata').textContent = event === 'tool_start'
-    ? ''
-    : activityDuration(data.duration_ms || 0);
+  const metadataEl = step.querySelector('.activity-metadata');
+  clearInterval(step._activityTimer);
+  if (isRunning) {
+    const startedAt = step._activityStartedAt || (step._activityStartedAt = Date.now());
+    metadataEl.textContent = '';
+    step._activityTimer = setInterval(() => {
+      if (!step.isConnected || step.dataset.status !== 'running') { clearInterval(step._activityTimer); return; }
+      metadataEl.textContent = activityDuration(Date.now() - startedAt);
+    }, 500);
+  } else {
+    metadataEl.textContent = event === 'tool_start' ? '' : activityDuration(data.duration_ms || 0);
+  }
   const changeCount = step.querySelector('.activity-change-count');
   changeCount.replaceChildren();
   if (diff && !diff.binary) {
@@ -1366,26 +1492,10 @@ function renderActivityEvent(trace, event, data) {
     if (diff) {
       appendDiffCard(details, data);
     } else if (data.icon === 'terminal') {
-      const command = document.createElement('pre');
-      command.className = 'activity-command';
-      command.textContent = data.details?.command || data.target || '';
-      details.append(command);
-      const exit = document.createElement('p');
-      exit.textContent = `Exit status: ${data.details?.exit_status ?? (data.status === 'failed' ? 'failed' : 'unknown')}`;
-      details.append(exit);
-      const output = document.createElement('pre');
-      output.className = 'activity-command-output';
       const lines = data.details?.output_lines || [];
-      output.textContent = lines.slice(0, 200).join('\n');
-      details.append(output);
-      if (lines.length > 200) {
-        appendActionButton(details, 'Show more', (button) => {
-          output.textContent = button.currentTarget.textContent === 'Show more'
-            ? lines.join('\n')
-            : lines.slice(0, 200).join('\n');
-          button.currentTarget.textContent = button.currentTarget.textContent === 'Show more' ? 'Show less' : 'Show more';
-        });
-      }
+      const exitStatus = data.details?.exit_status ?? (data.status === 'failed' ? 'failed' : 'unknown');
+      appendIOBlock(details, 'Command', data.details?.command || data.target || '', { prompt: '$ ', badge: `exit ${exitStatus}` });
+      if (lines.length) appendIOBlock(details, 'Output', lines.slice(0, 500).join('\n'));
     } else if (data.music_player) {
       const playerCard = document.createElement('div');
       playerCard.className = 'activity-music-player-host';
@@ -1398,13 +1508,9 @@ function renderActivityEvent(trace, event, data) {
     } else if (data.tool === 'capabilities' && data.capabilities) {
       appendCapabilityCards(details, data.capabilities.groups);
     } else {
-      const tool = document.createElement('p');
-      tool.textContent = `Tool: ${data.tool || 'unknown'}`;
-      const argumentsBlock = document.createElement('pre');
-      argumentsBlock.textContent = JSON.stringify(data.details?.arguments || {}, null, 2);
-      const output = document.createElement('p');
-      output.textContent = data.output || 'No additional output.';
-      details.append(tool, argumentsBlock, output);
+      const args = data.details?.arguments || {};
+      if (args && Object.keys(args).length) appendIOBlock(details, 'Input', JSON.stringify(args, null, 2));
+      appendIOBlock(details, status === 'failed' ? 'Error' : 'Output', String(data.output || 'No additional output.'));
     }
     appendActivityImages(details, data.images);
     if (data.file_path && !diff) {
@@ -1809,7 +1915,7 @@ function setupVoiceInput() {
       const separator = voiceDraft && finalText && !/\s$/.test(voiceDraft) ? ' ' : '';
       elements.prompt.value = `${voiceDraft}${separator}${finalText}`;
       elements.prompt.style.height = 'auto';
-      elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 180)}px`;
+      elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 240)}px`;
       voiceStatusMessage = 'Voice text added. Review it before sending.';
       elements.composerStatus.textContent = interimParts.length
         ? `Listening… ${interimParts.join(' ')}`
@@ -2423,7 +2529,7 @@ function setCameraStatus(connected, message) {
   const dot = document.createElement('span');
   dot.className = 'connection-dot';
   const label = document.createElement('span');
-  label.textContent = connected ? (cameraHasFrame ? 'Live' : 'Connecting') : cameraEnabled ? 'Offline' : 'Standby';
+  label.textContent = connected ? (cameraHasFrame ? 'Live' : 'Connecting') : 'Offline';
   elements.cameraBadge.append(dot, label);
   const state = connected ? 'connected' : cameraEnabled ? 'disconnected' : 'warning';
   const status = connected ? (cameraHasFrame ? 'Live' : 'Connecting') : cameraEnabled ? 'Offline' : 'Standby';
@@ -2438,6 +2544,12 @@ function setCameraStatus(connected, message) {
 }
 
 async function stopCameraAndStandby({ notifyServer = true } = {}) {
+  if (remoteCameraMode) {
+    const wasOn = cameraEnabled;
+    disconnectRemoteCamera();
+    remoteResumeOnVisible = wasOn && document.hidden;
+    return true;
+  }
   let hostStillActive = false;
   if (notifyServer && apiContract) {
     try {
@@ -2482,8 +2594,106 @@ async function stopCameraAndStandby({ notifyServer = true } = {}) {
   return true;
 }
 
+let hostCameraNames = [];
+const FEED_REFRESH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"></path><path d="M5.6 9a7 7 0 0 1 11.6-2L20 12M4 12l2.8 5a7 7 0 0 0 11.6-2"></path></svg>';
+
+function normalizeCameraName(name) {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// Same physical camera even if one list adds a suffix such as "(Windows Virtual Camera)".
+function sameCameraName(a, b) {
+  const x = normalizeCameraName(a);
+  const y = normalizeCameraName(b);
+  if (!x || !y) return false;
+  if (x === y || x.includes(y) || y.includes(x)) return true;
+  const base = (name) => normalizeCameraName(String(name).split('(')[0]);
+  return base(a) !== '' && base(a) === base(b);
+}
+
+async function loadRemoteCameraName() {
+  const heading = document.getElementById('camera-device-name');
+  try {
+    const base = new URL(apiContract.endpoints.camera_devices, window.location.href);
+    const response = await apiFetch(new URL('remote-info', base).toString());
+    const data = response.ok ? await response.json() : {};
+    heading.textContent = data.label || data.name || data.host || 'Camera';
+    heading.parentElement.title = [
+      data.host && `Machine: ${data.host}`,
+      data.name && `Camera: ${data.name}`,
+      data.address && `Address: ${data.address}`,
+      data.source && `Detected via ${data.source}`,
+    ].filter(Boolean).join('\n') || 'Camera';
+  } catch {
+    if (heading.textContent === 'Detecting camera…') heading.textContent = 'Camera';
+  }
+}
+
+// Middle slots: cameras the Hsx host detects that are not already shown as a browser-device feed.
+function renderExtraCameraFeeds() {
+  const list = document.getElementById('camera-feeds-list');
+  list.querySelectorAll('[data-feed-host="extra"]').forEach((node) => node.remove());
+  hostCameraNames
+    .filter((name) => !browserCameraFeeds.some((feed) => sameCameraName(feed.label, name)))
+    .slice(0, 2)
+    .forEach((name) => {
+      const panel = document.createElement('div');
+      panel.className = 'camera-panel';
+      panel.dataset.feedHost = 'extra';
+      panel.innerHTML = `
+        <div class="camera-heading" title="${escapeHtml(name)}">
+          <h2>${escapeHtml(name)}</h2>
+          <div class="camera-heading-actions">
+            <span class="camera-delay" data-state="warning">No live feed</span>
+            <span class="camera-badge camera-badge-offline"><span class="connection-dot"></span> Offline</span>
+            <button class="panel-refresh camera-feed-refresh" type="button" aria-label="Refresh ${escapeHtml(name)}" title="Refresh camera">${FEED_REFRESH_ICON}</button>
+          </div>
+        </div>
+        <div class="camera-view" role="button" tabindex="0" aria-label="${escapeHtml(name)}">
+          <div class="camera-placeholder">
+            <svg class="camera-placeholder-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5h11.5a2 2 0 0 1 2 2v1l3-2v7l-3-2v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"></path></svg>
+            <strong>Camera is off</strong>
+            <span class="camera-feed-status">Detected on the Hsx host — standby</span>
+          </div>
+        </div>
+        `;
+      const status = panel.querySelector('.camera-feed-status');
+      const note = () => { status.textContent = 'Only one host camera streams at a time'; };
+      panel.querySelector('.camera-feed-refresh').addEventListener('click', () => {
+        status.textContent = 'Refreshing…';
+        void refreshCameraDevices();
+      });
+      const view = panel.querySelector('.camera-view');
+      view.addEventListener('click', note);
+      view.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          note();
+        }
+      });
+      list.append(panel);
+    });
+  // Browser-device feed(s) always stay in the last slot(s).
+  for (const feed of browserCameraFeeds) list.append(feed.panel);
+}
+
+async function refreshCameraDevices() {
+  void loadRemoteCameraName();
+  if (!apiContract?.endpoints?.camera_devices) return;
+  try {
+    const response = await apiFetch(apiContract.endpoints.camera_devices);
+    if (!response.ok) return;
+    const data = await response.json();
+    hostCameraNames = Array.isArray(data.devices) ? data.devices : [];
+    renderExtraCameraFeeds();
+  } catch {
+    // Keep the current slots until the host is reachable.
+  }
+}
+
 async function refreshCamera() {
   if (document.hidden) return;
+  if (remoteCameraMode) return; // The first feed is the remote HP PC stream; local logic stays out of the way.
   try {
     const statusUrl = new URL(apiContract.endpoints.camera_status, window.location.href);
     statusUrl.searchParams.set('session_id', sessionId);
@@ -2536,12 +2746,13 @@ async function refreshCamera() {
 }
 
 function handleCameraStateEvent(data) {
+  if (remoteCameraMode) return; // Host-camera events do not control the remote feed.
   if (data && data.session_id && data.session_id !== sessionId) return;
   const active = Boolean(data && (data.session_id ? data.session_active : data.active));
   if (active) {
     if (!cameraEnabled) {
       cameraEnabled = true;
-      openMobilePanel(elements.cameraSidebar);
+      openCameraFeedsPanel();
       setCameraStatus(false, 'Live feed active…');
       refreshCamera();
     }
@@ -2557,6 +2768,12 @@ function handleCameraStateEvent(data) {
 }
 
 async function toggleCamera() {
+  if (remoteCameraMode) {
+    // Click = switch. Dropping the connection makes the proxy close the HP stream, which stops its camera.
+    if (cameraEnabled) disconnectRemoteCamera();
+    else connectRemoteCamera();
+    return;
+  }
   if (cameraEnabled) {
     await stopCameraAndStandby();
     return;
@@ -2607,6 +2824,7 @@ function takeCameraFrame(buffer) {
   const headers = new TextDecoder().decode(buffer.slice(0, headerEnd));
   const length = Number(headers.match(/(?:^|\r\n)Content-Length:\s*(\d+)/i)?.[1]);
   const capturedAt = Number(headers.match(/(?:^|\r\n)X-Hsx-Captured-At:\s*([\d.]+)/i)?.[1]);
+  const sourceTime = Number(headers.match(/(?:^|\r\n)X-Hsx-Source-Time:\s*([\d.]+)/i)?.[1]);
   if (!Number.isInteger(length) || length < 4 || length > 2 * 1024 * 1024) {
     throw new Error('Invalid camera frame size.');
   }
@@ -2615,6 +2833,7 @@ function takeCameraFrame(buffer) {
   return {
     data: buffer.slice(payloadStart, payloadStart + length),
     capturedAt: Number.isFinite(capturedAt) && capturedAt > 0 ? capturedAt : Date.now() / 1000,
+    sourceTime: Number.isFinite(sourceTime) && sourceTime > 0 ? sourceTime : null,
     remaining: buffer.slice(payloadStart + length),
   };
 }
@@ -2631,7 +2850,7 @@ function setCameraLatency(capturedAt) {
     Date.now(),
   );
   const delaySeconds = Math.max(0, Date.now() - captureBrowserTime) / 1000;
-  output.textContent = `${delaySeconds.toFixed(1)} s behind`;
+  output.textContent = `${delaySeconds.toFixed(1)} s behind live`;
   output.dataset.state = delaySeconds > 2 ? 'warning' : 'connected';
 }
 
@@ -2655,14 +2874,14 @@ function showCameraFrame(frame) {
     frame.capturedAt * 1000 - cameraClockOffsetMs,
     Date.now(),
   );
-  const captured = new Date(captureBrowserTime);
+  // Clock of the system being filmed: the HP PC's clock for the remote feed, this host's otherwise.
   document.getElementById('camera-clip-time').textContent =
-    `Clip ${captured.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+    formatFeedTime((frame.sourceTime ?? frame.capturedAt) * 1000);
   document.getElementById('camera-clip-time').dataset.capturedAt = String(captureBrowserTime);
   document.getElementById('camera-clip-time').hidden = false;
   setCameraLatency(frame.capturedAt);
-  setCameraStatus(true, 'Live from the Hsx host');
-  startCameraVision();
+  setCameraStatus(true, remoteCameraMode ? 'Live' : 'Live from the Hsx host');
+  if (!remoteCameraMode) startCameraVision();
 }
 
 function isCameraVisionVisible() {
@@ -2877,9 +3096,10 @@ function scheduleCameraReconnect(message = '') {
   else setCameraStatus(false, 'Camera feed offline');
   cameraReconnectTimer = window.setTimeout(() => {
     cameraReconnectTimer = null;
-    refreshCamera();
+    if (remoteCameraMode) void startCameraStream();
+    else refreshCamera();
   }, cameraRetryDelay);
-  cameraRetryDelay = Math.min(cameraRetryDelay * 2, 8000);
+  cameraRetryDelay = Math.min(cameraRetryDelay * 2, remoteCameraMode ? 15000 : 8000);
 }
 
 async function startCameraStream() {
@@ -2889,13 +3109,15 @@ async function startCameraStream() {
   cameraStreamStartedAt = Date.now();
   try {
     const requestStartedAt = Date.now();
-    const streamUrl = new URL(apiContract.endpoints.camera_stream, window.location.href);
-    streamUrl.searchParams.set('session_id', sessionId);
+    const streamUrl = remoteCameraMode
+      ? new URL('remote-stream', new URL(apiContract.endpoints.camera_devices, window.location.href))
+      : new URL(apiContract.endpoints.camera_stream, window.location.href);
+    if (!remoteCameraMode) streamUrl.searchParams.set('session_id', sessionId);
     const response = await apiFetch(streamUrl.toString(), {
       signal: controller.signal,
     });
     if (!response.ok || !response.body) {
-      cameraAvailable = false;
+      if (!remoteCameraMode) cameraAvailable = false; // The remote feed keeps retrying until switched off.
       const error = await response.json().catch(() => ({}));
       const message = error.error || `Camera stream failed (HTTP ${response.status}).`;
       setCameraStatus(false, `Camera feed unavailable: ${message}`);
@@ -2923,7 +3145,7 @@ async function startCameraStream() {
       }
       if (newestFrame) {
         const frameAgeMs = Date.now() - (newestFrame.capturedAt * 1000 - cameraClockOffsetMs);
-        if (frameAgeMs > MAX_CAMERA_LIVE_DELAY_MS) {
+        if (frameAgeMs > liveDelayLimitMs()) {
           controller.abort();
           if (cameraStreamController === controller) cameraStreamController = null;
           cameraRetryDelay = 500;
@@ -2949,10 +3171,10 @@ async function startCameraStream() {
 }
 
 function updateCameraClock() {
-  document.getElementById('camera-clock').textContent = new Date().toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
+  const deviceClock = formatFeedTime(Date.now());
+  // Browser-device feeds are filmed by this very device, so its own clock is the footage clock.
+  document.querySelectorAll('.camera-local-clock').forEach((node) => {
+    if (!node.hidden) node.textContent = deviceClock;
   });
   if (cameraHasFrame) {
     const clipBrowserTime = Number(document.getElementById('camera-clip-time').dataset.capturedAt);
@@ -2967,7 +3189,7 @@ function updateCameraClock() {
     cameraAvailable
     && cameraStreamController
     && !document.hidden
-    && currentDelayMs > MAX_CAMERA_LIVE_DELAY_MS
+    && currentDelayMs > liveDelayLimitMs()
   ) {
     cameraStreamController.abort();
     cameraStreamController = null;
@@ -3030,11 +3252,321 @@ async function refreshConnections() {
   indicator.dataset.state = document.getElementById('api-dot').dataset.state || 'warning';
 }
 
+function createBrowserCameraFeed(label, deviceId = '', facingMode = '') {
+  const panel = document.createElement('div');
+  panel.className = 'camera-panel';
+  panel.dataset.feedType = 'browser';
+  panel.innerHTML = `
+    <div class="camera-heading" title="${escapeHtml(label)}">
+      <h2>${escapeHtml(label)}</h2>
+      <div class="camera-heading-actions">
+        <span class="camera-delay" data-state="connected">Local device</span>
+        <span class="camera-badge camera-badge-offline"><span class="connection-dot"></span> Offline</span>
+        <button class="panel-refresh camera-feed-refresh" type="button" aria-label="Refresh ${escapeHtml(label)}" title="Refresh camera"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"></path><path d="M5.6 9a7 7 0 0 1 11.6-2L20 12M4 12l2.8 5a7 7 0 0 0 11.6-2"></path></svg></button>
+      </div>
+    </div>
+    <div class="camera-view" role="button" tabindex="0" aria-label="Turn on ${escapeHtml(label)}">
+      <video class="camera-frame" autoplay playsinline muted hidden></video>
+      <div class="camera-clip-time camera-local-clock" title="Time on this device" hidden>--:--:--</div>
+      <div class="camera-placeholder">
+        <svg class="camera-placeholder-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5h11.5a2 2 0 0 1 2 2v1l3-2v7l-3-2v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"></path></svg>
+        <strong>Camera is off</strong>
+        <span class="camera-feed-status">Click to turn on this camera</span>
+      </div>
+    </div>
+    `;
+  const state = {
+    panel,
+    deviceId,
+    label,
+    stream: null,
+    video: panel.querySelector('video'),
+    placeholder: panel.querySelector('.camera-placeholder'),
+    clock: panel.querySelector('.camera-local-clock'),
+    badge: panel.querySelector('.camera-badge'),
+    status: panel.querySelector('.camera-feed-status'),
+  };
+  const setFeedState = (active, text, connecting = false) => {
+    state.badge.classList.toggle('camera-badge-online', active);
+    state.badge.classList.toggle('camera-badge-offline', !active && !connecting);
+    state.badge.classList.toggle('camera-badge-reconnecting', connecting);
+    state.badge.classList.remove('camera-badge-standby');
+    state.badge.replaceChildren();
+    const dot = document.createElement('span');
+    dot.className = 'connection-dot';
+    state.badge.append(dot, document.createTextNode(active ? ' Live' : connecting ? ' Connecting' : ' Offline'));
+    state.status.textContent = text;
+    state.video.hidden = !active;
+    state.placeholder.hidden = active;
+    state.clock.hidden = !active;
+    if (active) state.clock.textContent = formatFeedTime(Date.now());
+  };
+  state.stop = () => {
+    if (state.stream) {
+      state.stream.getTracks().forEach((track) => track.stop());
+      state.stream = null;
+    }
+    state.video.srcObject = null;
+    setFeedState(false, 'Click to turn on this camera');
+  };
+  state.start = async () => {
+    if (state.stream || !navigator.mediaDevices?.getUserMedia) return;
+    setFeedState(false, 'Requesting camera…', true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: state.deviceId
+          ? { deviceId: { exact: state.deviceId } }
+          : facingMode
+            ? { facingMode: { ideal: facingMode } }
+            : true,
+        audio: false,
+      });
+      state.stream = stream;
+      state.video.srcObject = stream;
+      await state.video.play().catch(() => {});
+      setFeedState(true, 'Live');
+    } catch (error) {
+      setFeedState(false, `Camera did not start: ${error.message || 'permission denied'}`);
+    }
+  };
+  const toggle = () => {
+    if (state.stream) state.stop();
+    else void state.start();
+  };
+  panel.querySelector('.camera-feed-refresh').addEventListener('click', async () => {
+    state.stop();
+    await state.start();
+  });
+  const view = panel.querySelector('.camera-view');
+  view.addEventListener('click', toggle);
+  view.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      toggle();
+    }
+  });
+  setFeedState(false, 'Click to turn on this camera');
+  return state;
+}
+
+async function refreshBrowserCameraFeeds() {
+  if (!navigator.mediaDevices?.enumerateDevices) return;
+  // Ask for camera permission once so labels are visible and we can tell front from back.
+  try {
+    const probe = await navigator.mediaDevices.getUserMedia({ video: true });
+    probe.getTracks().forEach((track) => track.stop());
+  } catch { /* Fall back to a single unlabeled feed. */ }
+  let inputs = [];
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const seen = new Set();
+    inputs = devices
+      .filter((device) => device.kind === 'videoinput' && device.deviceId)
+      .filter((device) => (seen.has(device.deviceId) ? false : (seen.add(device.deviceId), true)));
+  } catch { /* Keep the fallback feed below. */ }
+  const list = document.getElementById('camera-feeds-list');
+  for (const feed of browserCameraFeeds) feed.panel.remove();
+  browserCameraFeeds.length = 0;
+  const configs = [];
+  inputs.slice(0, 3).forEach((device, index) => {
+    let label = device.label || `Camera ${index + 1}`;
+    const isBack = /back|rear|world|environment|wide/i.test(label);
+    const isFront = /front|user|face|selfie/i.test(label);
+    const facingMode = isBack ? 'environment' : (inputs.length > 1 && !isFront && index === inputs.length - 1 ? 'environment' : 'user');
+    configs.push({ label, deviceId: device.deviceId, facingMode });
+  });
+  if (!configs.length) configs.push({ label: 'Camera', deviceId: '', facingMode: '' });
+  configs.slice(0, 3).forEach((config) => {
+    const feed = createBrowserCameraFeed(config.label, config.deviceId, config.facingMode);
+    list.append(feed.panel);
+    browserCameraFeeds.push(feed);
+  });
+  renderExtraCameraFeeds();
+}
+
+function applyCameraFeedsWidth(width) {
+  const shell = document.querySelector('.app-shell');
+  let value = Number(width);
+  if (!Number.isFinite(value) || value <= 0) {
+    value = Number(safeStorageGet('localStorage', 'hsx-camera-feeds-width')) || 0;
+  }
+  if (!Number.isFinite(value) || value <= 0) {
+    // Default: match the width of the artifact panel the camera panel replaces.
+    value = Math.round(elements.cameraSidebar.getBoundingClientRect().width) || 340;
+  }
+  value = Math.round(Math.max(280, Math.min(value, window.innerWidth * 0.75, window.innerWidth - CHAT_MIN_WIDTH)));
+  shell.style.setProperty('--camera-feeds-width', `${value}px`);
+  safeStorageSet('localStorage', 'hsx-camera-feeds-width', String(value));
+  applySidebarLayout();
+}
+
+function setupCameraFeedsResize() {
+  const handle = document.getElementById('camera-feeds-resize-handle');
+  if (!handle) return;
+  handle.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add('camera-feeds-resizing');
+    const onMove = (moveEvent) => {
+      applyCameraFeedsWidth(window.innerWidth - moveEvent.clientX + 6);
+    };
+    const onUp = () => {
+      document.body.classList.remove('camera-feeds-resizing');
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+    };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  });
+}
+
+const desktopLayout = window.matchMedia('(min-width: 701px)');
+const wideLayout = window.matchMedia('(min-width: 1101px)');
+const CHAT_MIN_WIDTH = 520;
+// What the person wants (persisted). The sidebar may still be closed automatically while the camera panel needs the room.
+let sidebarWanted = safeStorageGet('localStorage', 'hsx-sidebar-collapsed') !== '1';
+
+function sidebarColumnWidth() {
+  const width = window.innerWidth;
+  return width >= 1500 ? 276 : width >= 1101 ? 258 : 230;
+}
+
+function cameraPanelWidth() {
+  const shell = document.querySelector('.app-shell');
+  return parseFloat(shell.style.getPropertyValue('--camera-feeds-width')) || 340;
+}
+
+function sidebarHasRoom() {
+  if (!document.querySelector('.app-shell').classList.contains('camera-feeds-open')) return true;
+  return window.innerWidth - sidebarColumnWidth() - cameraPanelWidth() >= CHAT_MIN_WIDTH;
+}
+
+// Single place that decides whether the chat history sidebar is shown.
+function applySidebarLayout() {
+  const shell = document.querySelector('.app-shell');
+  const toggle = document.getElementById('sidebar-toggle');
+  if (!desktopLayout.matches) {
+    shell.classList.remove('sidebar-collapsed');
+    toggle.removeAttribute('aria-disabled');
+    toggle.setAttribute('aria-expanded', String(elements.sidebar.classList.contains('is-open')));
+    return;
+  }
+  const room = sidebarHasRoom();
+  const collapsed = !sidebarWanted || !room;
+  shell.classList.toggle('sidebar-collapsed', collapsed);
+  toggle.setAttribute('aria-expanded', String(!collapsed));
+  // No room beside the camera panel: the sidebar can't open (it would cover the chat).
+  if (!room) {
+    toggle.setAttribute('aria-disabled', 'true');
+    toggle.title = 'No room for chat history — narrow or close the camera panel';
+  } else {
+    toggle.removeAttribute('aria-disabled');
+    toggle.title = 'Chat history';
+  }
+}
+
+function toggleSidebar() {
+  if (desktopLayout.matches) {
+    if (!sidebarHasRoom()) return;
+    sidebarWanted = !sidebarWanted;
+    safeStorageSet('localStorage', 'hsx-sidebar-collapsed', sidebarWanted ? '0' : '1');
+    applySidebarLayout();
+    return;
+  }
+  if (elements.sidebar.classList.contains('is-open')) closeMobilePanels();
+  else openMobilePanel(elements.sidebar);
+}
+
+function setArtifactsHidden(hidden, { persist = true } = {}) {
+  document.querySelector('.app-shell').classList.toggle('artifacts-hidden', hidden);
+  document.getElementById('artifacts-toggle').setAttribute('aria-expanded', String(!hidden));
+  if (persist) safeStorageSet('localStorage', 'hsx-artifacts-hidden', hidden ? '1' : '0');
+}
+
+// Remote (HP PC) feed. The fetch connection to /api/camera/remote-stream is the switch:
+// opening it starts the HP camera, aborting it (off button, closing the panel, hiding the tab)
+// makes the server drop the HP connection immediately so the camera stops.
+function connectRemoteCamera() {
+  if (!REMOTE_CAMERA_ENABLED) return;
+  remoteCameraMode = true;
+  remoteResumeOnVisible = false;
+  stopCameraStream();
+  cameraEnabled = true;
+  cameraAvailable = true;
+  cameraHasFrame = false;
+  cameraRetryDelay = 500;
+  document.getElementById('camera-clip-time').textContent = 'Waiting for video';
+  setCameraLatency(null);
+  setCameraStatus(true, 'Connecting to the camera…');
+  void startCameraStream();
+}
+
+function disconnectRemoteCamera(message = 'Click to turn on camera') {
+  cameraEnabled = false;
+  cameraAvailable = false;
+  cameraHasFrame = false;
+  stopCameraStream();
+  elements.camera.removeAttribute('src');
+  if (cameraObjectUrl) {
+    URL.revokeObjectURL(cameraObjectUrl);
+    cameraObjectUrl = '';
+  }
+  document.getElementById('camera-clip-time').textContent = '--:--:--';
+  document.getElementById('camera-clip-time').hidden = true;
+  setCameraLatency(null);
+  setCameraStatus(false, message);
+}
+
+function openCameraFeedsPanel() {
+  closeMobilePanels();
+  elements.cameraFeedsPanel.hidden = false;
+  applyCameraFeedsWidth();
+  document.querySelector('.app-shell').classList.add('camera-feeds-open');
+  applySidebarLayout();
+  elements.cameraFeedsPanel.classList.add('is-open');
+  document.getElementById('camera-toggle').setAttribute('aria-expanded', 'true');
+  void refreshCameraDevices();
+  if (REMOTE_CAMERA_ENABLED) {
+    // Slot 1 = the HP PC camera: it starts with the panel and is switched by clicking the feed.
+    connectRemoteCamera();
+  }
+  void refreshBrowserCameraFeeds().then(() => {
+    // Browser camera feeds open by default; each feed can be switched off individually.
+    for (const feed of browserCameraFeeds) void feed.start();
+  });
+  if (!REMOTE_CAMERA_ENABLED) {
+    startCameraVision();
+    if (!cameraEnabled) void toggleCamera();
+  }
+}
+
+function closeCameraFeedsPanel() {
+  if (elements.cameraFeedsPanel.hidden) return;
+  elements.cameraFeedsPanel.classList.remove('is-open');
+  elements.cameraFeedsPanel.hidden = true;
+  document.querySelector('.app-shell').classList.remove('camera-feeds-open');
+  document.getElementById('camera-toggle').setAttribute('aria-expanded', 'false');
+  applySidebarLayout();
+  pauseCameraVision();
+  if (remoteCameraMode) {
+    disconnectRemoteCamera();
+    remoteCameraMode = false;
+    remoteResumeOnVisible = false;
+    setCameraStatus(false, 'Click to turn on camera');
+  }
+  // Closing the panel switches off every feed.
+  if (cameraEnabled) void stopCameraAndStandby();
+  for (const feed of browserCameraFeeds) feed.stop();
+}
+
 function closeMobilePanels() {
   elements.sidebar.classList.remove('is-open');
   elements.cameraSidebar.classList.remove('is-open');
   elements.panelBackdrop.hidden = true;
-  document.getElementById('sidebar-toggle').setAttribute('aria-expanded', 'false');
+  applySidebarLayout();
   document.getElementById('camera-toggle').setAttribute('aria-expanded', 'false');
 }
 
@@ -3479,6 +4011,10 @@ async function refreshAgentActivity() {
 }
 
 async function retryCamera() {
+  if (remoteCameraMode) {
+    connectRemoteCamera();
+    return;
+  }
   const button = document.getElementById('camera-retry');
   button.disabled = true;
   cameraEnabled = true;
@@ -3670,20 +4206,24 @@ async function initialize() {
   refreshGreeting();
   await refreshEmergencyStop();
   setupVoiceInput();
-  document.getElementById('sidebar-toggle').addEventListener('click', () => {
-    if (elements.sidebar.classList.contains('is-open')) closeMobilePanels();
-    else openMobilePanel(elements.sidebar);
+  desktopLayout.addEventListener('change', applySidebarLayout);
+  window.addEventListener('resize', applySidebarLayout);
+  applySidebarLayout();
+  document.getElementById('sidebar-toggle').addEventListener('click', toggleSidebar);
+  if (safeStorageGet('localStorage', 'hsx-artifacts-hidden') === '1') setArtifactsHidden(true, { persist: false });
+  document.getElementById('artifacts-toggle').addEventListener('click', () => {
+    setArtifactsHidden(!document.querySelector('.app-shell').classList.contains('artifacts-hidden'));
   });
   document.getElementById('camera-toggle').addEventListener('click', () => {
-    if (elements.cameraSidebar.classList.contains('is-open')) {
-      stopCameraAndStandby();
-      closeMobilePanels();
-    } else {
-      openMobilePanel(elements.cameraSidebar);
-      refreshArtifacts();
-    }
+    if (elements.cameraFeedsPanel.classList.contains('is-open')) closeCameraFeedsPanel();
+    else openCameraFeedsPanel();
   });
+  document.getElementById('camera-feeds-close').addEventListener('click', closeCameraFeedsPanel);
   document.getElementById('camera-close').addEventListener('click', () => {
+    if (wideLayout.matches) {
+      setArtifactsHidden(true);
+      return;
+    }
     stopCameraAndStandby();
     closeMobilePanels();
   });
@@ -3694,6 +4234,7 @@ async function initialize() {
       toggleCamera();
     }
   });
+  setupCameraFeedsResize();
   elements.panelBackdrop.addEventListener('click', () => {
     if (elements.cameraSidebar.classList.contains('is-open')) stopCameraAndStandby();
     closeMobilePanels();
@@ -3807,7 +4348,7 @@ async function initialize() {
   });
   document.getElementById('settings-open-camera').addEventListener('click', () => {
     document.getElementById('settings-dialog').close();
-    openMobilePanel(elements.cameraSidebar);
+    openCameraFeedsPanel();
     if (!cameraEnabled) toggleCamera();
   });
   for (const id of ['save-feedback-setting', 'full-conversation-setting', 'file-contents-setting']) {
@@ -3868,6 +4409,7 @@ async function initialize() {
       const connectionPanel = document.getElementById('connections-panel');
       const connectionWasOpen = !connectionPanel.hidden;
       closeMobilePanels();
+      closeCameraFeedsPanel();
       closeHeaderPopovers();
       if (connectionWasOpen) document.getElementById('connection-toggle').focus();
     }
@@ -3928,7 +4470,7 @@ async function initialize() {
   });
   elements.prompt.addEventListener('input', () => {
     elements.prompt.style.height = 'auto';
-    elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 180)}px`;
+    elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 240)}px`;
     persistDraft();
     updateSendButton();
   });
@@ -3974,6 +4516,7 @@ async function initialize() {
   window.addEventListener('pagehide', () => {
     if (cameraEnabled) stopCameraAndStandby();
     else stopCameraStream();
+    for (const feed of browserCameraFeeds) feed.stop();
     abortNotificationStream();
   });
   window.addEventListener('pageshow', () => {
@@ -3991,6 +4534,7 @@ async function initialize() {
       abortNotificationStream();
     } else {
       cameraRetryDelay = 500;
+      if (remoteCameraMode && remoteResumeOnVisible) connectRemoteCamera();
       refreshConnections();
       refreshCamera();
       startNotificationStream();
@@ -4006,6 +4550,7 @@ async function initialize() {
   }
   await refreshConnections();
   await refreshCamera();
+  refreshCameraDevices();
   refreshFeedbackSettings();
   refreshArtifacts();
   refreshAgentActivity();

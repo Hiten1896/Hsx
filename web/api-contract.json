@@ -6,6 +6,7 @@
     "greeting": "/api/greeting",
     "chat_stream": "/api/chat/stream",
     "camera_stream": "/api/camera/stream",
+    "camera_devices": "/api/camera/devices",
     "camera_status": "/api/camera/status",
     "camera_start": "/api/camera/start",
     "camera_stop": "/api/camera/stop",
