@@ -1,4 +1,3 @@
-import dataclasses
 import json
 import base64
 import binascii
@@ -15,15 +14,25 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from .ratelimit import parse_retry_after
 from .types import EventStream, LLMEvent, LLMRequest, to_plain_data
 
 
 class ProviderError(RuntimeError):
-    def __init__(self, message: str, *, provider: str = "", status: int | None = None, detail: str = ""):
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str = "",
+        status: int | None = None,
+        detail: str = "",
+        retry_after: float | None = None,
+    ):
         super().__init__(message)
         self.provider = provider
         self.status = status
         self.detail = detail
+        self.retry_after = retry_after  # seconds the provider asked us to wait, when it said
 
 
 LOGGER = logging.getLogger("hsx.llm.providers")
@@ -568,6 +577,48 @@ class JSONHTTPProvider(Provider):
                 LOGGER.warning("%s provider returned HTTP 503; retrying in %.1f seconds.", self.name, delay)
                 time.sleep(delay)
 
+    def _http_error(self, error: urllib.error.HTTPError, payload: dict[str, Any]) -> ProviderError:
+        body = error.read().decode("utf-8", errors="replace")
+        detail = self._error_detail(str(error.code), body)
+        LOGGER.warning("%s provider HTTP %s response: %s", self.name, error.code, self._redact_body(body))
+        if self.name == "gemini":
+            violations = _gemini_violations(body)
+            redacted_body = self._redact_body(body)
+            _log_provider_error({
+                "provider": self.name,
+                "status": error.code,
+                "body": redacted_body,
+                "violations": violations,
+            })
+        if os.getenv("HSX_DEBUG") == "1":
+            message = f"{self.name} request failed (HTTP {error.code}): {detail}"
+        elif self.name == "gemini" and error.code == 400:
+            violations = _gemini_violations(body)
+            message = _gemini_user_error(payload, violations)
+        elif self.name == "gemini" and error.code >= 500:
+            message = f"Gemini returned HTTP {error.code}; trying the configured fallback provider."
+        elif self.name == "groq" and error.code == 404:
+            message = "Groq model not found."
+        else:
+            message = f"{self.name.title()} request failed (HTTP {error.code}); {detail}"
+        return ProviderError(
+            message,
+            provider=self.name,
+            status=error.code,
+            detail=detail,
+            retry_after=parse_retry_after(error.headers, body),
+        )
+
+    def _connection_error(self, error: OSError) -> ProviderError:
+        detail = self._error_detail("unknown", str(error))
+        LOGGER.warning("%s provider connection failed: %s", self.name, detail)
+        message = (
+            f"{self.name.title()} could not connect to its API."
+            if os.getenv("HSX_DEBUG") != "1"
+            else f"{self.name} request failed: {detail}"
+        )
+        return ProviderError(message, provider=self.name, detail=detail)
+
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         if self.name == "gemini" or os.getenv("HSX_DEBUG") == "1" or self.name in {
             "groq", "grok", "openrouter", "openai", "openai_compatible",
@@ -608,39 +659,9 @@ class JSONHTTPProvider(Provider):
                     )
                     raise ProviderError(message, provider=self.name, detail=detail) from error
         except urllib.error.HTTPError as error:
-            body = error.read().decode("utf-8", errors="replace")
-            detail = self._error_detail(str(error.code), body)
-            LOGGER.warning("%s provider HTTP %s response: %s", self.name, error.code, self._redact_body(body))
-            if self.name == "gemini":
-                violations = _gemini_violations(body)
-                redacted_body = self._redact_body(body)
-                _log_provider_error({
-                    "provider": self.name,
-                    "status": error.code,
-                    "body": redacted_body,
-                    "violations": violations,
-                })
-            if os.getenv("HSX_DEBUG") == "1":
-                message = f"{self.name} request failed (HTTP {error.code}): {detail}"
-            elif self.name == "gemini" and error.code == 400:
-                violations = _gemini_violations(body)
-                message = _gemini_user_error(payload, violations)
-            elif self.name == "gemini" and error.code >= 500:
-                message = f"Gemini returned HTTP {error.code}; trying the configured fallback provider."
-            elif self.name == "groq" and error.code == 404:
-                message = "Groq model not found."
-            else:
-                message = f"{self.name.title()} request failed (HTTP {error.code}); {detail}"
-            raise ProviderError(message, provider=self.name, status=error.code, detail=detail) from error
+            raise self._http_error(error, payload) from error
         except OSError as error:
-            detail = self._error_detail("unknown", str(error))
-            LOGGER.warning("%s provider connection failed: %s", self.name, detail)
-            message = (
-                f"{self.name.title()} could not connect to its API."
-                if os.getenv("HSX_DEBUG") != "1"
-                else f"{self.name} request failed: {detail}"
-            )
-            raise ProviderError(message, provider=self.name, detail=detail) from error
+            raise self._connection_error(error) from error
 
 
 def _gemini_response_value(content: Any) -> dict[str, Any]:
@@ -949,177 +970,6 @@ class GeminiProvider(JSONHTTPProvider):
             elif provider_meta:
                 raw_part = {key: value for key, value in part.items() if key != "thoughtSignature"}
                 yield LLMEvent(type="provider_part", provider_meta=provider_meta, raw_part=raw_part)
-        yield LLMEvent(type="stop", stop_reason="stop")
-
-
-class OllamaProvider(JSONHTTPProvider):
-    name = "ollama"
-    # Local models can take a long time to load on the first request.
-    timeout = float(os.getenv("OLLAMA_TIMEOUT", "300"))
-
-    def _call(self, payload: dict[str, Any]) -> dict[str, Any]:
-        try:
-            return self._post(payload)
-        except ProviderError as error:
-            if error.detail and "unknown" in error.detail and "connect" in str(error).casefold():
-                raise ProviderError(
-                    f"Ollama is not reachable at {self.endpoint}. Start it with 'ollama serve' "
-                    f"and check that model '{self.model}' is pulled ('ollama list').",
-                    provider=self.name,
-                    detail=error.detail,
-                ) from error
-            raise
-
-    @staticmethod
-    def _parse(data: dict[str, Any]) -> tuple[str, list[dict[str, Any]], str, int]:
-        # The router uses /v1/chat/completions (OpenAI format); also accept native /api/chat.
-        if data.get("choices"):
-            choice = data["choices"][0]
-            message = choice.get("message", {})
-            stop_reason = choice.get("finish_reason") or "stop"
-        else:
-            message = data.get("message", {})
-            stop_reason = "stop"
-        usage = data.get("usage") or {}
-        prompt_tokens = int(usage.get("prompt_tokens") or data.get("prompt_eval_count") or 0)
-        return message.get("content") or "", list(message.get("tool_calls") or []), stop_reason, prompt_tokens
-
-    @staticmethod
-    def _text_tool_calls(content: str, tool_names: set[str]) -> list[dict[str, Any]]:
-        """Small models often print a tool call as JSON text instead of a real tool_call."""
-        text = content.strip()
-        text = re.sub(r"^<tool_call>\s*|\s*</tool_call>$", "", text, flags=re.IGNORECASE).strip()
-        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text).strip()
-        if not text.startswith("{"):
-            return []
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            return []
-        if not isinstance(parsed, dict):
-            return []
-        name = parsed.get("name")
-        arguments = parsed.get("arguments", parsed.get("parameters", {}))
-        if isinstance(name, str) and name in tool_names:
-            return [{"id": f"ollama-{name}", "function": {"name": name, "arguments": arguments}}]
-        return []
-
-    _STOPWORDS = frozenset(
-        "the and for you can please what how with that this from have are was were your "
-        "about into just some them then than there when where which will would could should".split()
-    )
-
-    @staticmethod
-    def _message_text(message: dict[str, Any]) -> str:
-        content = message.get("content")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            return " ".join(
-                str(block.get("text", "")) for block in content
-                if isinstance(block, dict) and block.get("type") == "text"
-            )
-        return ""
-
-    def _slim(self, request: LLMRequest) -> LLMRequest:
-        """Local models are slow on long prompts: send only the tools the message may need."""
-        try:
-            max_tools = int(os.getenv("OLLAMA_MAX_TOOLS", "8"))
-        except ValueError:
-            max_tools = 8
-        system = request.system
-        if os.getenv("OLLAMA_COMPACT_SYSTEM", "1").strip().lower() not in {"0", "false", "off", "no"}:
-            marker = "Any content inside <hsx-untrusted-memory>"
-            tail = system[system.index(marker):] if marker in system else ""
-            system = (
-                "You are Hsx, a concise and capable assistant running on the owner's server. "
-                "Use a registered tool when it answers better than guessing; machine facts must come only "
-                "from tool results. Use ask_user when needed information is missing. Never say a "
-                "capability is unavailable if a matching tool exists. Tolerate typos and informal language. "
-                "Reply in clean natural language, without internal details. "
-            ) + tail
-        tools = list(request.tools)
-        if max_tools > 0 and len(tools) > max_tools:
-            query_text = ""
-            called: set[str] = set()
-            for message in reversed(request.messages):
-                if not isinstance(message, dict):
-                    continue
-                content = message.get("content")
-                if isinstance(content, list):
-                    called.update(
-                        str(block.get("name")) for block in content
-                        if isinstance(block, dict) and block.get("type") == "tool_use"
-                    )
-                if message.get("role") == "user":
-                    text = self._message_text(message).strip()
-                    if text:  # tool-result turns carry no text; keep walking back
-                        query_text = text.casefold()
-                        break
-            words = {
-                word for word in re.findall(r"[a-z0-9]{3,}", query_text)
-                if word not in self._STOPWORDS
-            }
-            core = {
-                name.strip() for name in os.getenv("OLLAMA_CORE_TOOLS", "ask_user,capabilities").split(",")
-                if name.strip()
-            }
-            scored = []
-            for tool in tools:
-                name = str(tool.get("name", ""))
-                text = f"{name.replace('_', ' ')} {tool.get('description', '')}".casefold()
-                name_words = set(re.findall(r"[a-z0-9]{3,}", name.casefold().replace("_", " ")))
-                score = sum(1 for word in words if word in text) + 2 * len(words & name_words)
-                scored.append((score, name, tool))
-            keep = {name for _, name, _ in scored if name in core or name in called}
-            for score, name, _ in sorted(scored, key=lambda item: item[0], reverse=True):
-                if score <= 0 or len(keep) >= max_tools:
-                    break
-                keep.add(name)
-            tools = [tool for tool in tools if tool.get("name") in keep]
-            LOGGER.info("Ollama: sending %d of %d tools.", len(tools), len(request.tools))
-        return dataclasses.replace(request, tools=tools, system=system)
-
-    def generate(self, request: LLMRequest) -> EventStream:
-        request = self._slim(request)
-        payload = to_openai_payload(request, self.model)
-        payload["stream"] = False
-        if not payload.get("tools"):
-            payload.pop("tools", None)
-        tool_names = {tool["name"] for tool in request.tools}
-
-        content, tool_calls, stop_reason, prompt_tokens = self._parse(self._call(payload))
-        if prompt_tokens and 1900 <= prompt_tokens <= 2100:
-            LOGGER.warning(
-                "Ollama prompt was %d tokens, which matches the default 2048 context window; the prompt was "
-                "probably truncated. Set OLLAMA_CONTEXT_LENGTH=8192 for the Ollama server and restart it.",
-                prompt_tokens,
-            )
-        if not content.strip() and not tool_calls and payload.get("tools"):
-            LOGGER.warning("Ollama returned an empty reply with %d tools; retrying once without tools.", len(payload["tools"]))
-            retry = dict(payload)
-            retry.pop("tools", None)
-            content, tool_calls, stop_reason, prompt_tokens = self._parse(self._call(retry))
-        if content.strip() and not tool_calls and tool_names:
-            tool_calls = self._text_tool_calls(content, tool_names)
-            if tool_calls:
-                content = ""
-        if not content.strip() and not tool_calls:
-            raise ProviderError(
-                f"Ollama returned an empty reply (prompt_tokens={prompt_tokens}). "
-                "The prompt is probably larger than the model's context window.",
-                provider=self.name,
-            )
-        if content:
-            yield LLMEvent(type="text_delta", text=content)
-        for tool_call in tool_calls:
-            function = tool_call.get("function", {})
-            yield LLMEvent(
-                type="tool_call",
-                tool_name=function.get("name", ""),
-                tool_input=_tool_arguments(function.get("arguments", {}), self.name),
-                tool_call_id=tool_call.get("id", ""),
-            )
         yield LLMEvent(type="stop", stop_reason="stop")
 
 

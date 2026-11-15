@@ -59,7 +59,6 @@ def run(path: str, question: str) -> dict[str, str | bool]:
         [],
         sensitive=True,
         required_provider="gemini",
-        disable_panel=True,
     )
     if response is None:
         raise RuntimeError("No configured vision provider could describe that image.")

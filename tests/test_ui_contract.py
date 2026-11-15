@@ -12,7 +12,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 
 
 def test_cloud_greeting_uses_only_a_configured_cloud_provider(monkeypatch):
-    providers = [SimpleNamespace(name="ollama"), SimpleNamespace(name="gemini")]
+    providers = [SimpleNamespace(name="openrouter"), SimpleNamespace(name="gemini")]
     router = SimpleNamespace(providers=providers.copy())
     calls = []
 
@@ -26,7 +26,6 @@ def test_cloud_greeting_uses_only_a_configured_cloud_provider(monkeypatch):
 
     assert server._generate_greeting("morning") == "Good morning, Sir."
     assert calls[0][2]["required_provider"] == "gemini"
-    assert calls[0][2]["disable_panel"] is True
     assert "morning" in calls[0][0][0]["content"]
     assert router.providers == providers
 

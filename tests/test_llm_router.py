@@ -10,7 +10,6 @@ import pytest
 from agent.llm.providers import (
     GeminiProvider,
     JSONHTTPProvider,
-    OllamaProvider,
     OpenAICompatibleProvider,
     ProviderError,
 )
@@ -175,7 +174,7 @@ def test_provider_bandit_prioritizes_cloud_providers_for_uncertain_intent(tmp_pa
 
     bandit = ProviderBandit(tmp_path / "provider-bandit.json", random.Random(7))
     providers = [
-        SimpleNamespace(name="ollama"),
+        SimpleNamespace(name="mistral"),
         SimpleNamespace(name="groq"),
         SimpleNamespace(name="openai"),
     ]
@@ -183,7 +182,7 @@ def test_provider_bandit_prioritizes_cloud_providers_for_uncertain_intent(tmp_pa
     assert [item.name for item in bandit.rank(providers, prefer_cloud=True)] == [
         "openai",
         "groq",
-        "ollama",
+        "mistral",
     ]
 
 
@@ -255,7 +254,7 @@ def test_router_falls_back_after_http_timeout(monkeypatch):
 def test_default_router_discovers_configured_providers(monkeypatch):
     from agent.llm.router import default_router
 
-    for key in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROK_API_KEY", "XAI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY", "OLLAMA_MODEL"):
+    for key in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROK_API_KEY", "XAI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test")
     monkeypatch.setenv("XAI_API_KEY", "xai-test")
@@ -273,7 +272,7 @@ def test_default_router_discovers_configured_providers(monkeypatch):
 def test_default_router_requires_a_valid_api_key(monkeypatch):
     from agent.llm.router import default_router
 
-    for key in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROK_API_KEY", "XAI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY", "OLLAMA_MODEL"):
+    for key in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROK_API_KEY", "XAI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"):
         monkeypatch.delenv(key, raising=False)
 
     try:
@@ -282,23 +281,6 @@ def test_default_router_requires_a_valid_api_key(monkeypatch):
         assert "No LLM provider is configured" in str(error)
     else:
         raise AssertionError("default_router should reject an empty provider configuration")
-
-
-def test_default_router_registers_ollama_when_model_is_configured(monkeypatch):
-    from agent.llm.router import default_router
-
-    for key in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROK_API_KEY", "XAI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5")
-    monkeypatch.setenv("OLLAMA_URL", "http://127.0.0.1:11434")
-    monkeypatch.delenv("HSX_PROVIDER", raising=False)
-    monkeypatch.delenv("HSX_FALLBACKS", raising=False)
-
-    router = default_router()
-
-    assert [provider.name for provider in router.providers] == ["ollama"]
-    assert router.providers[0].model == "qwen2.5"
-    assert router.providers[0].endpoint == "http://127.0.0.1:11434/v1/chat/completions"
 
 
 def test_json_http_provider_sends_user_agent():
@@ -367,7 +349,7 @@ def test_gemini_sends_key_header_and_maps_roles_and_system_instruction():
         thread.join()
 
 
-@pytest.mark.parametrize("provider_kind", ["gemini", "groq", "ollama"])
+@pytest.mark.parametrize("provider_kind", ["gemini", "groq"])
 def test_provider_completes_tool_call_loop_with_local_http_server(provider_kind):
     received = []
     responses = {
@@ -382,13 +364,6 @@ def test_provider_completes_tool_call_loop_with_local_http_server(provider_kind)
                 "function": {"name": "search", "arguments": '{"query":"news"}'},
             }]}, "finish_reason": "tool_calls"}]},
             {"choices": [{"message": {"content": "Here is the result."}, "finish_reason": "stop"}]},
-        ],
-        "ollama": [
-            {"message": {"tool_calls": [{
-                "id": "call-1",
-                "function": {"name": "search", "arguments": {"query": "news"}},
-            }]}},
-            {"message": {"content": "Here is the result."}},
         ],
     }
 
@@ -412,8 +387,6 @@ def test_provider_completes_tool_call_loop_with_local_http_server(provider_kind)
         endpoint = f"http://127.0.0.1:{server.server_port}"
         if provider_kind == "gemini":
             provider = GeminiProvider("test", endpoint, "secret")
-        elif provider_kind == "ollama":
-            provider = OllamaProvider("test", endpoint)
         else:
             provider = OpenAICompatibleProvider("groq", "secret", "test", endpoint)
 
@@ -475,8 +448,6 @@ def test_provider_completes_tool_call_loop_with_local_http_server(provider_kind)
                 "tool_call_id": "call-1",
                 "content": '{"results":["A news story"]}',
             }
-            if provider_kind == "ollama":
-                assert received[1]["stream"] is False
     finally:
         server.shutdown()
         thread.join()

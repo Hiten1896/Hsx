@@ -8,7 +8,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+from agent.llm.context import compact_messages, flatten_tool_blocks, has_tool_blocks
 from agent.llm.router import default_router
+from agent.llm.tool_select import CHAT_SYSTEM_PROMPT
 from agent.llm.types import LLMRequest, to_plain_data
 from agent.ml.storage import atomic_write_json
 from agent.router import LLM_TELEMETRY
@@ -67,7 +69,8 @@ class ProviderBandit:
             ranked = [provider for _, provider in sorted(scores, key=lambda item: item[0], reverse=True)]
             if not prefer_cloud:
                 return ranked
-            cloud_priority = {
+            # Uncertain intents go to the strongest providers first; unknown ones keep their bandit order.
+            priority = {
                 "anthropic": 0,
                 "openai": 1,
                 "gemini": 2,
@@ -75,16 +78,7 @@ class ProviderBandit:
                 "openrouter": 4,
                 "groq": 5,
             }
-            cloud = [provider for provider in ranked if provider.name.lower() != "ollama"]
-            cloud.sort(key=lambda provider: cloud_priority.get(provider.name.lower(), 6))
-            local = [provider for provider in ranked if provider.name.lower() == "ollama"]
-            if not cloud:
-                import logging
-
-                logging.getLogger("hsx.llm_client").warning(
-                    "Uncertain intent has no configured cloud provider; using local provider fallback."
-                )
-            return cloud + local
+            return sorted(ranked, key=lambda provider: priority.get(provider.name.lower(), 6))
 
     def record_attempt(self, provider: str, succeeded: bool, latency_ms: float) -> None:
         with self._lock:
@@ -233,8 +227,8 @@ def call_llm(
     on_provider_notice: Callable[[str], None] | None = None,
     job_id: str = "",
     prefer_cloud: bool = False,
-    disable_panel: bool = False,
     required_provider: str = "",
+    minimal_system: bool = False,
 ):
     has_image_input = any(
         isinstance(block, dict) and block.get("type") == "image"
@@ -282,7 +276,18 @@ def call_llm(
         )
         + (f"\n\n{memory_context}" if memory_context else "")
     )
-    request = LLMRequest(to_plain_data(messages), to_plain_data(tools), system=system)
+    if minimal_system and not tools:
+        # No tools are attached, so the long tool-usage instructions would only burn tokens.
+        system = CHAT_SYSTEM_PROMPT + (f"\n\n{memory_context}" if memory_context else "")
+    plain_messages = compact_messages(to_plain_data(messages))
+    if not tools and has_tool_blocks(plain_messages):
+        plain_messages = flatten_tool_blocks(plain_messages)
+    request = LLMRequest(
+        plain_messages,
+        to_plain_data(tools),
+        stream=on_text_delta is not None,
+        system=system,
+    )
     blocks = []
     router = default_router()
     providers = getattr(router, "providers", None)
@@ -314,14 +319,6 @@ def call_llm(
         router.provider_result_callback = PROVIDER_BANDIT.record_attempt
     elif required_provider:
         raise RuntimeError("The configured LLM router cannot select a required provider.")
-    panel = None
-    if not tools and not has_image_input:
-        from config import PANEL_MODE, PANEL_PROVIDERS
-
-        if not sensitive and not disable_panel and PANEL_MODE in {"auto", "always"}:
-            panel = router.panel(list(PANEL_PROVIDERS))
-            if panel is not None:
-                panel.provider_result_callback = PROVIDER_BANDIT.record_attempt
     token_messages = request.messages
     if any(
         isinstance(block, dict) and block.get("type") == "image"
@@ -383,19 +380,8 @@ def call_llm(
             elif event.type == "stop":
                 usage = event.usage
 
-    used_panel = False
     try:
-        if panel is not None:
-            try:
-                collect(panel.generate(request))
-                used_panel = True
-            except Exception:
-                blocks.clear()
-                output_characters = 0
-                usage = {}
-                collect(router.generate(request))
-        else:
-            collect(router.generate(request))
+        collect(router.generate(request))
     finally:
         elapsed_ms = (time.perf_counter() - started) * 1000
         measured_input = usage.get("input_tokens", usage.get("prompt_tokens", input_tokens))
@@ -404,27 +390,19 @@ def call_llm(
             usage.get("completion_tokens", max(1, output_characters // 4) if output_characters else 0),
         )
         LLM_TELEMETRY.record_llm(
-            "panel" if panel else getattr(router, "active_provider", "unknown"),
-            "panel" if panel else getattr(router, "active_model", "unknown"),
+            getattr(router, "active_provider", "unknown"),
+            getattr(router, "active_model", "unknown"),
             elapsed_ms,
             int(measured_input),
             int(measured_output),
             not any(key in usage for key in ("input_tokens", "prompt_tokens", "output_tokens", "completion_tokens")),
             provider_status=(
-                "Used" if used_panel else getattr(router, "last_result", {}).get("status", "Used")
+                getattr(router, "last_result", {}).get("status", "Used")
             ),
             provider_error=getattr(router, "last_result", {}).get("reason", ""),
         )
     if isinstance(providers, list):
-        response_provider = (
-            panel.judge.name
-            if used_panel
-            else getattr(router, "active_provider", "")
-        )
-        response_model = (
-            getattr(panel.judge, "model", "unknown")
-            if used_panel
-            else getattr(router, "active_model", "unknown")
-        )
+        response_provider = getattr(router, "active_provider", "")
+        response_model = getattr(router, "active_model", "unknown")
         PROVIDER_BANDIT.remember_job_provider(job_id, response_provider, response_model)
     return NormalizedResponse(blocks)

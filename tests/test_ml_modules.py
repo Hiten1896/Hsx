@@ -623,5 +623,4 @@ def test_orchestrator_generates_and_executes_a_hierarchical_plan(monkeypatch, tm
     assert "Prepared the cited report." in answer
     assert len(llm_kwargs) == 7
     assert llm_kwargs[0]["prefer_cloud"] is True
-    assert llm_kwargs[0]["disable_panel"] is True
     assert [item["role"] for item in history].count("assistant") == 3

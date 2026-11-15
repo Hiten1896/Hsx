@@ -22,7 +22,6 @@ def test_default_router_uses_live_groq_model_catalog(monkeypatch, capsys):
         "XAI_API_KEY",
         "OPENROUTER_API_KEY",
         "OPENAI_API_KEY",
-        "OLLAMA_MODEL",
     ):
         monkeypatch.setenv(key, "")
     monkeypatch.setenv("GEMINI_MODEL", "gemini-2.0-flash")

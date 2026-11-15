@@ -6,50 +6,95 @@ from .providers import (
     AnthropicProvider,
     GeminiProvider,
     GroqProvider,
-    OllamaProvider,
     OpenAICompatibleProvider,
     Provider,
     ProviderError,
 )
-from .panel import PanelRouter
+from .ratelimit import BUDGET, COOLDOWNS, RateBudget, ProviderCooldowns, cooldown_for_error, estimate_request_tokens, is_quota_error
 from .types import EventStream, LLMEvent, LLMRequest
 
 LOGGER = logging.getLogger("hsx.llm.router")
 
 
+MAX_BUDGET_WAIT_SECONDS = 2.0
+
+
 class LLMRouter:
-    def __init__(self, providers: list[Provider]):
+    def __init__(
+        self,
+        providers: list[Provider],
+        cooldowns: ProviderCooldowns | None = None,
+        budget: RateBudget | None = None,
+    ):
         self.providers = providers
+        self.cooldowns = cooldowns if cooldowns is not None else COOLDOWNS
+        self.budget = budget if budget is not None else BUDGET
         self.active_provider = "unknown"
         self.active_model = "unknown"
         self.provider_result_callback = None
         self.last_result = {"status": "Standby", "reason": ""}
 
+    def _ordered(self, tokens: int) -> list[Provider]:
+        """Providers that can take a request now come first; cooled-down or over-budget ones are the last resort."""
+        ready: list[Provider] = []
+        waiting: list[tuple[float, Provider]] = []
+        for provider in self.providers:
+            cooling = self.cooldowns.remaining(provider.name)
+            over_budget = self.budget.wait_needed(provider.name, tokens)
+            if cooling > 0 or over_budget > 0:
+                waiting.append((max(cooling, over_budget), provider))
+            else:
+                ready.append(provider)
+        waiting.sort(key=lambda item: item[0])
+        return [*ready, *(provider for _, provider in waiting)]
+
+    def _note_failure(self, provider: Provider, error: BaseException) -> None:
+        seconds, reason = cooldown_for_error(error)
+        if seconds > 0:
+            self.cooldowns.mark(provider.name, seconds, reason)
+            LOGGER.warning("LLM provider %s is paused for %.0f s (%s).", provider.name, seconds, reason)
+
+    def _start(self, provider: Provider, request: LLMRequest):
+        """Run a provider. Streaming providers are consumed live once their first event arrives."""
+        if request.stream and getattr(provider, "streams", False):
+            iterator = iter(provider.generate(request))
+            first = next(iterator, None)  # a failure before any output still falls back to the next provider
+
+            def chained():
+                if first is not None:
+                    yield first
+                yield from iterator
+
+            return chained(), True
+        # Commit a provider's stream only after it completes. A quota
+        # error can arrive after initial chunks; exposing those chunks
+        # would mix the failed response with the fallback response.
+        return list(provider.generate(request)), False
+
     def generate(self, request: LLMRequest) -> EventStream:
         errors = []
         self.last_result = {"status": "Standby", "reason": ""}
-        for index, provider in enumerate(self.providers):
+        tokens = estimate_request_tokens(request)
+        ordered = self._ordered(tokens)
+        for index, provider in enumerate(ordered):
+            wait = self.budget.wait_needed(provider.name, tokens)
+            if 0 < wait <= MAX_BUDGET_WAIT_SECONDS:
+                time.sleep(wait)
             self.active_provider = provider.name
             self.active_model = getattr(provider, "model", "unknown")
             started = time.perf_counter()
             try:
-                # Commit a provider's stream only after it completes. A quota
-                # error can arrive after initial chunks; exposing those chunks
-                # would mix the failed response with the fallback response.
-                provider_events = list(provider.generate(request))
+                provider_events, live = self._start(provider, request)
             except Exception as error:
+                self._note_failure(provider, error)
                 if self.provider_result_callback is not None:
                     self.provider_result_callback(
                         provider.name,
                         False,
                         (time.perf_counter() - started) * 1000,
                     )
-                status = getattr(error, "status", None)
-                is_quota = status == 429 or any(
-                    marker in str(error).casefold()
-                    for marker in ("quota", "rate limit", "resource_exhausted", "too many requests")
-                )
-                if is_quota and provider is not self.providers[-1]:
+                is_quota = is_quota_error(error)
+                if is_quota and provider is not ordered[-1]:
                     LOGGER.warning(
                         "LLM provider %s hit a rate limit or quota; falling back to the next configured provider",
                         provider.name,
@@ -57,8 +102,8 @@ class LLMRouter:
                 else:
                     LOGGER.warning("LLM provider %s failed: %s", provider.name, error)
                 errors.append((provider.name, str(error)))
-                if index + 1 < len(self.providers):
-                    next_provider = self.providers[index + 1]
+                if index + 1 < len(ordered):
+                    next_provider = ordered[index + 1]
                     yield LLMEvent(
                         type="provider_notice",
                         text=f"{provider.name.title()} is unavailable; trying {next_provider.name.title()}.",
@@ -66,7 +111,20 @@ class LLMRouter:
             else:
                 if errors:
                     yield LLMEvent(type="provider_notice_clear")
-                yield from provider_events
+                if live:
+                    try:
+                        yield from provider_events
+                    except Exception as error:
+                        # Text is already on screen, so a mid-answer failure cannot fall back cleanly.
+                        self._note_failure(provider, error)
+                        if self.provider_result_callback is not None:
+                            self.provider_result_callback(provider.name, False, (time.perf_counter() - started) * 1000)
+                        raise ProviderError(
+                            f"{provider.name.title()} stopped mid-answer: {error}", provider=provider.name
+                        ) from error
+                else:
+                    yield from provider_events
+                self.budget.record(provider.name, tokens)
                 if self.provider_result_callback is not None:
                     self.provider_result_callback(
                         provider.name,
@@ -118,14 +176,6 @@ class LLMRouter:
             provider=provider_names,
         )
 
-    def panel(self, provider_names: list[str]) -> PanelRouter | None:
-        selected = [provider for provider in self.providers if provider.name in provider_names]
-        if len(selected) < 2:
-            return None
-        judge = selected[2] if len(selected) >= 3 else selected[1]
-        candidates = selected[:2]
-        return PanelRouter(candidates, judge)
-
 
 def default_router() -> LLMRouter:
     from config import ENV_FILE, model_setting
@@ -144,14 +194,13 @@ def default_router() -> LLMRouter:
     }
     invalid_placeholders = {"your_key_here", "your_api_key", "changeme"}
     keys = {name: key for name, key in keys.items() if key and key.lower() not in invalid_placeholders}
-    ollama_model = value("OLLAMA_MODEL")
-    if not keys and not ollama_model:
+    if not keys:
         raise RuntimeError(
-            "No LLM provider is configured. Set a Gemini/Groq API key or configure OLLAMA_MODEL."
+            "No LLM provider is configured. Set a Gemini, Groq, OpenRouter, OpenAI, Anthropic or Grok API key."
         )
 
     configured = [value("HSX_PROVIDER"), *value("HSX_FALLBACKS").split(",")]
-    discovered = ["gemini", "groq", "ollama", "grok", "anthropic", "openrouter", "openai"]
+    discovered = ["gemini", "groq", "grok", "anthropic", "openrouter", "openai"]
     names = list(dict.fromkeys(name.lower() for name in [*configured, *discovered] if name.strip()))
     providers: list[Provider] = []
     model = value("HSX_MODEL") or "claude-sonnet-4-6"
@@ -169,13 +218,6 @@ def default_router() -> LLMRouter:
                 providers.append(GroqProvider(keys[name], value("GROQ_MODEL")))
             except ProviderError as error:
                 LOGGER.warning("Groq provider was not initialized: %s", error)
-        elif name == "ollama" and ollama_model:
-            from config import OLLAMA_URL
-
-            base = OLLAMA_URL.strip().rstrip("/")
-            if base.endswith("/v1"):
-                base = base[:-3]
-            providers.append(OllamaProvider(ollama_model, f"{base}/v1/chat/completions"))
         elif name == "openrouter" and keys.get(name):
             openrouter_model = model_setting("OPENROUTER_MODEL", "google/gemini-3.6-flash")
             providers.append(OpenAICompatibleProvider("openrouter", keys[name], openrouter_model, "https://openrouter.ai/api/v1/chat/completions"))

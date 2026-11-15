@@ -47,6 +47,7 @@ from agent.hardware.camera import MAX_FRAME_AGE_SECONDS, camera_session_owner, d
 from agent.hardware.microphone import microphone_session_owner
 from agent.llm.router import default_router
 from agent.llm.types import LLMRequest
+from agent.llm.ratelimit import COOLDOWNS
 from agent.llm_client import PROVIDER_BANDIT, call_llm, record_provider_feedback
 from agent.llm.providers import GroqProvider, ProviderError
 from agent.ml.anomaly import ANOMALY_MONITOR, SystemMetrics
@@ -138,7 +139,7 @@ FEEDBACK_STORE = FeedbackStore(DATA_DIR / "feedback.db")
 CONVERSATIONS = ConversationStore(DATA_DIR / "conversations.db")
 
 def _normalize_message_content(messages: list) -> list:
-    """Normalize message content to plain strings for local LLMs like Ollama."""
+    """Normalize message content to plain strings for strict OpenAI-compatible APIs."""
     normalized = []
     for msg in messages:
         msg_copy = dict(msg)
@@ -567,7 +568,7 @@ def _generate_greeting(time_of_day: str) -> str:
         raise ValueError("A valid local time of day is required.")
     router = default_router()
     providers = getattr(router, "providers", [])
-    cloud_providers = [provider for provider in providers if provider.name.lower() != "ollama"]
+    cloud_providers = list(providers)
     if not cloud_providers:
         raise RuntimeError("No cloud provider is configured.")
     provider = PROVIDER_BANDIT.rank(cloud_providers, prefer_cloud=True)[0]
@@ -586,7 +587,6 @@ def _generate_greeting(time_of_day: str) -> str:
             [],
             target_device="local_host",
             prefer_cloud=True,
-            disable_panel=True,
             required_provider=provider.name,
         )
     finally:
@@ -1689,6 +1689,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif path == "/api/mesh/telemetry":
             telemetry = LLM_TELEMETRY.snapshot()
             telemetry["provider_stats"] = PROVIDER_BANDIT.snapshot()["providers"]
+            telemetry["provider_cooldowns"] = COOLDOWNS.snapshot()
             self._json(telemetry)
             return
         elif path == "/api/mesh/camera/status":
@@ -1746,6 +1747,7 @@ class HsxHandler(BaseHTTPRequestHandler):
         elif path == "/api/telemetry":
             telemetry = LLM_TELEMETRY.snapshot()
             telemetry["provider_stats"] = PROVIDER_BANDIT.snapshot()["providers"]
+            telemetry["provider_cooldowns"] = COOLDOWNS.snapshot()
             self._json(telemetry)
         elif path == "/api/camera/status":
             self._json(
@@ -2912,54 +2914,6 @@ def _retention_worker() -> None:
 
 
 if __name__ == "__main__":
-    import subprocess
-    import urllib.request as _urlreq
-
-    def _ollama_up(base_url: str) -> bool:
-        try:
-            opener = _urlreq.build_opener(_urlreq.ProxyHandler({}))
-            with opener.open(f"{base_url}/api/tags", timeout=1):
-                return True
-        except OSError:
-            return False
-
-    ollama_process = None
-    _ollama_base = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").strip().rstrip("/")
-    if _ollama_base.endswith("/v1"):
-        _ollama_base = _ollama_base[:-3]
-    if _ollama_up(_ollama_base):
-        # Something (usually the tray app) already owns the port. A second `ollama serve`
-        # would fail silently and the old instance, with its default 2048-token context,
-        # would keep answering.
-        LOGGER.warning(
-            "Ollama is already running, so its context settings were NOT applied. Quit the Ollama "
-            "tray app and any other ollama process and restart this server."
-        )
-    else:
-        try:
-            ollama_env = os.environ.copy()
-            ollama_env.setdefault("OLLAMA_CONTEXT_LENGTH", "8192")
-            ollama_env.setdefault("OLLAMA_KEEP_ALIVE", "30m")
-            ollama_process = subprocess.Popen(
-                ["ollama", "serve"],
-                env=ollama_env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            )
-            for _ in range(30):
-                if ollama_process.poll() is not None:
-                    LOGGER.warning("Ollama exited right after launch (code %s).", ollama_process.returncode)
-                    ollama_process = None
-                    break
-                if _ollama_up(_ollama_base):
-                    break
-                time.sleep(1)
-            else:
-                LOGGER.warning("Ollama did not become ready within 30 seconds.")
-        except (OSError, FileNotFoundError):
-            LOGGER.warning("Could not launch Ollama automatically; ensure it is running in the background.")
-
     http_server = create_http_server()
     _run_retention_maintenance()
     threading.Thread(target=_retention_worker, name="hsx-retention", daemon=True).start()
@@ -2976,12 +2930,4 @@ if __name__ == "__main__":
         MOTION_MONITOR.start()
     print("Hsx Online")
 
-    try:
-        http_server.serve_forever()
-    finally:
-        if ollama_process is not None and ollama_process.poll() is None:
-            ollama_process.terminate()
-            try:
-                ollama_process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                ollama_process.kill()
+    http_server.serve_forever()

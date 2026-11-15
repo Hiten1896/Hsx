@@ -33,21 +33,10 @@ if [ -f .env ]; then chmod 600 .env; fi
 echo "==> Device groups (camera, audio, serial). Log out and in once for them to apply."
 sudo usermod -aG video,audio,dialout "$RUN_USER" || true
 
-echo "==> Ollama service limits"
-if systemctl list-unit-files 2>/dev/null | grep -q '^ollama.service'; then
-  sudo install -d /etc/systemd/system/ollama.service.d
-  sudo install -m 644 deploy/ollama-override.conf /etc/systemd/system/ollama.service.d/override.conf
-  OLLAMA_SERVICE=1
-else
-  echo "ollama.service not found; Hsx will start 'ollama serve' itself when needed."
-  OLLAMA_SERVICE=0
-fi
-
 echo "==> Hsx service and log rotation"
 sed -e "s|__USER__|$RUN_USER|g" -e "s|__DIR__|$DIR|g" deploy/hsx.service | sudo tee /etc/systemd/system/hsx.service >/dev/null
 sed -e "s|__USER__|$RUN_USER|g" -e "s|__DIR__|$DIR|g" deploy/hsx.logrotate | sudo tee /etc/logrotate.d/hsx >/dev/null
 sudo systemctl daemon-reload
-if [ "$OLLAMA_SERVICE" -eq 1 ]; then sudo systemctl enable ollama && sudo systemctl restart ollama; fi
 sudo systemctl enable --now hsx
 
 echo

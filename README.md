@@ -140,12 +140,13 @@ you do not need to install a separate SDK for every provider.
 | OpenAI | `OPENAI_API_KEY`, `OPENAI_MODEL` | OpenAI-compatible HTTP API |
 | Custom endpoint | `OPENAI_API_KEY`, `OPENAI_COMPATIBLE_URL` | OpenAI-compatible HTTP API |
 | Anthropic | `ANTHROPIC_API_KEY`, `HSX_MODEL` | Anthropic SDK |
-| Ollama | `OLLAMA_URL`, `OLLAMA_MODEL` | Optional local provider; set a model name to include it in provider selection |
 
-Configured Gemini, Groq, and Ollama providers are dynamically ordered by a
+Configured cloud providers are dynamically ordered by a
 Thompson-sampling selector. Provider success, failure, latency, and response
 feedback are stored in `data/provider_bandit.json`; transient 503 and timeout
-errors fall through to the next configured provider.
+errors fall through to the next configured provider. A provider that answers
+429 is paused for the time it asks for, and tool schemas are only sent with
+requests that need them (see `docs/RATE_LIMITS.md`).
 
 Groq model IDs are verified against the authenticated live model catalog. If
 `GROQ_MODEL` is unset, Hsx selects a chat-capable ID from that catalog; if the

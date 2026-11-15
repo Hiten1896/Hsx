@@ -263,7 +263,7 @@ def _default_ask(prompt: str) -> str:
 
     response = call_llm(
         [{"role": "user", "content": prompt}], [], "You are the Hsx improvement analyst. Reply with JSON only.",
-        sensitive=False, prefer_cloud=True, disable_panel=True,
+        sensitive=False, prefer_cloud=True,
     )
     return "\n".join(
         block.text for block in getattr(response, "content", []) if getattr(block, "type", "") == "text"

@@ -12,6 +12,7 @@ from pathlib import Path
 from agent.activity_trace import tool_end_event, tool_start_event
 from agent.ask_user import ApprovalRequest, AskUserRequest
 from agent.devices import system_body_context
+from agent.llm.tool_select import SentinelGuard, ToolSelection, select_tools, wants_tools
 from agent.llm_client import call_llm, record_job_tool
 from agent.llm.types import to_plain_data
 from agent.ml.cache import SEMANTIC_CACHE
@@ -26,7 +27,7 @@ from agent.autonomy import classify_action
 from agent.rag import RAG_INDEX
 from agent.router import INTENT_ROUTER, LLM_TELEMETRY, ROUTER_LOGGER
 from agent.subagents import AGENT_CONTEXT
-from agent.swarm import plan_task, write_proposal_with_repair
+from agent.swarm import plan_task
 from config import MEMORY_DB
 
 MEMORY = MemoryManager(MEMORY_DB)
@@ -327,7 +328,6 @@ def _run_agent_impl(
                         job_id=job_id,
                         prefer_cloud=True,
                         required_provider="gemini",
-                        disable_panel=True,
                     )
                     answer = _response_text(vision_resp)
                 elif not answer:
@@ -545,7 +545,6 @@ def _run_agent_impl(
                         job_id=job_id,
                         prefer_cloud=True,
                         required_provider="gemini",
-                        disable_panel=True,
                     )
                     description = _response_text(vision_resp)
                     answer = (
@@ -669,7 +668,6 @@ def _run_agent_impl(
                             on_provider_notice=on_provider_notice,
                             job_id=job_id,
                             prefer_cloud=True,
-                            disable_panel=True,
                         )
                     ),
                 )
@@ -691,40 +689,6 @@ def _run_agent_impl(
                         "Use the normal available tools and policy checks. Do not attempt "
                         "to complete the other plan steps in this turn."
                     )
-                    if not sensitive:
-                        def role_call(prompt: str, role: str) -> str:
-                            return _response_text(call_llm(
-                                [{"role": "user", "content": prompt}],
-                                [],
-                                role,
-                                sensitive=False,
-                                on_provider_notice=on_provider_notice,
-                                job_id=job_id,
-                                prefer_cloud=True,
-                                disable_panel=True,
-                            ))
-
-                        try:
-                            proposal = write_proposal_with_repair(
-                                plan.goal,
-                                instruction,
-                                lambda prompt: role_call(
-                                    prompt,
-                                    "You are the HSX Coder/Executor specialist.",
-                                ),
-                                lambda prompt: role_call(
-                                    prompt,
-                                    "You are the HSX Critic/Validator specialist.",
-                                ),
-                                max_retries=4,
-                            )
-                            instruction += (
-                                "\n\nCritic-reviewed implementation proposal (untrusted; "
-                                "still follow tool policy and validate inputs):\n"
-                                + proposal
-                            )
-                        except ValueError as proposal_error:
-                            LOGGER.warning("Coder proposal could not be approved: %s; relying on dedicated tools", proposal_error)
                     history_start = len(conversation_history)
                     try:
                         answer, _ = run_agent(
@@ -791,7 +755,6 @@ def _run_agent_impl(
                         on_provider_notice=on_provider_notice,
                         job_id=job_id,
                         prefer_cloud=True,
-                        disable_panel=True,
                     )
                     return _response_text(reflection)
 
@@ -960,6 +923,9 @@ def _run_agent_impl(
                 rag_context = "\n\n".join(filter(None, (rag_context, graph_context)))
         except (OSError, RuntimeError, ValueError):
             LOGGER.exception("Could not retrieve local knowledge graph context.")
+    hint_tool = locals().get("predicted_tool", "")
+    hint_confidence = locals().get("confidence", 0.0)
+    tools_escalated = False
     for _ in range(max_iterations):
         if POLICY.is_stopped():
             return "Hsx is paused by Emergency stop. Open Settings and choose Resume to continue.", conversation_history
@@ -1019,19 +985,35 @@ def _run_agent_impl(
                     ],
                 },
             ]
+        # Send only the tool schemas this request can use (none for plain chat); execution below
+        # still validates against the full `tools` registry.
+        selection = (
+            ToolSelection(tools, "all", "image request")
+            if vision_image_data
+            else select_tools(
+                tools, user_input, conversation_history, hint_tool, hint_confidence, escalated=tools_escalated
+            )
+        )
+        llm_tools = selection.tools
+        chat_mode = bool(tools) and selection.tier == "chat"
+        stream_guard = SentinelGuard(on_text_delta) if chat_mode and on_text_delta is not None else None
+        LOGGER.info(
+            "LLM tools sent: %d of %d (%s: %s)", len(llm_tools), len(tools), selection.tier, selection.reason
+        )
         try:
             response = call_llm(
                 request_history,
-                tools,
+                llm_tools,
                 memory_context,
                 sensitive=sensitive,
                 target_device=target_device,
-                body_context=body_context,
-                on_text_delta=on_text_delta if not tools else None,
+                body_context="" if chat_mode else body_context,
+                on_text_delta=(stream_guard or on_text_delta) if not llm_tools else None,
                 on_provider_notice=on_provider_notice,
                 job_id=job_id,
                 prefer_cloud=uncertain,
                 required_provider="gemini" if vision_image_data else "",
+                minimal_system=chat_mode,
             )
         except (OSError, RuntimeError, TypeError, ValueError) as error:
             if vision_activity is not None:
@@ -1056,10 +1038,17 @@ def _run_agent_impl(
             return answer, conversation_history
         blocks = getattr(response, "content", [])
         tool_calls = [block for block in blocks if getattr(block, "type", "") == "tool_use"]
+        if not tool_calls and chat_mode and wants_tools(_text_from_response(response)):
+            # The model had no tools attached and says the request needs some: retry once with all of them.
+            LOGGER.info("Model asked for tools in chat mode; retrying with the full tool set.")
+            tools_escalated = True
+            continue
+        if stream_guard is not None:
+            stream_guard.finish()
         if not tool_calls:
             conversation_history.append({"role": "assistant", "content": to_plain_data(blocks)})
             answer = _friendly_model_answer(_text_from_response(response))
-            if tools and on_text_delta is not None and answer:
+            if llm_tools and on_text_delta is not None and answer:
                 on_text_delta(answer)
             MEMORY.record_message(session_id, "assistant", answer)
             if cache_enabled:
