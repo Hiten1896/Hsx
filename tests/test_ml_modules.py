@@ -600,11 +600,7 @@ def test_orchestrator_generates_and_executes_a_hierarchical_plan(monkeypatch, tm
         '{"goal":"Prepare a cited report","steps":['
         '{"instruction":"Inspect the supplied files"},'
         '{"instruction":"Summarize the files and draft the report"}]}',
-        "I will inspect the supplied files with the available read-only workspace tools.",
-        '{"approved": true, "tests_reviewed": true, "rationale": "Read-only and scoped."}',
         "Inspected the supplied files.",
-        "I will summarize the files and prepare the report with cited sources.",
-        '{"approved": true, "tests_reviewed": true, "rationale": "Scoped and validated."}',
         "Prepared the cited report.",
     ])
     llm_kwargs = []
@@ -621,6 +617,6 @@ def test_orchestrator_generates_and_executes_a_hierarchical_plan(monkeypatch, tm
     assert answer.startswith("Completed the planned steps:")
     assert "Inspected the supplied files." in answer
     assert "Prepared the cited report." in answer
-    assert len(llm_kwargs) == 7
+    assert len(llm_kwargs) == 3
     assert llm_kwargs[0]["prefer_cloud"] is True
     assert [item["role"] for item in history].count("assistant") == 3

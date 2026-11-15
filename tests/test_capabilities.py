@@ -84,7 +84,6 @@ def test_personal_voice_prompt_is_used_with_fake_provider(monkeypatch, tmp_path)
         [{"role": "user", "content": "What can you do?"}],
         [{"name": "capabilities", "description": "Live capabilities."}],
         sensitive=True,
-        disable_panel=True,
     )
 
     prompt = captured["request"].system
@@ -99,7 +98,9 @@ def test_personal_voice_prompt_is_used_with_fake_provider(monkeypatch, tmp_path)
     assert response.content[0].text == "I am Hsx, your workspace assistant."
 
 
-def test_provider_health_runs_tiny_no_tool_request(monkeypatch):
+def test_provider_health_sends_no_model_request(monkeypatch):
+    from agent.llm.ratelimit import ProviderCooldowns
+
     seen = []
 
     class FakeProvider:
@@ -108,17 +109,34 @@ def test_provider_health_runs_tiny_no_tool_request(monkeypatch):
 
         def generate(self, request):
             seen.append(request)
-            assert request.tools == []
-            assert len(request.messages) == 1
             yield LLMEvent(type="text_delta", text="OK")
 
     monkeypatch.setattr("agent.llm.router.default_router", lambda: LLMRouter([FakeProvider()]))
+    monkeypatch.setattr("agent.llm.ratelimit.COOLDOWNS", ProviderCooldowns())
 
     result = capabilities._provider_health()
 
-    assert result == [{
-        "name": "fake (fake-model)",
-        "status": "works now",
-        "detail": "Answered a no-tool health request.",
-    }]
-    assert seen
+    assert [item["name"] for item in result] == ["fake (fake-model)"]
+    assert result[0]["status"] == "works now"
+    assert seen == []  # a capabilities check must never spend provider quota
+
+
+def test_provider_health_reports_a_paused_provider(monkeypatch):
+    from agent.llm.ratelimit import ProviderCooldowns
+
+    class FakeProvider:
+        name = "fake"
+        model = "fake-model"
+
+        def generate(self, request):
+            raise AssertionError("health check must not call the model")
+
+    cooldowns = ProviderCooldowns()
+    cooldowns.mark("fake", 120, "rate limited")
+    monkeypatch.setattr("agent.llm.router.default_router", lambda: LLMRouter([FakeProvider()]))
+    monkeypatch.setattr("agent.llm.ratelimit.COOLDOWNS", cooldowns)
+
+    result = capabilities._provider_health()
+
+    assert result[0]["status"] == "needs setup"
+    assert "Paused" in result[0]["detail"]
